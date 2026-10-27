@@ -22,7 +22,7 @@ All DhanNow documents are marked **draft, pending Legal, Compliance, Tax and len
    - ₹1,000 loan: fee ₹100 + GST ₹18 + interest ₹140 = ₹258 deducted. Net disbursal is **₹742**. Day-14 repayment is **₹1,000**.
 3. **Limits.** navix sets the limit at 25% of salary, up to ₹10L. DhanNow uses a **credit ladder: ₹1k → 2k → 3k → 4k → 5k → 7k → 10k**. The first loan is ₹1,000, and the customer moves up one level only after a full on-time or early repayment.
 4. **New lifecycle features.**
-   - **Rollover/extension.** ₹258 per ₹1,000 buys 14 more days. Off by default.
+   - **Loan extension (collections-led).** ₹258 per ₹1,000 plus late charge buys 14 more days, up to 3 times; offered only by collections after a call.
    - **Recovery-only EMI conversion.** Admin-approved, with versioned schedules.
    - **New statuses:** DUE_TODAY, OVERDUE_D1, OVERDUE_REVIEW, RESTRUCTURE_PENDING, RESTRUCTURED, DISPUTED and FRAUD_REVIEW.
 5. **Documents and disclosure.**
@@ -75,24 +75,35 @@ These are the UAT expected values from the handover deck. Add them as unit tests
 
 | Rule | navix_final today | DhanNow requires | Backend change |
 |---|---|---|---|
-| Penal charge | 2%/day on principal, capped at 30 days (LoanMath:42-45) | **Not defined.** It must be “permitted under the agreement and law” and disclosed in the KFS | **Config**: `penal.enabled=false` until approved. Rate, base and cap all go in config. Never stack with the rollover fee (risk register) |
+| Penal charge | 2%/day on principal, capped at 30 days (LoanMath:42-45) | **Not defined.** It must be “permitted under the agreement and law” and disclosed in the KFS | **Config**: `penal.enabled=false` until approved. Rate, base and cap all go in config. Late charge accrued before an extension is collected once, inside the extension amount (decided 27 Oct 2026) |
 | Interest after due date | Stops at the due date. Only penalty accrues after | Not stated. Interest is collected upfront for 14 days only | **Keep**: no post-due interest unless the agreement says so |
 | Overdue states | Loan reads OVERDUE on access. Sweep → IN_COLLECTIONS. Nothing sets DEFAULTED or WRITTEN_OFF (ApplicationStatus:105) | `DUE_TODAY` → `OVERDUE_D1` (day 1) → `OVERDUE_REVIEW` (repeated or substantial delay) → `CLOSED` / `RESTRUCTURE_PENDING` / `DISPUTED`. `FRAUD_REVIEW` restricts new disbursal | **New** loan-status machine (section 2.5). Keep DPD buckets for reporting |
 | Effect on the ladder | Reloan blocked if any payment was more than 5 days late (AFS:1436) | **Any lateness ≥1 day = no upgrade** (stay at the same level). A permanent ban only under an approved policy | **Change**: on-time is judged against the due date and time with no tolerance. Keep the 5-day block only if the risk policy approves it |
 | Disputes | None | `DISPUTED`/`MANUAL_REVIEW` pauses automated adverse actions | **New**: dispute case on the loan, plus a pause flag checked by reminders, collections and auto-debit |
 | Recovery conduct | Collections module, officers, settlements (SettlementService) | Fair-practice rules only, with no agent rules defined | **Keep** the module. Reminder and overdue templates need compliance approval |
 
-### 2.3 Rollover / extension (new, flag OFF)
+### 2.3 Loan extension, collections-led (new; decided 27 Oct 2026)
 
-Nothing like this exists in navix today. Build behind `feature.rollover=false`:
+Nothing like this exists in navix today. It is built on the navix collections maker-checker (`CollectionPaymentService`, `SettlementService`).
 
-- **Eligibility:** the loan is due or overdue, has no open dispute or payment mismatch, and passes the policy check. **Never automatic.**
-- **Quote:** payment (proposed ₹258 per ₹1,000, made up of 14-day interest + PF + GST), new due date (+14 days), remaining principal and total cost.
-- **Approval:** authorised role only. Record the approver, reason code, timestamp and policy version.
-- **Activation:** only after customer acceptance **and** reconciled payment. Pending or failed payment does nothing.
-- **Schedule versioning:** the original schedule is immutable. Each rollover creates a new version linked to the previous one.
-- **Limits:** configurable maximum count and cumulative cost cap. Stop at the cap.
-- **Open legal and tax risk:** re-charging PF and GST without a new disbursal. Keep it OFF until approved in writing.
+- **Trigger:** a borrower calls collections. There is **no self-serve button** in the app. Allowed from the due date onward (DUE_TODAY / OVERDUE_*), with no dispute, fraud hold, pending payment or restructure.
+- **Charge:** fee 10% + GST 18% on the fee + 14 days × 1%/day interest (₹258 per ₹1,000), **plus the late charge accrued up to the pay-by date**.
+- **New due date:** previous due date + 14 days, at 23:59 IST. The principal stays owed.
+- **Cap:** 3 per loan (config `extension_max`). A 4th needs an ADMIN override with a reason code.
+- **Approvals:** the officer offers, the Collection Head approves (proposer ≠ approver), the borrower confirms in the app with OTP, and the Accountant verifies the payment. Verification is the only step that moves the due date.
+- **Payment:** the borrower pays in the app (`repayments` with `purpose=EXTENSION`), or the officer logs it (`CollectionPaymentKind.EXTENSION`). Both are verified by the Accountant.
+  - Short payment → no extension.
+  - Excess → refund case.
+- **Navix change:** `CollectionPaymentService.validate` credits principal for every kind today. For `EXTENSION` it must instead call a new `LoanDirectory.applyExtension` (new schedule version, due + 14, income booking), leaving the principal ledger untouched.
+- **Data:**
+  - new `loan_extension` table;
+  - `loan.extension_count`, `loan.original_due_date`;
+  - `payment.purpose`, `payment.extension_id`;
+  - `collection_payment.extension_id`;
+  - `product_config.extension_max`.
+- **Documents:** an extension addendum PDF (new due date, charges, APR) for each extension, OTP-accepted.
+- **Credit ladder:** an extended loan never raises the level.
+- **Open legal and tax risk:** re-charging PF and GST on the same principal without a new disbursal needs written Legal/tax approval before launch.
 
 ### 2.4 Recovery-only EMI conversion (new)
 
@@ -119,7 +130,7 @@ Nothing like this exists in navix today. Build behind `feature.rollover=false`:
 | DISBURSED → ACTIVE | ACTIVE / CURRENT | Keep |
 | (computed OVERDUE) | **DUE_TODAY**, **OVERDUE_D1**, **OVERDUE_REVIEW** | **New**, set by a daily job at a defined due time and timezone |
 | IN_COLLECTIONS | OVERDUE_REVIEW | Map |
-| (none) | **RESTRUCTURE_PENDING**, **RESTRUCTURED** | **New** (EMI and rollover) |
+| (none) | **RESTRUCTURE_PENDING**, **RESTRUCTURED** | **New** (EMI). An extension returns the loan to ACTIVE with a new due date |
 | (none) | **DISPUTED**, **FRAUD_REVIEW** | **New** |
 | CLOSED | CLOSED (read-only) | Keep. Add a closure receipt |
 | DEFAULTED, WRITTEN_OFF (never set) | not in the deck | Decide with Finance whether they are needed |
@@ -136,7 +147,7 @@ Also required by the deck:
 | Payment methods | Manual UPI QR / bank transfer + optional Digio NACH | UPI, debit cards, net banking, Airtel Payments Bank “where available”. A payment gateway is implied | **New**: payment-gateway integration with webhook reconciliation (the documents don’t name a gateway). Keep the manual flow as a fallback |
 | Allocation waterfall | None. Payments are summed against one total (RS:35) | An “approved waterfall” is required. Order not stated | **New**: allocation engine (e.g. penal → interest → principal). Order to be decided by Finance |
 | Part payment | Allowed and flagged partial | Allowed. Does not close the loan and does not count for an upgrade | **Keep**. Add the “no upgrade on partial” rule |
-| Duplicate callbacks | Dedupe on (loanId, txnRef) (RS:87) | Idempotency for gateway callbacks and schedule generation | **Change**: idempotency keys on payment webhooks and on rollover/EMI activation |
+| Duplicate callbacks | Dedupe on (loanId, txnRef) (RS:87) | Idempotency for gateway callbacks and schedule generation | **Change**: idempotency keys on payment webhooks and on extension/EMI activation |
 | Auto-debit | Digio NACH. Debits only at DPD 1/3/5/9, flag off, provider mock (MandateDebitScheduler) | eNACH “only through an authorised process”. Whether it is mandatory is unresolved. A failed debit doesn’t cancel the obligation | **Decision needed**: present on Day 14? The mandate ceiling (2× limit today) must be re-set for the ladder |
 | Refunds | None. Overpayment register only | Refunds follow policy, with no promised timelines | **New**: refund case for overpayments and cooling-off exits |
 | Closure receipt / NOC | Only a LOAN_CLOSED SMS | “Confirmation of repayment and loan closure” | **New**: closure receipt PDF + notification after reconciliation |
@@ -174,7 +185,7 @@ Also required by the deck:
 
   navix has Credit Exec/Head, Disbursement Head, Accountant, Collections and Admin. **Add the Recovery/Support/Finance/Compliance permission split**, and **MFA for privileged roles**.
 - **Audit fields** required on every schedule or balance change: loan ID, customer ID, original and revised schedule version, principal, paid, outstanding, fee/tax/interest breakdown, **calculation version**, approver ID, reason code, timestamps, acceptance evidence, reconciliation ID. navix has `BaseAuditEntity` (who and when) only. **Add the adjustment and reason-code table.**
-- **Feature flags to add, all OFF at launch:** `rollover`, `emi-conversion`, `penal-charges`, `prepay-rebate`, `cooling-off-exit`, `payment-gateway`.
+- **Feature flags to add** (all OFF at launch except `loan-extension`): `loan-extension` (ON), `emi-conversion`, `penal-charges`, `prepay-rebate`, `cooling-off-exit`, `payment-gateway`.
 - **Move to versioned config:** every value in `LoanMath`, `LimitCalculator` and `loan-math.ts`. Today they are Java/TS constants.
 
 ### 2.10 Reloan
@@ -196,7 +207,7 @@ Also required by the deck:
 | New: KFS screen | Separate KFS before signing, with Download |
 | B8 Agreement | Three documents: KFS, sanction letter, loan agreement. Name the **lender of record** |
 | C1 Home / C3 Repay | Due amount = principal (no daily interest growth). Remove “pay early, save interest” unless a rebate is approved. Add **level progress** (“Repay on time to unlock ₹2,000”) |
-| New (flagged) | Rollover quote and acceptance screen. EMI proposal acceptance screen |
+| New | Extension confirm (OTP), pay extension charge, extension verified, extended dashboard; staff offer/approve/verify screens. EMI proposal acceptance (flagged) |
 | D3 Support | DhanNow contacts, grievance officer Dharmendra Rajput, complaint ticket with SLA |
 
 ---
@@ -206,7 +217,7 @@ Also required by the deck:
 1. **Lender of record:** MLB Securities or another lender, with verified RBI registration. The documents currently contradict each other.
 2. **Legality of upfront interest** (a 14-day interest deduction) and the **APR method**.
 3. **Penal charges:** rate, base and cap, or none.
-4. **Rollover:** whether PF and GST can be re-charged, maximum count, cost cap, and the conflict with the 30-day recovery horizon.
+4. **Loan extension:** product rules decided (collections-led, cap 3, previous due + 14, late charge collected). Still open: Legal/tax approval for re-charging PF and GST.
 5. **EMI conversion:** interest treatment (website: 20 days × 1%; deck: principal only + permitted charges). What “substantial delay” means.
 6. **Payment waterfall** order, gateway choice, and whether auto-debit is presented on Day 14.
 7. **Cooling-off period** length and exit amount.
@@ -224,5 +235,5 @@ Also required by the deck:
 3. Loan status machine (DUE_TODAY / OVERDUE_D1 / OVERDUE_REVIEW / DISPUTED / FRAUD_REVIEW) + daily job + disbursal confirmation.
 4. Documents: KFS renderer, new sanction letter, loan agreement, `/loans/{id}/documents`, lender and brand config.
 5. Payments: allocation waterfall, gateway + webhook idempotency, closure receipt, refunds.
-6. Schedules table + EMI conversion (Admin RBAC) + rollover, behind flags.
+6. Schedules table + collections-led loan extension + EMI conversion (Admin RBAC, flag OFF).
 7. Grievance tickets with SLA, audit adjustment table, MFA for privileged roles.

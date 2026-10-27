@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Extend your due date</title>
+<title>Confirm extension</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -12,24 +12,23 @@
 <style>
 body{margin:0}
 a{color:#1A4BB8}a:hover{color:#163F9C}
-.s{width:412px;height:915px;box-sizing:border-box;background:#F2F3F3;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;display:flex;flex-direction:column}
+.s{width:412px;height:940px;box-sizing:border-box;background:#F2F3F3;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;display:flex;flex-direction:column}
 .bar{height:56px;flex:none;display:flex;align-items:center;gap:4px;padding:0 8px}
 .ib{width:48px;height:48px;flex:none;display:flex;align-items:center;justify-content:center;color:#0B0B0C}
 .bt{flex:1;font-size:18px;font-weight:600}
 .body{flex:1;padding:4px 16px 16px;display:flex;flex-direction:column;gap:12px}
 .sub{font-size:14px;line-height:21px;color:#4A4D52;margin:0}
 .hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
-.card{background:#fff;border:1px solid #E5E7E8;border-radius:16px;padding:4px 16px}
-.row{display:flex;justify-content:space-between;gap:12px;font-size:14px;padding:11px 0;border-top:1px solid #E5E7E8}
-.row:first-child{border-top:0}
-.row span:first-child{color:#4A4D52}
-.big{font-family:"Bebas Neue",Inter,sans-serif;letter-spacing:.5px}
-.chk{display:flex;gap:12px;align-items:flex-start;font-size:14px;line-height:20px}
-.chk input{width:20px;height:20px;accent-color:#1A4BB8;margin:1px 0 0;flex:none}
-.foot{flex:none;padding:12px 16px 20px;display:flex;flex-direction:column;gap:10px}
+.card{background:#fff;border:1px solid #E5E7E8;border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.f{display:flex;flex-direction:column;gap:6px}
+.f label{font-size:13px;font-weight:500;color:#4A4D52}
+.f select,.f textarea{border:1px solid #D9DBDD;border-radius:12px;background:#fff;padding:12px 14px;font:inherit;font-size:15px;color:#0B0B0C;box-sizing:border-box;width:100%}
+.f select{height:52px;padding:0 14px}
+.st{display:flex;gap:12px;align-items:flex-start;font-size:14px}
+.dot{width:20px;height:20px;border-radius:50%;flex:none;box-sizing:border-box;margin-top:1px}
+.chip{font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px}
 .btn{height:52px;border-radius:26px;background:#1A4BB8;color:#fff;font-weight:600;font-size:16px;display:flex;align-items:center;justify-content:center;text-decoration:none}
 .btn:hover{color:#fff;background:#163F9C}
-.btn2{height:48px;box-sizing:border-box;border-radius:24px;border:1px solid #E5E7E8;background:#fff;color:#0B0B0C;font-weight:600;font-size:15px;display:flex;align-items:center;justify-content:center;text-decoration:none}
 
 /* ---- app_navix UI kit (Monochrome + Cobalt), mirrors theme.css + globals.css + components/kit ---- */
 .card,.info,.side{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9)}
@@ -62,35 +61,44 @@ h1,.ttl{font-size:38px;line-height:38px}
 @keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:no-preference){.card,.info{animation:rise .6s cubic-bezier(.16,1,.3,1) backwards}}
 </style>
+<style>
+.r2{display:flex;justify-content:space-between;gap:12px;font-size:14px;padding:12px 0;border-top:1px solid #E5E7E8}
+.r2:first-child{border-top:0}.r2 span:first-child{color:#4A4D52}.r2 strong{text-align:right;font-weight:600}
+.lnk{display:flex;align-items:center;gap:12px;min-height:56px;text-decoration:none;color:#0B0B0C;border-top:1px solid #E5E7E8;font-size:14px;font-weight:500}
+.lnk:first-child{border-top:0}.lnk>span:not(.ic):not(.chip){flex:1}.lnk small{display:block;font-size:12px;font-weight:400;color:#4A4D52}
+.sec{font-size:13px;font-weight:600;color:#4A4D52;margin:6px 0 -4px}
+.foot{flex:none;padding:12px 16px 20px;display:flex;flex-direction:column;gap:10px}
+.btn2{height:48px;box-sizing:border-box;font-weight:600;font-size:15px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+</style>
 </helmet>
 <main class="s">
-<header class="bar"><a class="ib" href="HomeOverdue.dc.html" aria-label="Back"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg></a><span class="bt">Extend your due date</span></header>
+<header class="bar"><a class="ib" href="Notifications.dc.html" aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg></a><span class="bt">Confirm extension</span></header>
 <div class="body">
-<div style="background: #EEF3FF; border-radius: 12px; padding: 10px 12px; font-size: 12px; line-height: 18px; color: #163F9C">Shown only when extensions are switched on after approval. Never automatic.</div>
-<p class="sub">Pay the extension charge now to move your due date by 14 days. Your loan amount stays ₹1,000.</p>
-<div class="card">
-<div class="row"><span>Interest for 14 more days</span><strong>₹140</strong></div>
-<div class="row"><span>Processing fee</span><strong>₹100</strong></div>
-<div class="row"><span>GST on fee</span><strong>₹18</strong></div>
-<div class="row" style="font-weight: 600"><span style="color: #0B0B0C">Pay now to extend</span><span>₹258</span></div>
+<p class="sub">You asked our collections team to extend loan #20417. Check the details and confirm.</p>
+<section class="card" style="padding: 20px; gap: 0">
+<div style="display: flex; align-items: center; justify-content: space-between"><span style="font-size: 14px; font-weight: 500">Extension 1 of 3</span><span class="chip" style="background: #FEF6D8; color: #6F4F00">Awaiting your OK</span></div>
+<p class="hint" style="margin-top: 16px">Pay now to extend</p>
+<strong class="big" style="font-size: 52px; line-height: 52px">₹318</strong>
+<div style="margin-top: 12px">
+<div class="r2"><span>Processing fee (10%)</span><strong>₹100</strong></div>
+<div class="r2"><span>GST on fee (18%)</span><strong>₹18</strong></div>
+<div class="r2"><span>Interest, 14 more days (1%/day)</span><strong>₹140</strong></div>
+<div class="r2"><span>Late charge so far (3 days × 2%)</span><strong style="color: #C62A2F">₹60</strong></div>
 </div>
-<div class="card">
-<div class="row"><span>Current due date</span><strong>19 Oct 2026</strong></div>
-<div class="row"><span>New due date</span><strong>2 Nov 2026</strong></div>
-<div class="row"><span>Still due on new date</span><strong>₹1,000</strong></div>
-<div class="row"><span>Total cost of this loan so far</span><strong>₹516</strong></div>
-<div class="row"><span>Extensions used</span><strong>1 of [max]</strong></div>
+</section>
+<section class="card" style="padding: 4px 16px; gap: 0">
+<div class="r2"><span>Current due date</span><strong>19 Oct 2026</strong></div>
+<div class="r2"><span>New due date</span><strong>2 Nov 2026, 11:59 pm</strong></div>
+<div class="r2"><span>Still to repay on 2 Nov</span><strong>₹1,000</strong></div>
+<div class="r2"><span>Total cost of this loan so far</span><strong>₹576</strong></div>
+</section>
+<label class="chk" style="display: flex; gap: 12px; font-size: 14px; line-height: 20px"><input type="checkbox" style="width: 20px; height: 20px; accent-color: #1F5BDB; flex: none"><span>I understand this extension costs ₹318 and my loan amount of ₹1,000 is still due on 2 Nov. Extending doesn’t raise my credit level.</span></label>
+<p class="hint">The late charge grows by ₹20 a day until you pay. The new date starts only after our team verifies your payment. Didn’t ask for this? <a href="Support.dc.html">Tell us</a>.</p>
 </div>
-<label class="chk"><input type="checkbox"><span>I understand the extra cost and the new due date. My credit level does not go up after an extension.</span></label>
-<p class="hint">The new date applies only after this payment is verified. A pending or failed payment changes nothing. Recorded with date, time and the approved policy version.</p>
-</div>
-<div class="foot">
-<a class="btn" href="Repay.dc.html">Pay ₹258 and extend</a>
-<a class="btn2" href="Repay.dc.html">Repay ₹1,000 instead</a>
-</div>
+<div class="foot"><a class="btn" href="ExtensionPay.dc.html">Confirm with OTP and pay ₹318</a><a class="btn2" href="HomeOverdue.dc.html">Not now</a></div>
 </main>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":940}}'>
 class Component extends DCLogic {
 renderVals() { return {}; }
 }

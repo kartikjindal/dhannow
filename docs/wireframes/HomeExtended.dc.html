@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dashboard, extended loan</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1A4BB8}a:hover{color:#163F9C}
+.s{width:412px;height:1630px;box-sizing:border-box;background:#F2F3F3;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;padding:12px 8px 4px 16px;flex:none}
+.ib{width:48px;height:48px;flex:none;display:flex;align-items:center;justify-content:center;color:#0B0B0C}
+.body{flex:1;padding:8px 16px 16px;display:flex;flex-direction:column;gap:14px}
+.sub{font-size:14px;line-height:21px;color:#4A4D52;margin:0}
+.hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
+.card{background:#fff;border:1px solid #E5E7E8;border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.big{font-family:"Bebas Neue",Inter,sans-serif;letter-spacing:.5px}
+.chip{font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px}
+.li{display:flex;align-items:center;min-height:48px;font-size:14px;text-decoration:none;color:#0B0B0C;border-top:1px solid #E5E7E8}
+.li:first-of-type{border-top:0}
+.lv{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.lv span{height:8px;border-radius:4px;background:#E5E7E8}
+.lv .on{background:#1F5BDB}
+.btn{height:52px;border-radius:26px;background:#1A4BB8;color:#fff;font-weight:600;font-size:16px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+.btn:hover{color:#fff;background:#163F9C}
+.btn2{height:44px;box-sizing:border-box;border-radius:22px;border:1px solid #E5E7E8;background:#fff;color:#0B0B0C;font-weight:600;font-size:14px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+.nav{height:80px;flex:none;background:#fff;border-top:1px solid #E5E7E8;display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
+.nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:12px;color:#4A4D52;text-decoration:none}
+.nav a.on{color:#0B0B0C;font-weight:600}
+.pill{width:64px;height:32px;border-radius:16px;display:flex;align-items:center;justify-content:center}
+.on .pill{background:#EEF3FF}
+.more{display:flex;align-items:center;justify-content:center;gap:6px;min-height:48px;border-radius:14px;background:#fff;border:1px solid #E5E7E8;font-size:14px;font-weight:600;color:#0B0B0C;text-decoration:none}
+.row{display:flex;align-items:center;gap:12px;min-height:56px;padding:0 16px;text-decoration:none;color:#0B0B0C;border-top:1px solid #E5E7E8}
+.row:first-child{border-top:0}
+.ri{width:36px;height:36px;border-radius:50%;background:#F2F3F3;flex:none;display:flex;align-items:center;justify-content:center}
+.rt{flex:1;font-size:14px;font-weight:500}
+.rt small{display:block;font-size:12px;font-weight:400;color:#4A4D52;margin-top:2px}
+.sec{font-size:13px;font-weight:600;color:#4A4D52;margin:6px 0 -4px}
+
+/* ---- app_navix UI kit (Monochrome + Cobalt), mirrors theme.css + globals.css + components/kit ---- */
+.card,.info,.side{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9)}
+.tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.btn{background:#1F5BDB;color:#fff;border-radius:999px;box-shadow:0 10px 24px -12px rgba(31,91,219,.55);transition:transform .2s,box-shadow .2s}
+.btn:hover{background:#1A4BB8;color:#fff;transform:translateY(-1px)}
+.btn2{background:#fff;border:1px solid #E5E7E8;color:#0B0B0C;border-radius:999px;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10)}
+.btn2:hover{border-color:#D9DBDD;color:#0B0B0C}
+.btn-navy{background:#0B0B0C!important;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08)!important}
+h1,.ttl,.hd h2{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.6px}
+h1,.ttl{font-size:38px;line-height:38px}
+.hd h2{font-size:32px;line-height:34px;margin:0 0 10px}
+.big{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.5px}
+.prog{background:#E5E7E8;height:6px;border-radius:999px}
+.prog i{height:6px;border-radius:999px;background:#1F5BDB}
+.f label{color:#0B0B0C;font-weight:600}
+.f input,.f select,.f textarea{background:#fff;border:1px solid #D9DBDD;border-radius:12px}
+.f input:focus,.f select:focus,.f textarea:focus{outline:none;border-color:#0B0B0C;box-shadow:0 0 0 4px rgba(17,19,24,.07)}
+.chip,.cnt{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 10px;border-radius:999px}
+.ib{width:40px;height:40px;margin:4px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10);color:#0B0B0C}
+.ic,.ico{background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.nav{background:#FAFAFA;border-top:1px solid #E5E7E8;padding:0 8px}
+.nav .pill{width:56px;height:32px;border-radius:999px}
+.nav .on .pill,.on .pill{background:#0B0B0C;color:#fff}
+.nav a.on{color:#0B0B0C;font-weight:600}
+.trust span{display:inline-flex;align-items:center;gap:4px}
+.trust span::before{content:"";width:6px;height:6px;border-radius:50%;background:#17804F}
+.seg .on{border:1px solid #0B0B0C!important;background:#0B0B0C!important;color:#fff!important}
+.opt{background:#fff;border-radius:16px}
+@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:no-preference){.card,.info{animation:rise .6s cubic-bezier(.16,1,.3,1) backwards}}
+</style>
+</helmet>
+<main class="s">
+<div class="top">
+<div style="flex: 1"><h1 style="font-size: 34px; line-height: 36px">Hi, Aarav</h1><p class="sub">Here’s where your advance stands.</p></div>
+<a class="ib" href="Notifications.dc.html" aria-label="Notifications"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"></path><path d="M10 20a2 2 0 0 0 4 0"></path></svg></a>
+</div>
+<div class="body">
+<section class="card" style="padding: 20px">
+<div style="display: flex; align-items: center; justify-content: space-between"><span style="font-size: 14px; font-weight: 500">Active advance · <span style="color: #1A4BB8">Extended 1 of 3</span></span><span style="background: #0B0B0C; color: #fff; border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 600">Due in 11 days</span></div>
+<p class="hint" style="margin-top: 18px">Total outstanding</p>
+<strong class="big" style="font-size: 56px; line-height: 54px">₹1,000</strong>
+<div style="margin-top: 14px"><div style="height: 8px; border-radius: 999px; background: #D6D9DC"><div style="width: 3%; height: 8px; border-radius: 999px; background: #1F5BDB"></div></div><div style="display: flex; justify-content: space-between; margin-top: 6px" class="hint"><span>₹0 repaid</span><span>₹1,000 total</span></div></div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 14px">
+<div class="tile" style="padding: 10px 12px"><p class="hint" style="font-size: 11px">New due date</p><strong style="font-size: 14px">2 Nov</strong></div>
+<div class="tile" style="padding: 10px 12px"><p class="hint" style="font-size: 11px">Principal</p><strong style="font-size: 14px">₹1,000</strong></div>
+<div class="tile" style="padding: 10px 12px"><p class="hint" style="font-size: 11px">Extension paid</p><strong style="font-size: 14px">₹318</strong></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 10px; margin-top: 16px">
+<a class="btn" href="Repay.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true" style="margin-right: 8px"><path d="M3 7h18v12H3z"></path><path d="M3 7l13-4v4"></path></svg>Repay now</a>
+<a class="btn2" href="LoanDetails.dc.html">View full breakdown</a>
+</div>
+<p class="hint" style="border-top: 1px solid #E5E7E8; padding-top: 12px; margin-top: 14px">Extended from 19 Oct on 22 Oct. <a href="LoanAccount.dc.html" style="font-weight: 600">See extension history</a></p>
+</section>
+<section class="card" style="padding: 18px 20px; flex-direction: row; align-items: center; gap: 16px">
+<svg width="64" height="64" viewBox="0 0 64 64" aria-label="11 of 14 days left" style="flex: none"><circle cx="32" cy="32" r="27" fill="none" stroke="#E5E7E8" stroke-width="6"></circle><circle cx="32" cy="32" r="27" fill="none" stroke="#1F5BDB" stroke-width="6" stroke-linecap="round" stroke-dasharray="133.3 169.6" transform="rotate(-90 32 32)"></circle><text x="32" y="31" text-anchor="middle" font-family="Bebas Neue, Inter" font-size="20" fill="#0B0B0C">11</text><text x="32" y="44" text-anchor="middle" font-family="Inter" font-size="8" fill="#4A4D52">days left</text></svg>
+<div style="flex: 1"><div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #4A4D52; font-weight: 500"><span class="ic" style="width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 21V4h12l-2 4 2 4H4"></path></svg></span>Next milestone</div>
+<strong style="display: block; font-size: 17px; margin-top: 6px">Repay ₹1,000 by 2 Nov</strong><p class="hint">Before 11:59 pm. Extended loans keep your level at ₹1,000.</p></div>
+</section>
+<div class="card">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><strong style="font-size: 15px">Your credit level</strong><span class="hint">Level 1 of 7</span></div>
+<div class="lv" aria-label="Level 1 of 7"><span class="on"></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+<p class="sub">Stays at Level 1 because this loan was extended. Your next loan on time moves you up.</p>
+</div>
+<a class="more" href="#more" aria-expanded="true" aria-controls="more">View less<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 15 6-6 6 6"></path></svg></a>
+<p class="hint" style="text-align: center; margin-top: -8px">Collapsed by default as “View more ⌄”. Shown open here. Remembers the choice.</p>
+<div id="more" style="display: flex; flex-direction: column; gap: 14px">
+<p class="sec">Your loan</p>
+<div class="card" style="padding: 0; gap: 0">
+<a class="row" href="Repay.dc.html"><span class="ri"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18v12H3z"></path><path d="M3 7l13-4v4"></path></svg></span><span class="rt">How to repay<small>UPI or bank transfer, then add the reference</small></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8B8F96" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg></a>
+<a class="row" href="Loans.dc.html"><span class="ri"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5"></path></svg></span><span class="rt">Loan documents<small>KFS, sanction letter, agreement</small></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8B8F96" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg></a>
+<a class="row" href="Transactions.dc.html"><span class="ri"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h13l-3-3M17 17H4l3 3"></path></svg></span><span class="rt">Payments and transactions<small>₹742 received on 5 Oct</small></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8B8F96" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg></a>
+</div>
+<p class="sec">Help</p>
+<div class="card" style="padding: 0; gap: 0">
+<a class="row" href="Support.dc.html"><span class="ri"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"></path></svg></span><span class="rt">Payment not showing?<small>Payments are verified by our team, usually the same day</small></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8B8F96" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg></a>
+<a class="row" href="Complaint.dc.html"><span class="ri"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"></path></svg></span><span class="rt">My complaints<small>Raise or track a complaint</small></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8B8F96" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg></a>
+</div>
+<p class="sec">Invite friends</p>
+<div class="card" style="flex-direction: row; align-items: center; gap: 12px"><div style="flex: 1"><strong style="font-size: 14px">Refer &amp; earn ₹[reward]</strong><p class="hint">Code <strong style="color: #0B0B0C; letter-spacing: 1px">AARAV50</strong> · paid after their first loan</p></div><a class="btn2" href="#" style="padding: 0 18px">Share</a></div>
+</div>
+</div>
+<nav class="nav" aria-label="Main">
+<a class="on" href="Home.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 11 12 4l9 7v9h-6v-6H9v6H3z"></path></svg></span>Home</a>
+<a href="Repay.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18v12H3z"></path><path d="M16 13h2"></path><path d="M3 7l13-4v4"></path></svg></span>Repay</a>
+<a href="Loans.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg></span>Loans</a>
+<a href="Profile.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"></path></svg></span>Profile</a>
+</nav>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":1630}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -61,7 +61,7 @@ DhanNow is a different product on the same rails:
 - 10% fee + 18% GST + 14 days of interest at 1%/day, all deducted upfront;
 - principal-only repayment;
 - credit ladder ₹1k→2k→3k→4k→5k→7k→10k;
-- rollover, recovery EMI, new loan statuses, separate KFS / sanction letter / agreement.
+- collections-led loan extension (14 more days for ₹258 per ₹1,000, up to 3 times), recovery EMI, new loan statuses, separate KFS / sanction letter / agreement.
 
 Every change is specified in `/Users/kartik.jindal/dhannow/DhanNow_Loan_Engine_Difference.md`. The borrower UX is the 74-board wireframe at https://claude.ai/artifact/9mpCW1pqqzADmTcoVXNCqJ. Its local scratchpad copy is gone, so Phase 0 pulls the boards back with Artifact read.
 
@@ -86,7 +86,8 @@ Rule throughout: **reuse navix code unchanged wherever DhanNow does not differ.*
 | Design system | **app_navix UI kit**, not just its colours. See "Design system" below. Applies to the wireframe, the Flutter app and the web. **Accent changed from ember orange to cobalt blue** (user choice, 2026-10-27): primary/fills `#1F5BDB` (white text 5.9:1), links/pressed `#1A4BB8`, tint `#EEF3FF`. Wherever the sections below say ember, read cobalt |
 | Payments | Manual UPI/bank + UTR + screenshot, verified by the accountant. **eNACH (Digio) code kept and updated, but `digio-mandate` and `digio-debit` stay OFF**, so the Autopay step is skipped by the journey. `PaymentGatewayPort` + webhook idempotency scaffold behind flag `payment-gateway` |
 | Profile | View-only. **No mobile, email or any other detail change**, in the app or via support |
-| Rollover + EMI | Build both fully, flags OFF |
+| Loan extension | **Collections-led only** (no borrower button). Officer offers → Collection Head approves → borrower confirms with OTP in the app → pays in the app or the officer logs it → Accountant verifies → due = old due + 14. Charge = fee + GST + 14 days interest + late charge to date. Cap 3 (config) + ADMIN override. Borrower sees "Extended n of 3", new due date and history. Flag `loan-extension` ON |
+| Recovery EMI | Built, flag OFF |
 | Penal | 2%/day on principal, capped at 30 days. Moved into versioned config and disclosed in the KFS |
 | Lender of record | Config values. **Prod boot fails if they are still placeholders** |
 | App auth | OTP + password. Play Integrity replaces Turnstile for app clients. Refresh tokens and logout added |
@@ -222,7 +223,7 @@ The wireframe is the app's spec, so it is fixed first and re-published to https:
   - KFS figures and ledger figures can no longer differ.
   - A single `Clock` bean is introduced app-wide.
 - **`LimitCalculator`:** returns the **credit-level amount** (Phase 2) for DhanNow. The salary-based method stays but is unused.
-- **Stage-gated feature flags:** `rollover`, `emi-conversion`, `penal-charges` (ON), `prepay-rebate`, `payment-gateway`, `cooling-off-exit` (OFF, unused), `play-integrity`, `push-fcm`. Seeded in V95.
+- **Stage-gated feature flags:** `loan-extension` (ON), `emi-conversion`, `penal-charges` (ON), `prepay-rebate`, `payment-gateway`, `cooling-off-exit` (OFF, unused), `play-integrity`, `push-fcm`. Seeded in V95.
 
 **Tests:**
 - `LoanMathDhanNowTest` uses the 7-row worked table (net 742 / 1,484 / 2,226 / 2,968 / 3,710 / 5,194 / 7,420; repay = principal).
@@ -297,7 +298,7 @@ Status is split into separate dimensions on `loan`, as the deck requires.
   - sanctioner ≠ disburser ≠ confirmer;
   - payment recorder ≠ verifier;
   - EMI requester ≠ approver;
-  - rollover approver ≠ requester.
+  - extension proposer ≠ approver (Collection Head) ≠ payment verifier (Accountant).
   - ADMIN no longer bypasses SoD (it still bypasses role checks).
 - **Tests:** an IT for every pair, rejected with 422 `SOD_VIOLATION`.
 
@@ -314,7 +315,7 @@ Status is split into separate dimensions on `loan`, as the deck requires.
 - **Lender/brand/grievance:** `@ConfigurationProperties` for `navix.lender.*`, `navix.brand.*` and `navix.grievance.*`.
   - Grievance: Dharmendra Rajput / 9211331170 / grievance@dhannow.com.
   - `ProdConfigGuard` fails startup in the `prod` profile if any lender value is blank or still a `[placeholder]`.
-- **Storage:** use the existing `loan_document` table (type `KFS` | `SANCTION` | `AGREEMENT` | `SCHEDULE` | `CLOSURE_RECEIPT` | `ROLLOVER_ADDENDUM` | `EMI_ADDENDUM`, plus `version`, `pricing_version_id`, `s3_key`, `sha256`, `accepted_at`, `accepted_ip`, `acceptance_evidence jsonb`) via V100.
+- **Storage:** use the existing `loan_document` table (type `KFS` | `SANCTION` | `AGREEMENT` | `SCHEDULE` | `CLOSURE_RECEIPT` | `EXTENSION_ADDENDUM` | `EMI_ADDENDUM`, plus `version`, `pricing_version_id`, `s3_key`, `sha256`, `accepted_at`, `accepted_ip`, `acceptance_evidence jsonb`) via V100.
   - `application_document` stays for KYC uploads.
 - **Flow:** the KFS is generated and must be **acknowledged** (`POST /offer/kfs/ack`, a new journey step `KFS` after SUMMARY, matching wireframe board KfsView) before the e-sign init is allowed. The Signzy e-sign flow is reused unchanged, and the signed copy is stored as `AGREEMENT`.
 - **Access policy:**
@@ -327,26 +328,85 @@ Status is split into separate dimensions on `loan`, as the deck requires.
   - No "DhanBoost" string in any output.
   - Cross-customer access → 422 `FORBIDDEN_OWNER`.
 
-## Phase 6: Payments, closure, rollover, EMI (weeks 6–8)
+## Phase 6: Payments, closure, loan extension, EMI (weeks 6–8)
 
 **Payments:**
 - The manual flow is reused unchanged (`RepaymentService` record → verify → reject).
 - **New `PaymentAllocator`:** waterfall order is penal → principal (interest is already collected), as config `payments.waterfall`. It writes `payment_allocation(payment_id, component, amount_paise)` (V101).
-- **Idempotency:** `idempotency_key(key PK, scope, response_hash, created_at)` (V101), applied to repayment submit, rollover/EMI activation and future gateway webhooks.
+- **Idempotency:** `idempotency_key(key PK, scope, response_hash, created_at)` (V101), applied to repayment submit, extension/EMI activation and future gateway webhooks.
 - **`PaymentGatewayPort`** + `/api/webhooks/payments/{provider}` stub with no implementation, behind the `payment-gateway` flag.
 - **Closure:** on CLOSED, render `CLOSURE_RECEIPT`, send a notification, and create a refund case if overpaid (reuse the navix overpayment register → `refund_case` table, V101).
 
 **Schedules (V102):**
-- `repayment_schedule(id, loan_id, version, kind BULLET|ROLLOVER|EMI, parent_version_id, status ACTIVE|SUPERSEDED, created_by, reason_code)`.
+- `repayment_schedule(id, loan_id, version, kind BULLET|EXTENSION|EMI, parent_version_id, status ACTIVE|SUPERSEDED, created_by, reason_code)`.
 - `schedule_instalment(schedule_id, seq, due_date, due_at, principal_paise, interest_paise, fee_paise, gst_paise, paid_paise, status)`.
 - Every loan gets a v1 BULLET schedule at disbursal. The original is immutable.
 
-**Rollover** (flag `rollover`; V103 `rollover_request`):
-- **Quote:** `GET /api/loans/{id}/rollover/quote` → `{fee, gst, interest, total = 258 per 1,000, newDueDate, extensionsUsed, max}`.
-- **Accept:** `POST /rollover/accept` (idempotency key).
-- **Approval:** staff `approve` (ADMIN or COLLECTION_HEAD per config; SoD applies).
-- **Activation:** only after the rollover payment is **verified**. That creates schedule v+1, `due += 14`, and keeps the level unchanged.
-- **Caps:** config `rollover.maxCount` and `rollover.costCapPaise`.
+**Loan extension: collections-led** (replaces the earlier borrower self-serve rollover; user decision 2026-10-27; flag `loan-extension`, ON at launch subject to the Legal sign-off in the go-live list).
+
+*Rules*
+
+| Rule | Value |
+|---|---|
+| Who starts it | Only collections, after a borrower call. Borrowers have **no extend button** |
+| When | Loan is in `DUE_TODAY`, `OVERDUE_D1` or `OVERDUE_REVIEW`, with no `DISPUTED`/`FRAUD_REVIEW` hold, no repayment `PAID_PENDING_VERIFICATION`, not `RESTRUCTURE_PENDING`/`RESTRUCTURED`, and `extension_count < product_config.extension_max` (default **3**). A 4th needs an ADMIN override with reason code (audited) |
+| Charge | Pricing snapshot of the loan: fee 10% + GST 18% on the fee + 14 days × 1%/day interest on principal (₹258 per ₹1,000) **plus late charge accrued up to the pay-by date** (2%/day, cap 30, unchanged) |
+| Quote | Server-computed for a chosen pay-by date. Expires 23:59 IST that day |
+| New due date | **Previous due date + 14** (fixed 14-day grid), 23:59 IST. Late charge restarts from the new due date |
+| Principal | Unchanged and still owed |
+| Credit level | A loan that was extended never upgrades the level (`credit_level_history` reason `EXTENDED_NO_CHANGE`) |
+| Repeats | Each cycle repeats the same process. At the cap: only repay, settlement or ADMIN override |
+
+*Workflow* (reuses the navix collections maker-checker, `CollectionPaymentService` / `SettlementService` pattern):
+1. **Offer:** COLLECTION_EXECUTIVE/HEAD runs `POST /api/collections/cases/{caseId}/extensions` `{payBy, reasonCode, callNote}` → `loan_extension` PROPOSED (quote frozen for `payBy`).
+2. **Approve:** COLLECTION_HEAD, with proposer ≠ approver (`SOD_VIOLATION`, same check as `SettlementService.approve`) → APPROVED. The borrower gets SMS + push + in-app notification "Confirm your loan extension".
+3. **Borrower consent:** in the app (board C12), `GET /api/loans/{id}/extensions/pending` → `POST .../{extId}/accept` with OTP (`otp_challenge` purpose `EXTENSION_CONSENT`) → ACCEPTED, stores consent evidence + addendum version.
+4. **Payment, either side:**
+   - (a) borrower pays in the app (C12b): existing `POST /api/loan/{loanId}/repayments` with new field `purpose=EXTENSION`, `extensionId`;
+   - (b) officer logs it: `CollectionPaymentService.raise` with new `CollectionPaymentKind.EXTENSION` (+ `extensionId`), which goes straight to `PENDING_ACCOUNTANT`.
+
+   Both → `PAYMENT_PENDING`.
+5. **Verify:** ACCOUNTANT `validate` / `RepaymentService.verifyPayment` checks amount ≥ quote recomputed for the bank `paid_on` date.
+   - **Equal:** `ExtensionService.activate`, idempotent on `extensionId`.
+   - **Less:** cannot extend. The accountant chooses "credit as part payment" or reject with remarks.
+   - **More:** extend + `refund_case` for the excess.
+   - Verification is **the only path that moves the due date**. It replaces the navix behaviour where `validate` always calls `loanDirectory.creditCollectionPayment` (principal credit): for kind `EXTENSION` it calls the new `LoanDirectory.applyExtension(...)` instead, so the principal ledger is untouched.
+6. **Activate:**
+   - new `repayment_schedule` version (kind `EXTENSION`, parent = previous);
+   - `loan.due_date/due_at` += 14;
+   - `loan.extension_count`++;
+   - lifecycle → `ACTIVE`; penal clock reset;
+   - income booked: fee + interest as income, GST as payable, late charge as penal income, in `payment_allocation` (components `EXT_FEE`, `EXT_GST`, `EXT_INTEREST`, `PENAL`);
+   - `EXTENSION_ADDENDUM` PDF rendered (new due, charges, APR for the extension) and stored in `loan_document`;
+   - notification "Loan extended to …";
+   - `balance_adjustment` row (schedule v→v+1, approver, verifier, reason, consent).
+7. **End states:** `REJECTED` (Head), `EXPIRED` (pay-by passed without a verified payment, so the officer re-offers with a fresh quote), `CANCELLED` (officer/borrower before payment).
+
+*Data* (V103):
+- **`loan_extension`:** `id uuid`, `loan_id`, `collection_case_id`, `seq int`, `status` (`PROPOSED`, `APPROVED`, `ACCEPTED`, `PAYMENT_PENDING`, `ACTIVE`, `REJECTED`, `EXPIRED`, `CANCELLED`), `from_due_date`, `to_due_date`, `pay_by date`, `fee_paise`, `gst_paise`, `interest_paise`, `penal_paise_quoted`, `total_paise_quoted`, `pricing_version_id`, `reason_code`, `call_note`, `proposed_by/at`, `approved_by/at`, `accepted_at`, `consent_evidence jsonb`, `payment_id`, `collection_payment_id`, `verified_by/at`, `override_by`, `override_reason`, `@Version`.
+  - Unique `(loan_id, seq)`.
+  - Partial unique index: at most one non-terminal extension per loan.
+- **`loan`:** `extension_count int default 0`, `original_due_date`.
+- **`product_config`:** `extension_max int default 3`, `extension_enabled bool`.
+- **Collections:** `collection_payment.extension_id` FK; `collection_payment_kind` += `EXTENSION`.
+- **Repayments:** `payment.purpose` (`REPAYMENT` | `EXTENSION`) + `extension_id`.
+
+*Staff console* (wireframe row G):
+- **G1 Collections worklist:** "Extensions n/3" column, filters (Extension offered, Extension payment pending, Extended, Cap reached), KPI tile.
+- **G2 Case:** "Offer extension" panel with the server quote, pay-by date, reason code and call note. "Log payment" gets kind *Extension charge*.
+- **G3 Approvals:** Collection Head approval queue; Accountant extension-payment queue (UTR match, required vs received, outcome).
+- **G4 Customer 360 / loan:** schedule versions, extension income, addenda.
+- **Also:** loans register + dashboards gain an "Extended" segment and an "extension income" series; reports add an extension register (count, charges, cohort roll-rates).
+
+*Borrower app* (row C):
+- **C11 Notifications:** a "Confirm your loan extension" item.
+- **C12 Confirm extension:** breakdown, new due date, total cost so far, consent checkbox, OTP.
+- **C12b Pay extension charge:** amount for today, UPI/bank, UTR, screenshot.
+- **C12c Extension verified.**
+- **C1b Dashboard, extended:** "Extended 1 of 3", new due date, milestone ring for the new cycle, level stays.
+- **Elsewhere:** D6 Loan account shows "Extensions used n of 3" + addenda. C2 Overdue tells the borrower to call collections (no self-serve).
+
+*Website:* `repayment-policy.html` and `loan-information.html` get an "Extending your loan" section with the same numbers (W5/W6 parity tests cover it).
 
 **EMI** (flag `emi-conversion`; V103 `emi_conversion`):
 - COLLECTION_EXECUTIVE / COLLECTION_HEAD *requests*; **ADMIN only approves** (RBAC server-side).
@@ -357,7 +417,8 @@ Status is split into separate dimensions on `loan`, as the deck requires.
 - EMI interest = config `emi.interestMode` (`NONE` default).
 
 **Tests:**
-- Rollover cannot activate on a pending or failed payment.
+- Extension cannot activate on a pending, short or failed payment; only Accountant verification moves the due date.
+- Extension quote for ₹1,000 paid 3 days late = ₹318; new due = old due + 14; 4th extension without ADMIN override → 422 `EXTENSION_CAP_REACHED`; officer cannot approve own offer → 422 `SOD_VIOLATION`; extended loan closes with no level change; principal ledger untouched by extension payments.
 - Cap reached → 422.
 - ₹7,000/3 sums exactly.
 - An EMI approved by a non-ADMIN → 422.
@@ -372,7 +433,7 @@ Status is split into separate dimensions on `loan`, as the deck requires.
 - **Dispute:** `POST /api/loans/{id}/dispute` (staff, or from a complaint category) sets `hold_status=DISPUTED`.
 - **V105 `balance_adjustment`:**
   - Columns: `loan_id`, `customer_id`, `kind`, `before/after jsonb`, `schedule_version_from/to`, `calc_version`, `approver_id`, `reason_code`, `acceptance_evidence`, `reconciliation_id`, `at`.
-  - Written by every money or schedule change: settlement, rollover, EMI, refund, manual correction.
+  - Written by every money or schedule change: settlement, extension, EMI, refund, manual correction.
   - Includes a `reason_code` lookup table.
 - **Roles:** add `RECOVERY`, `SUPPORT`, `FINANCE` and `COMPLIANCE` to `StaffRole` (V106 role check).
   - COMPLIANCE is read-only.
@@ -445,7 +506,8 @@ The web side has three parts:
 - **Staff console additions:**
   - disbursal-confirmation queue (Accountant);
   - selfie review queue;
-  - rollover / EMI request + approval;
+  - loan extension: offer, Head approval, Accountant verification, history (wireframe row G, see Phase 6);
+  - EMI request + approval;
   - disputes;
   - complaints with SLA;
   - credit-level view + manual exception;
@@ -511,7 +573,7 @@ The audit found about 120 places where staff screens, queries and exports encode
 | Pipeline / queues / live applications | Accountant desk gets a **Disbursal confirmation** queue. Repayment book gets Due today / D1 / Review / Restructure / Holds columns. Remove "interest is accruing" copy. New desks for RECOVERY, SUPPORT, FINANCE, COMPLIANCE |
 | My decisions | Repayment-date column → amount, level, "due 14d after confirmation" |
 | Loans register | Columns: principal, fee, GST, interest (upfront), net, repayable (= principal), confirmed on/by, lifecycle, hold. New status filters and segments |
-| Collections | Pre-due window re-tuned for a 14-day tenure (config, default 2 days, not 7). Remove salary columns. Settlements: gross due = principal + penal, so "loss" is no longer overstated by interest (`LoanDues`, `SettlementService:337`). New queues: OVERDUE_REVIEW, Restructure (EMI request/approve + instalment ledger), Rollover, Holds |
+| Collections | Pre-due window re-tuned for a 14-day tenure (config, default 2 days, not 7). Remove salary columns. Settlements: gross due = principal + penal, so "loss" is no longer overstated by interest (`LoanDues`, `SettlementService:337`). New queues: OVERDUE_REVIEW, Restructure (EMI request/approve + instalment ledger), Extensions (offer / approve / verify, G1–G4), Holds |
 | Accounting transactions | Ledger rows: DISBURSAL (net), FEE income, GST payable, INTEREST income (at confirmation), REPAYMENT, PENAL income, REFUND. Disbursal confirmation status column. FINANCE role access |
 | Dashboard (all role views) | Receivable = principal (`MetricSql:129`, `DashboardService:151,240,263`). `total_repayable` sums → principal everywhere in `MetricSql`/`BusinessQueries`/`CollectionQueries`. Business snapshot copy rewritten (₹100 → ₹74.20 in hand). New "Interest earned upfront" card. Pre-closure gauge removed. New role views in `views.ts` + `DashboardScope` |
 | Performance | Collection-efficiency denominator = principal + penal (`ScoreFormulas:87`). Scorecards for the new roles |
@@ -554,7 +616,7 @@ app/lib/
   core/   (api, auth, theme, router, l10n, widgets: StepScaffold, AppButton, Field, StatusChip, BackConfirm, ErrorView)
   features/
     start/  onboarding/  offer/  dashboard/  repay/  loans/
-    rollover/  emi/  profile/  support/  complaints/  notifications/
+    extension/  emi/  profile/  support/  complaints/  notifications/
 ```
 
 **API layer:**
@@ -578,7 +640,7 @@ app/lib/
 | 1 | S1–S6 |
 | 2 | A1–A14 |
 | 3 | B1–B12 + KfsView + Selfie |
-| 4 | C1–C12 incl. Rollover/EMI/Closure |
+| 4 | C1–C12 incl. Extension (C12, C12b, C12c, C1b), EMI, Closure |
 | 5 | D1–D8 incl. Complaint, Loan account details, Devices, Delete account |
 | 5b | F4 milestone animations: timeline, money on the way, level-up, dashboard ring. Golden tests at frame 0 and the final frame, plus a reduced-motion variant |
 | 6 | E1–E14 |
@@ -593,7 +655,7 @@ app/lib/
 | Layer | Tooling | What must pass |
 |---|---|---|
 | Money math | JUnit + jqwik | 7-level table, invariants, rounding, APR |
-| Services | JUnit + Mockito (existing style) | Ladder, lifecycle transitions, SoD, rollover/EMI rules, allocation |
+| Services | JUnit + Mockito (existing style) | Ladder, lifecycle transitions, SoD, extension/EMI rules, allocation |
 | Integration | Testcontainers Postgres 16 (existing `-Pit`) | One IT per new flow end to end, with a fixed `Clock`, mocked providers (existing mocks: eSign, Digio, SMS mock, bureau fixture) |
 | Architecture | ArchUnit | No module cycles; money math only in `navix-loan` |
 | Contract | OpenAPI diff + generated Dart | No unreviewed API change |
@@ -616,6 +678,7 @@ Coverage gates: engine packages ≥ 80%, app `core/` ≥ 70%.
   - Play Console app + upload key;
   - Firebase project;
   - Legal sign-off on upfront interest, APR method, KFS and agreement text;
+  - Legal and tax sign-off on the loan extension (re-charging fee + GST + interest on the same principal, the 3-extension cap, addendum text);
   - grievance officer confirmation.
 
   The prod config guard enforces lender + grievance + DLT IDs.
@@ -654,8 +717,13 @@ Each row becomes a test named `CC-xx` in the module shown. A phase isn't done un
 | CC-12 | NACH timing (code ready, flags OFF at launch) | Present on the due date (config time, default 10:00 IST), with retries D+1/D+3/D+5. Mandate ceiling = top ladder ₹10,000 so level-ups don't need re-mandating. A failed debit never cancels the obligation. With the flags OFF: no mandate step, no presentment, Autopay board hidden, and the staff mandate tab shows "eNACH disabled" |
 | CC-13 | Scheduler down for hours or days | Lifecycle job derives state from the **current time vs `due_at`**, not from "last run", so catch-up is correct. Penal is computed from dates, not run count |
 | CC-14 | Two app instances run schedulers | Postgres advisory lock + optimistic `@Version` on loan → exactly one transition (IT with 2 threads) |
-| CC-15 | Penal and rollover in the same period | Never stacked. Rollover activation zeroes penal for days covered by the paid rollover fee |
-| CC-16 | Rollover paid after the due date | Allowed only up to `rollover.lateWindowDays` (config). New due = **original due + 14**, not activation + 14 |
+| CC-15 | Late charge and extension in the same period | Late charge up to the pay-by date is part of the extension amount and is not charged again; after activation the late-charge clock restarts from the new due date |
+| CC-16 | Extension paid days after the due date | Allowed while the loan is overdue (no separate window). New due = **previous due + 14**, so a late extension buys fewer remaining days; the quote recomputes for the actual bank `paid_on` date |
+| CC-67 | Borrower confirms extension but never pays | Quote expires at 23:59 IST on pay-by day → `EXPIRED`; nothing changes; officer can re-offer with a fresh quote |
+| CC-68 | Extension payment arrives after the quote expired | Accountant verifies against a quote recomputed for the bank `paid_on` date; if short → part payment or reject (never auto-extend) |
+| CC-69 | Borrower pays both the extension charge and the principal | Verified principal closes the loan; the extension (if not yet active) is cancelled and its charge goes to a refund case |
+| CC-70 | Officer logs a payment and borrower also pays in app for the same extension | Partial unique index allows one verified payment per extension; second goes to refund case; UTR uniqueness (CC-07) also blocks a duplicate UTR |
+| CC-71 | Borrower says "I never asked" | "Tell us" on C12 opens a complaint and cancels the pending extension; recorded call note + recording id are on the offer |
 | CC-17 | EMI instalment missed | Instalment becomes OVERDUE. Penal per config `emi.penal` (default off). Loan stays RESTRUCTURED. A collection case is reopened |
 | CC-18 | Settlement closes a DhanNow loan | Closed, `closure_type=SETTLED`, level never upgrades |
 | CC-19 | Penal cap | Stops at 30 days. Outstanding never grows after that |
@@ -665,7 +733,7 @@ Each row becomes a test named `CC-xx` in the module shown. A phase isn't done un
 
 | # | Case | Behaviour |
 |---|---|---|
-| CC-21 | Two staff verify, sanction or approve the same item | `@Version` optimistic locking on `loan`, `loan_application`, `payment`, `rollover_request` and `emi_conversion` → the second gets 409 `STALE_STATE` and a "refresh" message |
+| CC-21 | Two staff verify, sanction or approve the same item | `@Version` optimistic locking on `loan`, `loan_application`, `payment`, `loan_extension` and `emi_conversion` → the second gets 409 `STALE_STATE` and a "refresh" message |
 | CC-22 | Double-tap or network retry on a borrower POST | `Idempotency-Key` header required on money/state POSTs. The app sends one UUID per action |
 | CC-23 | Apply again while a loan is pending, active or awaiting disbursal confirmation | Blocked (one live loan), with error `LOAN_IN_PROGRESS` → app shows the dashboard |
 | CC-24 | Customer identity | **Server-generated `customer_id`** (`DN` + sequence). Mobile is an attribute. **No detail changes in v1** (mobile, email or anything else): a borrower who loses their number must contact support, which can only block the account. The navix `CUSTOMER_ID_COLLISION` path is removed. The navix borrower `PUT /profile/self` edit endpoint is disabled for borrowers |
@@ -673,7 +741,7 @@ Each row becomes a test named `CC-xx` in the module shown. A phase isn't done un
 | CC-26 | Name/DOB mismatch across PAN, Aadhaar and bank holder | navix rules kept: DOB mismatch → fraud reject. Name match uses the penny-drop score threshold (config). Below threshold → REVIEW, not reject |
 | CC-27 | Payout account differs from the salary account | Extra penny drop + name match. 3 failures → 12-hour lock (`PennyDropGuard`). Wireframe board EdgeBank |
 | CC-28 | Staff user deactivated with assigned work | Their queue items return to the unassigned pool. Sessions revoked |
-| CC-29 | Feature flag turned off with requests pending | Pending rollover/EMI requests remain actionable to completion. New requests blocked |
+| CC-29 | Feature flag turned off with requests pending | Extensions already APPROVED/ACCEPTED/PAYMENT_PENDING remain actionable to completion. New requests blocked |
 | CC-30 | Applications paused mid-journey | Users already past START continue. Only new STARTs see the gate form |
 
 ### C. Providers and callbacks (navix-verification, navix-loan)
@@ -751,7 +819,7 @@ The onboarding steps and verification services:
 2. `docker compose up` with backend (mock providers) and web. Run Playwright: staff sanctions a ₹1,000 application → disburses with UTR → a second user confirms → the loan is ACTIVE with net ₹742 and due on day +14.
 3. Flutter `integration_test` on an emulator against the same stack: first-time journey through closure; the credit level shows L2 / ₹2,000.
 4. Clock-shifted IT: DUE_TODAY → OVERDUE_D1 → OVERDUE_REVIEW, penal accrues 2%/day capped at 30, a dispute pauses reminders.
-5. Flags on in staging: rollover pays ₹258 → verified → due +14; EMI ₹7,000 → 3 instalments summing exactly.
+5. Staging: officer offers an extension on a 3-days-late ₹1,000 loan → Head approves → borrower confirms with OTP and pays ₹318 in the app → Accountant verifies → due moves 19 Oct → 2 Nov, "Extended 1 of 3" on dashboard, addendum PDF stored, principal still ₹1,000; repeat to the cap. EMI (flag on) ₹7,000 → 3 instalments summing exactly.
 6. KFS, sanction letter and agreement PDFs: every field present, lender printed, no "DhanBoost".
 7. Prod profile boots only with real lender, grievance and DLT config; it fails with placeholders.
 8. Staging ZAP + k6 results attached to the release.

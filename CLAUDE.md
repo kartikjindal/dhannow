@@ -16,7 +16,8 @@ DhanNow is a short-term personal loan product: an Android app for borrowers, a s
 | Repayment | Principal only |
 | Late | 2%/day on principal, capped at 30 days |
 | Credit ladder | ₹1k → 2k → 3k → 4k → 5k → 7k → 10k. First loan = L1. Up one level only after a full on-time repayment; any lateness = same level |
-| Rollover / recovery EMI | Built, behind flags that are **OFF** |
+| Loan extension | **Collections-led only** (no borrower button). +14 days for fee + GST + 14 days interest (₹258 per ₹1,000) plus late charge to date; due = previous due + 14; cap 3 (ADMIN override). Officer offers → Collection Head approves → borrower OTP-confirms in the app → pays in app or officer logs it → Accountant verifies. Borrower sees "Extended n of 3". Extended loans don’t raise the level. Legal/tax sign-off pending |
+| Recovery EMI | Built, behind a flag that is **OFF** |
 | eNACH (Digio) | Code kept, flags **OFF** |
 | Cooling-off | None in v1 |
 
@@ -29,7 +30,7 @@ All money is integer paise. All numbers come from versioned config (`pricing_con
 | `docs/PLAN.md` | **The build plan.** Phases, migrations, APIs, corner cases (CC-01…CC-66), tests, go-live. Source of truth for scope |
 | `docs/product/DhanNow_Loan_Engine_Difference.md` | navix vs DhanNow, area by area: what changes in the backend and why |
 | `docs/product/*.docx` | DhanNow source documents (KFS policy, sanction letter template, website/policy content). Drafts, pending Legal/Compliance/lender approval |
-| `docs/wireframes/` | The app wireframe: one `*.dc.html` per screen, layout in `canvas.json`. Live, reviewable copy: https://claude.ai/artifact/9mpCW1pqqzADmTcoVXNCqJ (private) |
+| `docs/wireframes/` | The app wireframe (rows S–F) plus staff console screens for loan extension (row G): one `*.dc.html` per screen, layout in `canvas.json`. Live, reviewable copy: https://claude.ai/artifact/9mpCW1pqqzADmTcoVXNCqJ (private) |
 | `docs/brand/` | Logo |
 | `site/` | Public website for dhannow.com (static HTML). Pages are generated from `docs/product/Document (11).docx` by `site/build_pages.py` with `site/page_template.html`; `site/calc.js` is the public loan calculator (`node site/calc.js` runs its self-check) |
 | `backend/`, `web/`, `app/`, `infra/` | **Not created yet.** Phase 0 of the plan creates them |
