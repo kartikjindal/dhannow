@@ -2,6 +2,8 @@
 
 Read this first. It explains what DhanNow is, where the plan lives, what is decided, and how to work in this repo.
 
+**Wireframe (live, reviewable):** https://claude.ai/artifact/9mpCW1pqqzADmTcoVXNCqJ. The same boards are in `docs/wireframes/`. Ask the owner for access to the live link; it is private.
+
 ## What this is
 
 DhanNow is a short-term personal loan product: an Android app for borrowers, a staff console, and a public website. It is built by forking the navix_final platform (Spring Boot backend + Next.js) and changing its loan engine to the DhanNow product.
