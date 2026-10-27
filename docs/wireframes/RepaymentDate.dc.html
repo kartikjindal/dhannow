@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Repayment date</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1A4BB8}a:hover{color:#163F9C}
+.s{width:412px;height:915px;box-sizing:border-box;background:#F2F3F3;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;display:flex;flex-direction:column}
+.bar{height:56px;flex:none;display:flex;align-items:center;padding:0 8px}
+.ib{width:48px;height:48px;flex:none;display:flex;align-items:center;justify-content:center;color:#0B0B0C}
+.bt{flex:1;font-size:13px;color:#4A4D52}
+.hd{padding:0 16px 12px;flex:none}
+.hd h2{margin:0 0 10px;font-size:20px;font-weight:600}
+.prog{height:4px;background:#E5E7E8;border-radius:2px}
+.prog i{display:block;height:4px;background:#1F5BDB;border-radius:2px}
+.body{flex:1;padding:12px 16px;display:flex;flex-direction:column;gap:12px}
+.lead{font-size:16px;line-height:24px;font-weight:500;margin:0}
+.sub{font-size:14px;line-height:21px;color:#4A4D52;margin:0}
+.hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
+.card{background:#fff;border:1px solid #E5E7E8;border-radius:16px;padding:16px}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;text-align:center}
+.cal span{height:36px;display:flex;align-items:center;justify-content:center;font-size:13px;color:#8B8F96;border-radius:8px}
+.cal .wd{font-size:11px;font-weight:600;color:#4A4D52;height:24px}
+.cal .in{background:#EEF3FF;color:#0B0B0C}
+.cal .start{background:#ECEDEE;color:#0B0B0C;font-weight:600}
+.cal .due{background:#1A4BB8;color:#fff;font-weight:600}
+.foot{flex:none;padding:12px 16px 8px;display:flex;flex-direction:column;gap:10px}
+.btn{height:52px;border-radius:26px;background:#1A4BB8;color:#fff;font-weight:600;font-size:16px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+.btn:hover{color:#fff;background:#163F9C}
+.trust{display:flex;justify-content:center;gap:16px;padding:4px 16px 16px;font-size:11px;color:#4A4D52}
+
+/* ---- app_navix UI kit (Monochrome + Cobalt), mirrors theme.css + globals.css + components/kit ---- */
+.card,.info,.side{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9)}
+.tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.btn{background:#1F5BDB;color:#fff;border-radius:999px;box-shadow:0 10px 24px -12px rgba(31,91,219,.55);transition:transform .2s,box-shadow .2s}
+.btn:hover{background:#1A4BB8;color:#fff;transform:translateY(-1px)}
+.btn2{background:#fff;border:1px solid #E5E7E8;color:#0B0B0C;border-radius:999px;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10)}
+.btn2:hover{border-color:#D9DBDD;color:#0B0B0C}
+.btn-navy{background:#0B0B0C!important;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08)!important}
+h1,.ttl,.hd h2{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.6px}
+h1,.ttl{font-size:38px;line-height:38px}
+.hd h2{font-size:32px;line-height:34px;margin:0 0 10px}
+.big{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.5px}
+.prog{background:#E5E7E8;height:6px;border-radius:999px}
+.prog i{height:6px;border-radius:999px;background:#1F5BDB}
+.f label{color:#0B0B0C;font-weight:600}
+.f input,.f select,.f textarea{background:#fff;border:1px solid #D9DBDD;border-radius:12px}
+.f input:focus,.f select:focus,.f textarea:focus{outline:none;border-color:#0B0B0C;box-shadow:0 0 0 4px rgba(17,19,24,.07)}
+.chip,.cnt{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 10px;border-radius:999px}
+.ib{width:40px;height:40px;margin:4px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10);color:#0B0B0C}
+.ic,.ico{background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.nav{background:#FAFAFA;border-top:1px solid #E5E7E8;padding:0 8px}
+.nav .pill{width:56px;height:32px;border-radius:999px}
+.nav .on .pill,.on .pill{background:#0B0B0C;color:#fff}
+.nav a.on{color:#0B0B0C;font-weight:600}
+.trust span{display:inline-flex;align-items:center;gap:4px}
+.trust span::before{content:"";width:6px;height:6px;border-radius:50%;background:#17804F}
+.seg .on{border:1px solid #0B0B0C!important;background:#0B0B0C!important;color:#fff!important}
+.opt{background:#fff;border-radius:16px}
+@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:no-preference){.card,.info{animation:rise .6s cubic-bezier(.16,1,.3,1) backwards}}
+</style>
+</helmet>
+<main class="s">
+<header class="bar"><a class="ib" href="Amount.dc.html" aria-label="Back"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg></a><span class="bt">Step 2 of 11</span></header>
+<div class="hd"><h2>Repayment date</h2><div class="prog"><i style="width: 18%"></i></div></div>
+<div class="body">
+<p class="lead">You repay 14 days after the money reaches your bank.</p>
+<p class="sub">If it reaches you on 5 Oct, you repay ₹1,000 on 19 Oct. The exact date is confirmed when the money is sent.</p>
+<div class="card">
+<p style="margin: 0 0 10px; text-align: center; font-weight: 600">October 2026</p>
+<div class="cal" aria-label="October 2026: money on 5 October, repayment on 19 October">
+<span class="wd">S</span><span class="wd">M</span><span class="wd">T</span><span class="wd">W</span><span class="wd">T</span><span class="wd">F</span><span class="wd">S</span>
+<span></span><span></span><span></span><span></span><span>1</span><span>2</span><span>3</span>
+<span>4</span><span class="start">5</span><span class="in">6</span><span class="in">7</span><span class="in">8</span><span class="in">9</span><span class="in">10</span>
+<span class="in">11</span><span class="in">12</span><span class="in">13</span><span class="in">14</span><span class="in">15</span><span class="in">16</span><span class="in">17</span>
+<span class="in">18</span><span class="due" aria-current="date">19</span><span>20</span><span>21</span><span>22</span><span>23</span><span>24</span>
+<span>25</span><span>26</span><span>27</span><span>28</span><span>29</span><span>30</span><span>31</span>
+</div>
+<div style="display: flex; gap: 14px; justify-content: center; margin-top: 10px" class="hint"><span>■ Money in bank</span><span style="color: #1A4BB8">■ 14 days</span><span>■ Repay</span></div>
+</div>
+<div class="card" style="background: #ECEDEE; border: 0"><strong style="font-size: 18px">Day 14 · ₹1,000</strong><p class="hint">Interest for these 14 days was already deducted. Paying early doesn’t change the amount unless your KFS says so.</p></div>
+<p class="hint">Due time and holiday rule: [to be confirmed, e.g. 11:59 pm IST]. Extension is not automatic.</p>
+</div>
+<div class="foot"><a class="btn" href="Digilocker.dc.html">Continue</a></div>
+<div class="trust"><span>Secure &amp; encrypted</span><span>Transparent terms</span><span>No advance fee</span></div>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

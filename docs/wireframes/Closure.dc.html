@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Loan closed</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1A4BB8}a:hover{color:#163F9C}
+.s{width:412px;height:915px;box-sizing:border-box;background:#F2F3F3;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;display:flex;flex-direction:column}
+.body{flex:1;padding:48px 16px 16px;display:flex;flex-direction:column;gap:14px}
+.sub{font-size:14px;line-height:21px;color:#4A4D52;margin:0}
+.hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
+.card{background:#fff;border:1px solid #E5E7E8;border-radius:16px;padding:4px 16px}
+.row{display:flex;justify-content:space-between;gap:12px;font-size:14px;padding:11px 0;border-top:1px solid #E5E7E8}
+.row:first-child{border-top:0}
+.row span:first-child{color:#4A4D52}
+.lv{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.lv span{height:8px;border-radius:4px;background:#E5E7E8}
+.lv .on{background:#1F5BDB}
+.foot{flex:none;padding:12px 16px 20px;display:flex;flex-direction:column;gap:10px}
+.btn{height:52px;border-radius:26px;background:#1A4BB8;color:#fff;font-weight:600;font-size:16px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+.btn:hover{color:#fff;background:#163F9C}
+.btn2{height:48px;box-sizing:border-box;border-radius:24px;border:1px solid #E5E7E8;background:#fff;color:#0B0B0C;font-weight:600;font-size:15px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+
+/* ---- app_navix UI kit (Monochrome + Cobalt), mirrors theme.css + globals.css + components/kit ---- */
+.card,.info,.side{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9)}
+.tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.btn{background:#1F5BDB;color:#fff;border-radius:999px;box-shadow:0 10px 24px -12px rgba(31,91,219,.55);transition:transform .2s,box-shadow .2s}
+.btn:hover{background:#1A4BB8;color:#fff;transform:translateY(-1px)}
+.btn2{background:#fff;border:1px solid #E5E7E8;color:#0B0B0C;border-radius:999px;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10)}
+.btn2:hover{border-color:#D9DBDD;color:#0B0B0C}
+.btn-navy{background:#0B0B0C!important;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08)!important}
+h1,.ttl,.hd h2{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.6px}
+h1,.ttl{font-size:38px;line-height:38px}
+.hd h2{font-size:32px;line-height:34px;margin:0 0 10px}
+.big{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.5px}
+.prog{background:#E5E7E8;height:6px;border-radius:999px}
+.prog i{height:6px;border-radius:999px;background:#1F5BDB}
+.f label{color:#0B0B0C;font-weight:600}
+.f input,.f select,.f textarea{background:#fff;border:1px solid #D9DBDD;border-radius:12px}
+.f input:focus,.f select:focus,.f textarea:focus{outline:none;border-color:#0B0B0C;box-shadow:0 0 0 4px rgba(17,19,24,.07)}
+.chip,.cnt{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 10px;border-radius:999px}
+.ib{width:40px;height:40px;margin:4px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10);color:#0B0B0C}
+.ic,.ico{background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.nav{background:#FAFAFA;border-top:1px solid #E5E7E8;padding:0 8px}
+.nav .pill{width:56px;height:32px;border-radius:999px}
+.nav .on .pill,.on .pill{background:#0B0B0C;color:#fff}
+.nav a.on{color:#0B0B0C;font-weight:600}
+.trust span{display:inline-flex;align-items:center;gap:4px}
+.trust span::before{content:"";width:6px;height:6px;border-radius:50%;background:#17804F}
+.seg .on{border:1px solid #0B0B0C!important;background:#0B0B0C!important;color:#fff!important}
+.opt{background:#fff;border-radius:16px}
+@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:no-preference){.card,.info{animation:rise .6s cubic-bezier(.16,1,.3,1) backwards}}
+</style>
+</helmet>
+<main class="s">
+<div class="body">
+<div style="width: 64px; height: 64px; border-radius: 50%; background: #E3F7EC; display: flex; align-items: center; justify-content: center"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#17804F" stroke-width="2.4" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></div>
+<strong class="ttl" style="display: block">Loan closed. Thank you!</strong>
+<p class="sub">Your payment is verified and loan #20417 is fully repaid.</p>
+<div class="card">
+<div class="row"><span>Amount received</span><strong>₹1,000</strong></div>
+<div class="row"><span>Paid on</span><strong>18 Oct 2026 (on time)</strong></div>
+<div class="row"><span>Reference</span><strong>4290 1123 8876</strong></div>
+<div class="row"><span>Balance</span><strong>₹0</strong></div>
+<div class="row"><span>Closed on</span><strong>18 Oct 2026</strong></div>
+</div>
+<div class="card" style="padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+<strong style="font-size: 15px">You’ve unlocked ₹2,000</strong>
+<div class="lv" aria-label="Level 2 of 7"><span class="on"></span><span class="on"></span><span></span><span></span><span></span><span></span><span></span></div>
+<p class="hint">Your next loan can be up to ₹2,000, after fresh checks.</p>
+</div>
+<p class="hint">Sent only after the payment is reconciled. Late payment: “Loan closed” without the level-up card. The receipt is also saved under Your loans and emailed.</p>
+</div>
+<div class="foot">
+<a class="btn2" href="#">Download receipt (PDF)</a>
+<a class="btn" href="Reloan.dc.html">Borrow again</a>
+<a href="HomeOffer.dc.html" style="min-height: 44px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600">Back to dashboard</a>
+</div>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

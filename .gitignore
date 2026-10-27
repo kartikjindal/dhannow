@@ -1,0 +1,13 @@
+.DS_Store
+__pycache__/
+*.pyc
+.code-review-graph/
+.claude/settings.local.json
+.env
+.env.*
+node_modules/
+target/
+build/
+.dart_tool/
+*.keystore
+*.jks

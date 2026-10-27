@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>How we keep you safe</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1A4BB8}a:hover{color:#163F9C}
+.s{width:412px;height:960px;box-sizing:border-box;background:#F2F3F3;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;display:flex;flex-direction:column;overflow:hidden}
+.bar{height:64px;flex:none;display:flex;align-items:center;gap:4px;padding:0 8px;background:#fff;color:#0B0B0C;border-bottom:1px solid #E5E7E8}
+.ib{width:48px;height:48px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:24px;color:#0B0B0C;text-decoration:none}
+.bt{flex:1;font-size:18px;font-weight:600}
+.body{flex:1;padding:16px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
+.it{display:flex;gap:12px;align-items:flex-start;background:#fff;border:1px solid #E5E7E8;border-radius:14px;padding:12px 14px}
+.ic{width:36px;height:36px;border-radius:18px;background:#ECEDEE;flex:none;display:flex;align-items:center;justify-content:center}
+.t{font-size:14px;font-weight:600;line-height:20px}
+
+/* ---- app_navix UI kit (Monochrome + Cobalt), mirrors theme.css + globals.css + components/kit ---- */
+.card,.info,.side{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9)}
+.tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.btn{background:#1F5BDB;color:#fff;border-radius:999px;box-shadow:0 10px 24px -12px rgba(31,91,219,.55);transition:transform .2s,box-shadow .2s}
+.btn:hover{background:#1A4BB8;color:#fff;transform:translateY(-1px)}
+.btn2{background:#fff;border:1px solid #E5E7E8;color:#0B0B0C;border-radius:999px;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10)}
+.btn2:hover{border-color:#D9DBDD;color:#0B0B0C}
+.btn-navy{background:#0B0B0C!important;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08)!important}
+h1,.ttl,.hd h2{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.6px}
+h1,.ttl{font-size:38px;line-height:38px}
+.hd h2{font-size:32px;line-height:34px;margin:0 0 10px}
+.big{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.5px}
+.prog{background:#E5E7E8;height:6px;border-radius:999px}
+.prog i{height:6px;border-radius:999px;background:#1F5BDB}
+.f label{color:#0B0B0C;font-weight:600}
+.f input,.f select,.f textarea{background:#fff;border:1px solid #D9DBDD;border-radius:12px}
+.f input:focus,.f select:focus,.f textarea:focus{outline:none;border-color:#0B0B0C;box-shadow:0 0 0 4px rgba(17,19,24,.07)}
+.chip,.cnt{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 10px;border-radius:999px}
+.ib{width:40px;height:40px;margin:4px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10);color:#0B0B0C}
+.ic,.ico{background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.nav{background:#FAFAFA;border-top:1px solid #E5E7E8;padding:0 8px}
+.nav .pill{width:56px;height:32px;border-radius:999px}
+.nav .on .pill,.on .pill{background:#0B0B0C;color:#fff}
+.nav a.on{color:#0B0B0C;font-weight:600}
+.trust span{display:inline-flex;align-items:center;gap:4px}
+.trust span::before{content:"";width:6px;height:6px;border-radius:50%;background:#17804F}
+.seg .on{border:1px solid #0B0B0C!important;background:#0B0B0C!important;color:#fff!important}
+.opt{background:#fff;border-radius:16px}
+@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:no-preference){.card,.info{animation:rise .6s cubic-bezier(.16,1,.3,1) backwards}}
+</style>
+</helmet>
+<main class="s">
+<header class="bar"><a class="ib" href="Main.dc.html" aria-label="Back"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg></a><span class="bt">How we keep you safe</span></header>
+<div class="body">
+<div class="it"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="2" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg></span><div><div class="t">Only you can log in</div><p class="hint">One-time codes expire in 5 minutes and work once. Repeated wrong tries are blocked. Fingerprint unlock on this phone.</p></div></div>
+<div class="it"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="2" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"></path></svg></span><div><div class="t">Identity checked with official sources</div><p class="hint">Aadhaar through DigiLocker, PAN validation, and a selfie matched to your Aadhaar photo, so no one can borrow in your name.</p></div></div>
+<div class="it"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="2" aria-hidden="true"><path d="M3 7h18v12H3z"></path><path d="M3 7l13-4v4"></path></svg></span><div><div class="t">Money goes only to your verified account</div><p class="hint">We send ₹1 first and check the account holder’s name matches yours.</p></div></div>
+<div class="it"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 20c4-1 6-5 8-9s5-6 8-6"></path><path d="M4 20h16"></path></svg></span><div><div class="t">You sign with Aadhaar e-Sign</div><p class="hint">Every cost is shown in the Key Fact Statement before you sign. Copies stay in the app.</p></div></div>
+<div class="it"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="3"></circle><circle cx="17" cy="9" r="2.5"></circle><path d="M3 20c1-3 3-5 6-5s5 2 6 5M14 15c3 0 5 2 6 5"></path></svg></span><div><div class="t">Approval and payout are done by different people</div><p class="hint">The person who approves a loan can’t also release the money, and every action is logged with who and when.</p></div></div>
+<div class="it"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="2" aria-hidden="true"><path d="M14 3H6v18h12V7z"></path><path d="M14 3v4h4"></path></svg></span><div><div class="t">Your documents are stored encrypted</div><p class="hint">Download links expire after 15 minutes. Your consent is recorded with date and time.</p></div></div>
+<div class="it"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m5 5 14 14"></path></svg></span><div><div class="t">We never ask for your OTP or PIN</div><p class="hint">We don’t read your contacts, messages or gallery. Report suspicious calls to support.</p></div></div>
+</div>
+<div class="weblinks" style="margin: 0 16px 12px; background: #FAFAFA; border: 1px solid #E5E7E8; border-radius: 22px; padding: 4px 16px 10px; box-shadow: 0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9)"><a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 44px; text-decoration: none; color: #0B0B0C; border-top: 0"><span style="flex: 1; font-size: 14px; font-weight: 500">Privacy policy<span style="display: block; font-size: 12px; font-weight: 400; color: #4A4D52">dhannow.com/privacy.html</span></span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1A4BB8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"></path><path d="M20 4 10 14"></path><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"></path></svg></a><a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 44px; text-decoration: none; color: #0B0B0C; border-top: 1px solid #E5E7E8"><span style="flex: 1; font-size: 14px; font-weight: 500">Fair practices code<span style="display: block; font-size: 12px; font-weight: 400; color: #4A4D52">dhannow.com/fair-practices.html</span></span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1A4BB8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"></path><path d="M20 4 10 14"></path><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"></path></svg></a><p style="margin: 4px 0 0; font-size: 11px; line-height: 16px; color: #4A4D52">Opens dhannow.com in an in-app browser tab.</p></div>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":960}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

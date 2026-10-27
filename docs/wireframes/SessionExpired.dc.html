@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Session expired</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1A4BB8}a:hover{color:#163F9C}
+.s{width:412px;height:915px;box-sizing:border-box;background:#F2F3F3;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;display:flex;flex-direction:column;overflow:hidden;position:relative}
+.hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
+.f{display:flex;flex-direction:column;gap:6px}
+.f label{font-size:13px;font-weight:500;color:#4A4D52}
+.f input{height:52px;border:1px solid #D9DBDD;border-radius:12px;background:#fff;padding:0 14px;font:inherit;font-size:16px;color:#0B0B0C;box-sizing:border-box;width:100%}
+.btn{height:52px;border-radius:26px;background:#1A4BB8;color:#fff;font-weight:600;font-size:16px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+.btn:hover{color:#fff;background:#163F9C}
+.ghost{height:64px;margin:0 16px;border-radius:12px;background:#E7E9E9}
+
+/* ---- app_navix UI kit (Monochrome + Cobalt), mirrors theme.css + globals.css + components/kit ---- */
+.card,.info,.side{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9)}
+.tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.btn{background:#1F5BDB;color:#fff;border-radius:999px;box-shadow:0 10px 24px -12px rgba(31,91,219,.55);transition:transform .2s,box-shadow .2s}
+.btn:hover{background:#1A4BB8;color:#fff;transform:translateY(-1px)}
+.btn2{background:#fff;border:1px solid #E5E7E8;color:#0B0B0C;border-radius:999px;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10)}
+.btn2:hover{border-color:#D9DBDD;color:#0B0B0C}
+.btn-navy{background:#0B0B0C!important;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08)!important}
+h1,.ttl,.hd h2{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.6px}
+h1,.ttl{font-size:38px;line-height:38px}
+.hd h2{font-size:32px;line-height:34px;margin:0 0 10px}
+.big{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.5px}
+.prog{background:#E5E7E8;height:6px;border-radius:999px}
+.prog i{height:6px;border-radius:999px;background:#1F5BDB}
+.f label{color:#0B0B0C;font-weight:600}
+.f input,.f select,.f textarea{background:#fff;border:1px solid #D9DBDD;border-radius:12px}
+.f input:focus,.f select:focus,.f textarea:focus{outline:none;border-color:#0B0B0C;box-shadow:0 0 0 4px rgba(17,19,24,.07)}
+.chip,.cnt{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 10px;border-radius:999px}
+.ib{width:40px;height:40px;margin:4px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10);color:#0B0B0C}
+.ic,.ico{background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.nav{background:#FAFAFA;border-top:1px solid #E5E7E8;padding:0 8px}
+.nav .pill{width:56px;height:32px;border-radius:999px}
+.nav .on .pill,.on .pill{background:#0B0B0C;color:#fff}
+.nav a.on{color:#0B0B0C;font-weight:600}
+.trust span{display:inline-flex;align-items:center;gap:4px}
+.trust span::before{content:"";width:6px;height:6px;border-radius:50%;background:#17804F}
+.seg .on{border:1px solid #0B0B0C!important;background:#0B0B0C!important;color:#fff!important}
+.opt{background:#fff;border-radius:16px}
+@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:no-preference){.card,.info{animation:rise .6s cubic-bezier(.16,1,.3,1) backwards}}
+</style>
+</helmet>
+<main class="s">
+<div aria-hidden="true" style="display: flex; flex-direction: column; gap: 14px; padding-top: 24px">
+<div style="height: 40px; margin: 0 16px; width: 60%; border-radius: 8px; background: #E7E9E9"></div>
+<div class="ghost"></div><div class="ghost"></div>
+</div>
+<div style="position: absolute; inset: 0; background: rgba(11,11,12,.45)"></div>
+<section role="dialog" aria-modal="true" aria-labelledby="se-t" style="position: absolute; left: 0; right: 0; bottom: 0; background: #F2F3F3; border-radius: 28px 28px 0 0; padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 14px">
+<div style="width: 32px; height: 4px; border-radius: 2px; background: #D9DBDD; align-self: center"></div>
+<h2 id="se-t" style="margin: 0; font-size: 22px; line-height: 30px; font-weight: 600">Please confirm it’s you</h2>
+<p style="margin: 0; font-size: 15px; line-height: 22px; color: #4A4D52">For your safety you’re logged out after 7 days. Enter the code we sent to +91 98765 43210 to carry on from the same screen.</p>
+<div class="f"><label for="c">6-digit code</label><input id="c" inputmode="numeric" placeholder="Fills in from SMS"></div>
+<a class="btn" href="Resume.dc.html">Continue</a>
+<a href="Login.dc.html" style="min-height: 44px; display: flex; align-items: center; justify-content: center; font-size: 14px">Use a different number</a>
+<p class="hint">With biometric unlock on, a fingerprint prompt shows first. Unsent form input on the screen underneath is kept.</p>
+</section>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

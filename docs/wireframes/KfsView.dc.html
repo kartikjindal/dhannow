@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Key Fact Statement</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1A4BB8}a:hover{color:#163F9C}
+.s{width:412px;height:1540px;box-sizing:border-box;background:#F2F3F3;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;display:flex;flex-direction:column}
+.bar{height:56px;flex:none;display:flex;align-items:center;padding:0 8px}
+.ib{width:48px;height:48px;flex:none;display:flex;align-items:center;justify-content:center;color:#0B0B0C}
+.bt{flex:1;font-size:13px;color:#4A4D52}
+.hd{padding:0 16px 12px;flex:none}
+.hd h2{margin:0 0 10px;font-size:20px;font-weight:600}
+.prog{height:4px;background:#E5E7E8;border-radius:2px}
+.prog i{display:block;height:4px;background:#1F5BDB;border-radius:2px}
+.body{flex:1;padding:12px 16px;display:flex;flex-direction:column;gap:12px}
+.sub{font-size:14px;line-height:21px;color:#4A4D52;margin:0}
+.hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
+.sec{font-size:12px;font-weight:600;color:#4A4D52;margin:6px 0 -4px}
+.card{background:#fff;border:1px solid #E5E7E8;border-radius:16px;padding:4px 16px}
+.row{display:flex;justify-content:space-between;gap:14px;font-size:14px;line-height:20px;padding:10px 0;border-top:1px solid #E5E7E8}
+.row:first-child{border-top:0}
+.row span:first-child{color:#4A4D52;flex:none}
+.row strong{text-align:right;font-weight:500}
+.chk{display:flex;gap:12px;align-items:flex-start;font-size:14px;line-height:20px}
+.chk input{width:20px;height:20px;accent-color:#1A4BB8;margin:1px 0 0;flex:none}
+.foot{flex:none;padding:12px 16px 20px;display:flex;flex-direction:column;gap:10px}
+.btn{height:52px;border-radius:26px;background:#1A4BB8;color:#fff;font-weight:600;font-size:16px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+.btn:hover{color:#fff;background:#163F9C}
+.btn2{height:48px;box-sizing:border-box;border-radius:24px;border:1px solid #E5E7E8;background:#fff;color:#0B0B0C;font-weight:600;font-size:15px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+
+/* ---- app_navix UI kit (Monochrome + Cobalt), mirrors theme.css + globals.css + components/kit ---- */
+.card,.info,.side{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9)}
+.tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.btn{background:#1F5BDB;color:#fff;border-radius:999px;box-shadow:0 10px 24px -12px rgba(31,91,219,.55);transition:transform .2s,box-shadow .2s}
+.btn:hover{background:#1A4BB8;color:#fff;transform:translateY(-1px)}
+.btn2{background:#fff;border:1px solid #E5E7E8;color:#0B0B0C;border-radius:999px;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10)}
+.btn2:hover{border-color:#D9DBDD;color:#0B0B0C}
+.btn-navy{background:#0B0B0C!important;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08)!important}
+h1,.ttl,.hd h2{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.6px}
+h1,.ttl{font-size:38px;line-height:38px}
+.hd h2{font-size:32px;line-height:34px;margin:0 0 10px}
+.big{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.5px}
+.prog{background:#E5E7E8;height:6px;border-radius:999px}
+.prog i{height:6px;border-radius:999px;background:#1F5BDB}
+.f label{color:#0B0B0C;font-weight:600}
+.f input,.f select,.f textarea{background:#fff;border:1px solid #D9DBDD;border-radius:12px}
+.f input:focus,.f select:focus,.f textarea:focus{outline:none;border-color:#0B0B0C;box-shadow:0 0 0 4px rgba(17,19,24,.07)}
+.chip,.cnt{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 10px;border-radius:999px}
+.ib{width:40px;height:40px;margin:4px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10);color:#0B0B0C}
+.ic,.ico{background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.nav{background:#FAFAFA;border-top:1px solid #E5E7E8;padding:0 8px}
+.nav .pill{width:56px;height:32px;border-radius:999px}
+.nav .on .pill,.on .pill{background:#0B0B0C;color:#fff}
+.nav a.on{color:#0B0B0C;font-weight:600}
+.trust span{display:inline-flex;align-items:center;gap:4px}
+.trust span::before{content:"";width:6px;height:6px;border-radius:50%;background:#17804F}
+.seg .on{border:1px solid #0B0B0C!important;background:#0B0B0C!important;color:#fff!important}
+.opt{background:#fff;border-radius:16px}
+@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:no-preference){.card,.info{animation:rise .6s cubic-bezier(.16,1,.3,1) backwards}}
+</style>
+</helmet>
+<main class="s">
+<header class="bar"><a class="ib" href="Summary.dc.html" aria-label="Back"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg></a><span class="bt">Step 5 of 11 · Key Fact Statement</span></header>
+<div class="hd"><h2>Key Fact Statement</h2><div class="prog"><i style="width: 50%"></i></div></div>
+<div class="body">
+<p class="sub">Read the key terms of this loan before you sign. You can download a copy now and any time later from Your loans.</p>
+<p class="sec">Lender and loan</p>
+<div class="card">
+<div class="row"><span>Lender</span><strong>[Verified lender legal name]</strong></div>
+<div class="row"><span>Platform</span><strong>DHAN NOW (NAVIX Finance Pvt Ltd)</strong></div>
+<div class="row"><span>Application no.</span><strong>20417</strong></div>
+<div class="row"><span>Loan amount</span><strong>₹1,000</strong></div>
+<div class="row"><span>Tenure</span><strong>14 days</strong></div>
+<div class="row"><span>Interest</span><strong>1% per day, simple, on loan amount</strong></div>
+</div>
+<p class="sec">Charges and amounts</p>
+<div class="card">
+<div class="row"><span>Processing fee</span><strong>₹100 (10%)</strong></div>
+<div class="row"><span>GST on fee</span><strong>₹18 (18%)</strong></div>
+<div class="row"><span>Interest for 14 days</span><strong>₹140</strong></div>
+<div class="row"><span>Other charges</span><strong>₹0</strong></div>
+<div class="row"><span>Net amount to you</span><strong>₹742</strong></div>
+<div class="row"><span>Annual Percentage Rate</span><strong>[APR, calculated per RBI method]</strong></div>
+<div class="row"><span>Total repayable</span><strong>₹1,000 on day 14</strong></div>
+</div>
+<p class="sec">If things change</p>
+<div class="card">
+<div class="row"><span>Late / penal charges</span><strong>[Approved terms, or not applicable]</strong></div>
+<div class="row"><span>Cooling-off period</span><strong>[n days; exit amount]</strong></div>
+<div class="row"><span>Prepayment</span><strong>[Approved terms]</strong></div>
+<div class="row"><span>Repay to</span><strong>[Verified lender account / UPI]</strong></div>
+</div>
+<p class="sec">Grievance</p>
+<div class="card">
+<div class="row"><span>DhanNow officer</span><strong>Dharmendra Rajput, 9211331170, grievance@dhannow.com</strong></div>
+<div class="row"><span>Lender officer</span><strong>[Verified details]</strong></div>
+</div>
+<a class="btn2" href="#">Download KFS (PDF)</a>
+<label class="chk"><input type="checkbox"><span>I have read the Key Fact Statement and understand the cost of this loan.</span></label>
+</div>
+<div class="weblinks" style="margin: 0 16px 12px; background: #FAFAFA; border: 1px solid #E5E7E8; border-radius: 22px; padding: 4px 16px 10px; box-shadow: 0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9)"><a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 44px; text-decoration: none; color: #0B0B0C; border-top: 0"><span style="flex: 1; font-size: 14px; font-weight: 500">KFS information policy<span style="display: block; font-size: 12px; font-weight: 400; color: #4A4D52">dhannow.com/kfs-policy.html</span></span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1A4BB8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"></path><path d="M20 4 10 14"></path><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"></path></svg></a><p style="margin: 4px 0 0; font-size: 11px; line-height: 16px; color: #4A4D52">Opens dhannow.com in an in-app browser tab. Your own KFS is the PDF above; this page explains it.</p></div>
+<div class="foot"><a class="btn" href="SelfieIntro.dc.html">Continue</a></div>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":1540}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

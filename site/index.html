@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DhanNow – Small loans with the full cost shown first</title>
+<meta name="description" content="Borrow ₹1,000 to ₹10,000 for 14 days. See every charge, what reaches your bank and what you repay before you apply.">
+<link rel="icon" href="logo.jpeg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bebas+Neue&display=swap">
+<style>
+/* Wireframe tokens: app_navix "Monochrome + Cobalt" (Components.dc.html) */
+:root{
+  --page:#F2F3F3;
+  --surface:#FAFAFA;
+  --field:#EEF3FF;
+  --ink:#0B0B0C;
+  --soft:#4A4D52;
+  --line:#E5E7E8;
+  --cobalt:#1F5BDB;
+  --cobalt-dark:#1A4BB8;
+  --cobalt-press:#163F9C;
+  --shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:80px;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--page);color:var(--ink);font:16px/1.6 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+h1,h2{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;margin:0;letter-spacing:.6px;line-height:.95}
+h3{font-weight:600;margin:0;letter-spacing:-.01em;line-height:1.25}
+.fig{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.5px}
+p{margin:0}
+a{color:var(--cobalt-dark);text-underline-offset:3px}
+a:hover{color:var(--cobalt-press)}
+:focus-visible{outline:3px solid var(--cobalt);outline-offset:3px;border-radius:4px}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+.soft{color:var(--soft)}
+.small{font-size:14px;line-height:1.55}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:52px;padding:0 28px;border-radius:999px;background:var(--cobalt);box-shadow:0 10px 24px -12px rgba(31,91,219,.55);color:#fff;font-weight:600;font-size:16px;text-decoration:none}
+.btn:hover{background:var(--cobalt-dark);color:#fff}
+.num{font-variant-numeric:tabular-nums}
+
+/* top line + header */
+.bar{background:var(--ink);color:#fff;font-size:14px;text-align:center;padding:10px 20px}
+.bar a{color:#fff;font-weight:600}
+header{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+header .wrap{display:flex;align-items:center;gap:32px;height:72px}
+header img{height:44px;display:block}
+header nav{display:flex;gap:28px;margin-left:auto;font-size:15px;font-weight:500}
+header nav a{color:var(--ink);text-decoration:none;padding:12px 0}
+header nav a:hover{color:var(--cobalt-dark)}
+header .btn{min-height:44px;padding:0 20px;font-size:15px}
+
+/* hero */
+.hero{text-align:center;padding:72px 0 40px}
+.hero h1{font-size:clamp(60px,11vw,128px);max-width:14ch;margin:0 auto}
+.hero p{font-size:clamp(17px,2vw,20px);max-width:36ch;margin:24px auto 0}
+
+/* calculator */
+.calc{background:var(--field);border-radius:28px;padding:56px;display:grid;grid-template-columns:1.15fr .85fr;gap:56px;align-items:start}
+.say{font-weight:500;font-size:clamp(24px,3vw,34px);line-height:1.35;letter-spacing:-.02em}
+.say b{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;font-size:1.4em;letter-spacing:.5px;color:var(--cobalt-dark);line-height:1}
+.pick{margin-top:36px}
+.pick label{font-weight:600;font-size:15px;display:block;margin-bottom:10px}
+input[type=range]{width:100%;height:44px;margin:0;background:none;-webkit-appearance:none;appearance:none;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:linear-gradient(var(--cobalt),var(--cobalt)) 0/var(--p,0%) 100% no-repeat,#fff}
+input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:#fff}
+input[type=range]::-moz-range-progress{height:6px;border-radius:3px;background:var(--cobalt)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:28px;height:28px;border-radius:50%;background:var(--cobalt);border:4px solid #fff;margin-top:-11px;box-shadow:0 2px 8px rgba(31,91,219,.45)}
+input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--cobalt);border:4px solid #fff}
+.ticks{display:flex;justify-content:space-between;font-size:13px;color:var(--soft);margin-top:2px}
+.when{margin-top:28px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:15px}
+.when input{height:44px;border:1px solid var(--line);border-radius:12px;padding:0 12px;font:inherit;color:var(--ink);background:#fff}
+.bill{background:#fff;border:1px solid var(--line);border-radius:22px;padding:28px;box-shadow:var(--shadow)}
+.bill dl{margin:0}
+.bill .r{display:flex;justify-content:space-between;gap:16px;padding:10px 0}
+.bill dt span{display:block;font-size:13px;color:var(--soft)}
+.bill dd{margin:0;font-weight:600;white-space:nowrap}
+.bill .sum{border-top:1px solid var(--line);margin-top:6px;padding-top:16px}
+.bill .sum dd{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;font-size:30px;line-height:1}
+.bill .back{background:var(--field);align-items:center;border-radius:14px;padding:14px 16px;margin-top:12px}
+.bill .back dd{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;font-size:34px;line-height:1;color:var(--cobalt-dark)}
+.fine{margin-top:20px;max-width:70ch}
+
+/* sections */
+section{padding:112px 0 0}
+.split{display:grid;grid-template-columns:5fr 7fr;gap:64px;align-items:start}
+.split h2,.h2{font-size:clamp(44px,6vw,76px)}
+.lede{margin-top:20px;max-width:34ch}
+
+.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:40px;padding-top:72px}
+.facts h3{font-size:18px;margin-bottom:8px}
+
+ol.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+ol.steps li{counter-increment:s;display:grid;grid-template-columns:48px 1fr;padding:22px 0;border-top:1px solid var(--line)}
+ol.steps li:last-child{border-bottom:1px solid var(--line)}
+ol.steps li::before{content:counter(s);font-family:"Bebas Neue",Inter,sans-serif;font-size:32px;color:var(--cobalt);line-height:1}
+ol.steps strong{display:block;font-size:17px;margin-bottom:2px}
+
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:16px 0;border-top:1px solid var(--line);vertical-align:top}
+tr:last-child th,tr:last-child td{border-bottom:1px solid var(--line)}
+th{font-weight:400;color:var(--soft);width:45%;padding-right:16px}
+td{font-weight:500}
+
+.ladder{display:flex;flex-wrap:wrap;gap:10px;margin-top:36px}
+.ladder span{font-family:"Bebas Neue",Inter,sans-serif;font-size:clamp(24px,2.8vw,32px);letter-spacing:.5px;line-height:1;padding:12px 18px 9px;border-radius:999px;background:#fff;border:1px solid var(--line);box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.ladder span:first-child{background:var(--cobalt);border-color:var(--cobalt);color:#fff}
+
+ul.plain{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:36px 40px}
+ul.plain strong{display:block;font-size:17px;margin-bottom:4px}
+
+.never{margin-top:64px;padding:36px 40px;border-radius:22px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow)}
+.never h3{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.6px;line-height:1;font-size:clamp(30px,3.6vw,42px);margin-bottom:10px}
+
+.who p+p{margin-top:16px}
+.who dl{margin:32px 0 0;display:grid;grid-template-columns:auto 1fr;gap:12px 28px}
+.who dt{color:var(--soft)}
+.who dd{margin:0;font-weight:500}
+.check{margin-top:32px;display:flex;flex-direction:column;gap:12px}
+
+.app{background:var(--ink);color:#fff;border-radius:28px;padding:64px 56px;display:grid;grid-template-columns:1fr 1fr;gap:56px}
+.app h2{font-size:clamp(44px,6vw,76px)}
+.app p{color:#C9CBCF}
+.app a{color:#fff}
+.app .btn{margin-top:32px;box-shadow:none}
+
+.app dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:10px 24px;font-size:15px}
+.app dt{color:#8B8F96}
+.app dd{margin:0;overflow-wrap:anywhere}
+.app ul{margin:28px 0 0;padding-left:18px;color:#C9CBCF;font-size:15px;display:flex;flex-direction:column;gap:6px}
+
+.help{display:grid;grid-template-columns:repeat(4,1fr);gap:32px;margin-top:48px}
+.help a{font-weight:600;font-size:18px;text-decoration:none;display:inline-block;padding:4px 0}
+.help a:hover{text-decoration:underline}
+
+details{border-top:1px solid var(--line)}
+details:last-of-type{border-bottom:1px solid var(--line)}
+summary{cursor:pointer;list-style:none;padding:22px 0;font-weight:600;font-size:17px;display:flex;justify-content:space-between;gap:16px}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";font-weight:400;font-size:26px;line-height:1;color:var(--cobalt-dark)}
+details[open] summary::after{content:"−"}
+details p{padding:0 0 24px;max-width:64ch}
+
+footer{margin-top:120px;background:#fff;border-top:1px solid var(--line);padding:56px 0 40px;font-size:14px}
+.fgrid{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:32px}
+footer h4{font-size:14px;margin:0 0 12px}
+footer ul{list-style:none;margin:0;padding:0}
+footer li a{color:var(--soft);text-decoration:none;display:inline-block;padding:5px 0}
+footer li a:hover{color:var(--cobalt-dark);text-decoration:underline}
+.legal{margin-top:48px;color:var(--soft);display:flex;flex-direction:column;gap:10px;max-width:90ch}
+
+@media (max-width:900px){
+  header nav{display:none}
+  header .btn{margin-left:auto}
+  .calc,.split,.app{grid-template-columns:1fr;gap:36px}
+  .calc{padding:32px 24px;border-radius:24px}
+  .app{padding:44px 24px;border-radius:24px}
+  .facts,.help{grid-template-columns:1fr 1fr}
+  .fgrid{grid-template-columns:1fr 1fr}
+  section{padding-top:88px}
+}
+@media (max-width:560px){
+  body{font-size:16px}
+  .wrap{padding:0 16px}
+  .hero{padding:48px 0 32px}
+  .calc{padding:28px 18px;margin:0 -4px}
+  .bill{padding:20px}
+  .facts,.help,ul.plain,.fgrid{grid-template-columns:1fr}
+  .facts{gap:28px;padding-top:56px}
+  .never{padding:28px 22px}
+  section{padding-top:72px}
+  .hero .btn{width:100%}
+}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+
+<div class="bar">Our website is still being built. For now, apply in the DhanNow Android app. <a href="#app">Get the app</a></div>
+
+<header>
+  <div class="wrap">
+    <a href="#top" aria-label="DhanNow home"><img src="logo.jpeg" alt="DhanNow"></a>
+    <nav aria-label="Main">
+      <a href="#calculator">Calculator</a>
+      <a href="#how">How it works</a>
+      <a href="#safety">Safety</a>
+      <a href="#help">Help</a>
+    </nav>
+    <a class="btn" href="#app">Get the app</a>
+  </div>
+</header>
+
+<main id="top">
+
+<div class="hero wrap">
+  <h1>Small loans, with the full cost shown first</h1>
+  <p class="soft">Borrow ₹1,000 to ₹10,000 for 14 days. You’ll know exactly what reaches your bank and what you pay back before you say yes.</p>
+</div>
+
+<div class="wrap" id="calculator">
+  <div class="calc">
+    <div>
+      <p class="say" aria-live="polite">Borrow <b id="c-amt">₹1,000</b>. You get <b id="c-net">₹742</b> in your bank, and pay back <b id="c-rep">₹1,000</b> on <b id="c-due">10 Nov</b>.</p>
+      <div class="pick">
+        <label for="amt">How much do you need?</label>
+        <input type="range" id="amt" min="0" max="6" step="1" value="0">
+        <div class="ticks" aria-hidden="true"><span>1k</span><span>2k</span><span>3k</span><span>4k</span><span>5k</span><span>7k</span><span>10k</span></div>
+      </div>
+      <div class="when">
+        <label for="c-date">Money reaches your bank on</label>
+        <input type="date" id="c-date">
+      </div>
+    </div>
+    <div class="bill">
+      <dl class="num">
+        <div class="r"><dt>Processing fee<span>10% of the loan</span></dt><dd id="c-pf">₹100</dd></div>
+        <div class="r"><dt>GST on the fee<span>18% of the fee</span></dt><dd id="c-gst">₹18</dd></div>
+        <div class="r"><dt>Interest for 14 days<span>1% a day, on the loan amount</span></dt><dd id="c-int">₹140</dd></div>
+        <div class="r sum"><dt>Taken out before payout</dt><dd id="c-tot">₹258</dd></div>
+        <div class="r back"><dt>You pay back on day 14</dt><dd id="c-rep2">₹1,000</dd></div>
+      </dl>
+    </div>
+  </div>
+  <p class="fine small soft">This is an estimate. Your actual offer, APR and due date are in your <a href="kfs.html">Key Facts Statement</a>, which you’ll see before you accept. First loans start at ₹1,000.</p>
+
+  <div class="facts">
+    <div><h3>A registered Indian company</h3><p class="soft">DhanNow is run by NAVIX Finance Private Limited, CIN U64990HR2026PTC144926. You can look us up on the MCA website.</p></div>
+    <div><h3>Nothing to pay upfront</h3><p class="soft">Charges come out of the loan itself. If anyone asks you to pay first, it isn’t us.</p></div>
+    <div><h3>You know what the app reads</h3><p class="soft">The app asks your permission before it reads your contacts, SMS and call logs. <a href="#permissions">See what we use and why</a>.</p></div>
+  </div>
+</div>
+
+<section id="how">
+  <div class="wrap split">
+    <div>
+      <h2>How it works</h2>
+      <p class="lede soft">Everything happens in the app, and you see every number before you commit to anything.</p>
+    </div>
+    <ol class="steps">
+      <li><div><strong>Download the app and sign up</strong><span class="soft">Get it from this website, then add your basic details.</span></div></li>
+      <li><div><strong>Verify it’s you</strong><span class="soft">Aadhaar through DigiLocker, your PAN, and a quick selfie.</span></div></li>
+      <li><div><strong>Read your offer</strong><span class="soft">We check your application. If approved, you get a Key Facts Statement with every charge and the APR.</span></div></li>
+      <li><div><strong>Sign and receive</strong><span class="soft">Sign with Aadhaar e-Sign. The money goes only to a bank account in your name.</span></div></li>
+      <li><div><strong>Repay on day 14</strong><span class="soft">Pay back the loan amount on or before the due date.</span></div></li>
+    </ol>
+  </div>
+</section>
+
+<section id="terms">
+  <div class="wrap split">
+    <div>
+      <h2>The terms, all of them</h2>
+      <p class="lede soft">One product, one set of charges. No surprises later.</p>
+    </div>
+    <div>
+      <table>
+        <tbody>
+          <tr><th scope="row">Amount</th><td>₹1,000 to ₹10,000</td></tr>
+          <tr><th scope="row">Length</th><td>14 days from the day you receive the money</td></tr>
+          <tr><th scope="row">Processing fee</th><td>10% of the loan, plus 18% GST on the fee</td></tr>
+          <tr><th scope="row">Interest</th><td>1% a day, simple, on the loan amount</td></tr>
+          <tr><th scope="row">When charges are paid</th><td>Taken out of the loan before it’s sent</td></tr>
+          <tr><th scope="row">What you repay</th><td>The loan amount, once, on day 14</td></tr>
+        </tbody>
+      </table>
+      <h3 style="font-size:24px;margin-top:56px" id="eligibility">Your limit grows as you repay on time</h3>
+      <p class="soft" style="margin-top:10px;max-width:56ch">Everyone starts at ₹1,000. Repay in full by the due date and you may qualify for the next amount. It isn’t automatic, and a late repayment keeps you where you are.</p>
+      <div class="ladder num" aria-label="Loan levels"><span>₹1,000</span><span>₹2,000</span><span>₹3,000</span><span>₹4,000</span><span>₹5,000</span><span>₹7,000</span><span>₹10,000</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap split">
+    <div>
+      <h2>How we keep you safe</h2>
+      <p class="lede soft">Lending is built on trust, so here’s exactly what we do and don’t do.</p>
+    </div>
+    <ul class="plain">
+      <li><strong>Only you can borrow in your name</strong><span class="soft">We check your Aadhaar through DigiLocker, your PAN, and match a selfie to your Aadhaar photo.</span></li>
+      <li><strong>Money goes only to your account</strong><span class="soft">We send ₹1 first and confirm the account holder’s name matches yours.</span></li>
+      <li><strong>You read before you sign</strong><span class="soft">The Key Facts Statement shows every charge and the APR. Copies stay in your app.</span></li>
+      <li><strong>Two people check every loan</strong><span class="soft">The person who approves a loan can’t release the money, and every action is logged.</span></li>
+      <li><strong>Your documents are encrypted</strong><span class="soft">Download links expire after 15 minutes. Your consent is recorded with the date and time.</span></li>
+      <li><strong>A named person handles complaints</strong><span class="soft">Our Grievance Officer’s name, phone and email are on this page, not hidden in a policy.</span></li>
+    </ul>
+  </div>
+  <div class="wrap split" id="permissions" style="margin-top:96px">
+    <div>
+      <h2 style="font-size:clamp(28px,3.6vw,40px)">What the app reads from your phone</h2>
+      <p class="lede soft">We’d rather tell you upfront than bury it in a policy.</p>
+    </div>
+    <div>
+      <table>
+        <tbody>
+          <tr><th scope="row">Contacts</th><td>To verify the references you give and to assess your application.</td></tr>
+          <tr><th scope="row">SMS messages</th><td>To read bank and transaction messages that help us understand your income and repayment capacity.</td></tr>
+          <tr><th scope="row">Call logs</th><td>To help verify your identity and assess your application.</td></tr>
+          <tr><th scope="row">Camera</th><td>For your selfie during identity verification.</td></tr>
+        </tbody>
+      </table>
+      <p class="soft" style="margin-top:20px">Android asks for your permission before the app can access any of these. You can turn a permission off at any time in your phone’s settings. How we store, protect and delete this information is in our <a href="privacy.html">privacy policy</a> and <a href="consent.html">consent information</a>.</p>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="never">
+      <h3>We will never ask for your OTP, PIN or any payment before your loan</h3>
+      <p class="soft" style="max-width:70ch">We also never send the app over WhatsApp, Telegram or SMS. If someone does, please tell us at <a href="mailto:support@dhannow.com">support@dhannow.com</a> or report it on the cyber-crime helpline, <a href="tel:1930">1930</a>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="company" class="who">
+  <div class="wrap split">
+    <div>
+      <h2>Who you’re dealing with</h2>
+    </div>
+    <div>
+      <p>DhanNow is the app and website you use. It’s run by NAVIX Finance Private Limited.</p>
+      <dl>
+        <dt>Company</dt><dd>NAVIX Finance Private Limited</dd>
+        <dt>CIN</dt><dd>U64990HR2026PTC144926</dd>
+        <dt>Office</dt><dd>Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001</dd>
+      </dl>
+      <div class="check">
+        <p>Don’t take our word for it. You can check:</p>
+        <p><a href="https://www.mca.gov.in/content/mca/global/en/mca/master-data/MDS.html" target="_blank" rel="noopener">MCA company search</a>: enter our CIN to see the company’s registered details.</p>
+        <p>Every document you sign names the company and shows our Grievance Officer’s contact details.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="app">
+  <div class="wrap">
+    <div class="app">
+      <div>
+        <h2>Get the DhanNow app</h2>
+        <p style="margin-top:20px;max-width:42ch">We’re still building the website, so there’s no login here yet. Everything from applying to repaying happens in the Android app. A Play Store listing is on the way.</p>
+        <a class="btn" id="apk-link" href="#app" download>Download for Android</a>
+      </div>
+      <div>
+        <dl>
+          <dt>Version</dt><dd id="apk-ver"></dd>
+          <dt>Size</dt><dd id="apk-size"></dd>
+          <dt>Package</dt><dd id="apk-pkg"></dd>
+          <dt>SHA-256</dt><dd id="apk-sha" class="small"></dd>
+        </dl>
+        <ul>
+          <li>Download it only from dhannow.com.</li>
+          <li>Check that the SHA-256 above matches your file.</li>
+          <li>The app will ask permission to read contacts, SMS and call logs. <a href="#permissions">Here’s why</a>.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="help">
+  <div class="wrap">
+    <h2 class="h2">Talk to a person</h2>
+    <div class="help">
+      <div><p class="soft small">Call or WhatsApp</p><a href="tel:+919211331169">92113 31169</a></div>
+      <div><p class="soft small">Email</p><a href="mailto:support@dhannow.com">support@dhannow.com</a></div>
+      <div><p class="soft small">General questions</p><a href="mailto:info@dhannow.com">info@dhannow.com</a></div>
+      <div><p class="soft small">Grievance Officer, Dharmendra Rajput</p><a href="tel:+919211331170">92113 31170</a><br><a href="mailto:grievance@dhannow.com" style="font-size:16px">grievance@dhannow.com</a><br><a href="grievance.html" style="font-size:15px;font-weight:500">How we handle complaints</a></div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap split">
+    <div><h2>Questions</h2></div>
+    <div>
+      <details><summary>Why do I get less than I borrow?</summary><p class="soft">The fee, GST and 14 days of interest are taken out before the money is sent. On ₹1,000 that’s ₹258, so ₹742 reaches you and you repay ₹1,000 on day 14.</p></details>
+      <details><summary>Do I pay anything before getting the loan?</summary><p class="soft">No. There’s never an advance fee. Everything is taken out of the approved loan and shown in your Key Facts Statement first.</p></details>
+      <details><summary>Can I log in on the website?</summary><p class="soft">Not yet. The website is still being built, so please use the Android app.</p></details>
+      <details><summary>Will repaying early lower my interest?</summary><p class="soft">Interest for all 14 days is taken upfront. You only get a refund for early repayment if your loan agreement says so.</p></details>
+      <details><summary>Before you borrow</summary><p class="soft">Check the total you’ll repay, the APR, the amount that reaches your bank and the due date. Borrow only if you’re sure you can repay on time, and call us if anything is unclear.</p></details>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="fgrid">
+      <div>
+        <img src="logo.jpeg" alt="DhanNow" style="height:60px">
+        <p class="soft" style="margin-top:16px">92113 31169<br>support@dhannow.com</p>
+      </div>
+      <div><h4>DhanNow</h4><ul>
+        <li><a href="#top">Home</a></li><li><a href="about.html">About us</a></li><li><a href="loan-information.html">Loan information</a></li><li><a href="how-it-works.html">How it works</a></li><li><a href="eligibility.html">Loan eligibility</a></li><li><a href="#calculator">Loan calculator</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact us</a></li>
+      </ul></div>
+      <div><h4>Policies</h4><ul>
+        <li><a href="terms.html">Terms &amp; conditions</a></li><li><a href="privacy.html">Privacy policy</a></li><li><a href="repayment-policy.html">Loan information &amp; repayment policy</a></li><li><a href="consent.html">Customer consent information</a></li><li><a href="grievance.html">Grievance redressal policy</a></li><li><a href="fair-practices.html">Fair practices code</a></li><li><a href="governance.html">Corporate governance policy</a></li><li><a href="risk.html">Risk management policy</a></li>
+      </ul></div>
+      <div><h4>Disclosures</h4><ul>
+        <li><a href="payment-refund-policy.html">Payment, refund &amp; dispute policy</a></li><li><a href="cookie-policy.html">Cookie policy</a></li><li><a href="disclaimer.html">Website disclaimer</a></li><li><a href="#company">Company information</a></li><li><a href="kfs.html">KFS information</a></li><li><a href="kfs-policy.html">KFS information policy</a></li><li><a href="sanction-letter.html">Sample sanction letter</a></li><li><a href="loan-agreement.html">Loan agreement access</a></li>
+      </ul></div>
+    </div>
+    <div class="legal">
+      <p>DhanNow is the customer brand of NAVIX Finance Private Limited (CIN U64990HR2026PTC144926), Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001, India.</p>
+      <p>Approval and amount depend on eligibility, verification and our assessment. The calculator is an estimate; your Key Facts Statement and loan agreement govern your loan.</p>
+      <p>© <span id="yr">2026</span> NAVIX Finance Private Limited</p>
+    </div>
+  </div>
+</footer>
+
+<script src="calc.js"></script>
+<script>
+// Fill these before go-live. Until url is set, the download button stays on this section.
+var APK = { url: '[APK_URL]', version: '[VERSION]', pkg: '[com.dhannow.app]', size: '[SIZE] MB', sha256: '[SHA-256 OF SIGNED APK]' };
+
+(function () {
+  var inr = function (n) { return '₹' + n.toLocaleString('en-IN'); };
+  var $ = function (id) { return document.getElementById(id); };
+  var slider = $('amt'), date = $('c-date');
+
+  function render() {
+    var i = +slider.value, r = DHANNOW.calc(DHANNOW.ladder[i]);
+    slider.style.setProperty('--p', (i / 6 * 100) + '%');
+    slider.setAttribute('aria-valuetext', inr(r.principal));
+    $('c-amt').textContent = inr(r.principal);
+    $('c-net').textContent = inr(r.net);
+    $('c-rep').textContent = $('c-rep2').textContent = inr(r.repay);
+    $('c-pf').textContent = inr(r.pf);
+    $('c-gst').textContent = inr(r.gst);
+    $('c-int').textContent = inr(r.interest);
+    $('c-tot').textContent = inr(r.total);
+    var d = date.valueAsDate;
+    $('c-due').textContent = d ? DHANNOW.dueDate(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }) : 'day 14';
+  }
+
+  var t = new Date();
+  date.valueAsDate = new Date(Date.UTC(t.getFullYear(), t.getMonth(), t.getDate()));
+  slider.addEventListener('input', render);
+  date.addEventListener('input', render);
+  render();
+
+  if (APK.url.charAt(0) !== '[') $('apk-link').href = APK.url;
+  $('apk-ver').textContent = APK.version;
+  $('apk-pkg').textContent = APK.pkg;
+  $('apk-size').textContent = APK.size;
+  $('apk-sha').textContent = APK.sha256;
+  $('yr').textContent = t.getFullYear();
+})();
+</script>
+</body>
+</html>

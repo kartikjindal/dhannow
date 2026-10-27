@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Profile</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1A4BB8}a:hover{color:#163F9C}
+.s{width:412px;height:1850px;box-sizing:border-box;background:#F2F3F3;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;display:flex;flex-direction:column}
+.body{flex:1;padding:16px;display:flex;flex-direction:column;gap:14px}
+.hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
+.sec{font-size:13px;font-weight:600;color:#4A4D52;margin:6px 0 -4px}
+.card{background:#fff;border:1px solid #E5E7E8;border-radius:16px;padding:4px 16px}
+.row{display:flex;justify-content:space-between;gap:16px;font-size:14px;padding:11px 0;border-top:1px solid #E5E7E8}
+.row:first-child{border-top:0}
+.row span:first-child{color:#4A4D52;flex:none}
+.row strong{text-align:right;font-weight:500}
+.li{display:flex;align-items:center;justify-content:space-between;min-height:52px;font-size:14px;text-decoration:none;color:#0B0B0C;border-top:1px solid #E5E7E8}
+.li:first-child{border-top:0}
+.nav{height:80px;flex:none;background:#fff;border-top:1px solid #E5E7E8;display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
+.nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:12px;color:#4A4D52;text-decoration:none}
+.nav a.on{color:#0B0B0C;font-weight:600}
+.pill{width:64px;height:32px;border-radius:16px;display:flex;align-items:center;justify-content:center}
+.on .pill{background:#EEF3FF}
+
+/* ---- app_navix UI kit (Monochrome + Cobalt), mirrors theme.css + globals.css + components/kit ---- */
+.card,.info,.side{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9)}
+.tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.btn{background:#1F5BDB;color:#fff;border-radius:999px;box-shadow:0 10px 24px -12px rgba(31,91,219,.55);transition:transform .2s,box-shadow .2s}
+.btn:hover{background:#1A4BB8;color:#fff;transform:translateY(-1px)}
+.btn2{background:#fff;border:1px solid #E5E7E8;color:#0B0B0C;border-radius:999px;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10)}
+.btn2:hover{border-color:#D9DBDD;color:#0B0B0C}
+.btn-navy{background:#0B0B0C!important;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08)!important}
+h1,.ttl,.hd h2{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.6px}
+h1,.ttl{font-size:38px;line-height:38px}
+.hd h2{font-size:32px;line-height:34px;margin:0 0 10px}
+.big{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.5px}
+.prog{background:#E5E7E8;height:6px;border-radius:999px}
+.prog i{height:6px;border-radius:999px;background:#1F5BDB}
+.f label{color:#0B0B0C;font-weight:600}
+.f input,.f select,.f textarea{background:#fff;border:1px solid #D9DBDD;border-radius:12px}
+.f input:focus,.f select:focus,.f textarea:focus{outline:none;border-color:#0B0B0C;box-shadow:0 0 0 4px rgba(17,19,24,.07)}
+.chip,.cnt{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 10px;border-radius:999px}
+.ib{width:40px;height:40px;margin:4px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10);color:#0B0B0C}
+.ic,.ico{background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.nav{background:#FAFAFA;border-top:1px solid #E5E7E8;padding:0 8px}
+.nav .pill{width:56px;height:32px;border-radius:999px}
+.nav .on .pill,.on .pill{background:#0B0B0C;color:#fff}
+.nav a.on{color:#0B0B0C;font-weight:600}
+.trust span{display:inline-flex;align-items:center;gap:4px}
+.trust span::before{content:"";width:6px;height:6px;border-radius:50%;background:#17804F}
+.seg .on{border:1px solid #0B0B0C!important;background:#0B0B0C!important;color:#fff!important}
+.opt{background:#fff;border-radius:16px}
+@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:no-preference){.card,.info{animation:rise .6s cubic-bezier(.16,1,.3,1) backwards}}
+</style>
+</helmet>
+<main class="s">
+<div class="body">
+<div style="display: flex; align-items: center; gap: 14px; padding-top: 8px">
+<div style="width: 64px; height: 64px; border-radius: 50%; background: #EEF3FF; color: #1A4BB8; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 600; flex: none">AS</div>
+<div><div style="font-size: 20px; font-weight: 600">Aarav Sharma</div><p class="hint">98765 43210</p></div>
+</div>
+<div style="display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; background: #ECEDEE">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0B0B0C" stroke-width="2" aria-hidden="true" style="flex: none; margin-top: 1px"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
+<p class="hint" style="color: #0B0B0C">Your details are view-only. They come from your verified documents and can’t be changed.</p>
+</div>
+<p class="sec">Personal</p>
+<div class="card">
+<div class="row"><span>Full name</span><strong>Aarav Sharma</strong></div>
+<div class="row"><span>Date of birth</span><strong>14 Mar 1996</strong></div>
+<div class="row"><span>PAN</span><strong>XXXXX1234F</strong></div>
+<div class="row"><span>Aadhaar</span><strong>XXXX XXXX 9012</strong></div>
+</div>
+<p class="sec">Contact</p>
+<div class="card">
+<div class="row"><span>Mobile</span><strong>98765 43210</strong></div>
+<div class="row"><span>Personal email</span><strong>aarav.s@gmail.com</strong></div>
+<div class="row"><span>Work email</span><strong>aarav.sharma@infosys.com</strong></div>
+<div class="row"><span>Current address</span><strong>B-402, Sunrise Apartments, HSR Layout, Bengaluru 560102</strong></div>
+</div>
+<p class="sec">Work and income</p>
+<div class="card">
+<div class="row"><span>Employment</span><strong>Salaried</strong></div>
+<div class="row"><span>Employer</span><strong>Infosys Limited</strong></div>
+<div class="row"><span>Monthly salary</span><strong>₹40,000</strong></div>
+<div class="row"><span>Last salary date</span><strong>1 Oct 2026</strong></div>
+<div class="row"><span>EPFO UAN</span><strong>Not added</strong></div>
+</div>
+<p class="sec">Bank accounts</p>
+<div class="card">
+<div class="row"><span>Salary account</span><strong>HDFC Bank XXXX5678</strong></div>
+<div class="row"><span>Payout account</span><strong>HDFC Bank XXXX5678</strong></div>
+<div class="row"><span>Auto-repayment</span><strong>Active, UMRN …2345</strong></div>
+</div>
+<p class="sec">References and emergency contact</p>
+<div class="card">
+<div class="row"><span>Reference 1</span><strong>Ravi Kumar, Sibling</strong></div>
+<div class="row"><span>Reference 2</span><strong>Neha Verma, Friend</strong></div>
+<div class="row"><span>Emergency contact</span><strong>Ravi Kumar, 98111 22334</strong></div>
+</div>
+<p class="sec">Account</p>
+<div class="card">
+<a class="li" href="LoanAccount.dc.html">Loan account details<span aria-hidden="true">›</span></a>
+<a class="li" href="Loans.dc.html">My loans and documents<span aria-hidden="true">›</span></a>
+<a class="li" href="Transactions.dc.html">Transactions<span aria-hidden="true">›</span></a>
+<a class="li" href="Settings.dc.html">Settings and security<span aria-hidden="true">›</span></a>
+<a class="li" href="Support.dc.html">Help and support<span aria-hidden="true">›</span></a>
+<a class="li" href="Trust.dc.html">How we keep you safe<span aria-hidden="true">›</span></a>
+<a class="li" href="Support.dc.html">Terms, privacy and fair practices<span aria-hidden="true">›</span></a>
+</div>
+<a href="Main.dc.html" style="min-height: 48px; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 15px">Log out</a>
+<p class="hint" style="text-align: center">App version [x.y.z]</p>
+</div>
+<nav class="nav" aria-label="Main">
+<a href="Home.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 11 12 4l9 7v9h-6v-6H9v6H3z"></path></svg></span>Home</a>
+<a href="Repay.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18v12H3z"></path><path d="M16 13h2"></path><path d="M3 7l13-4v4"></path></svg></span>Repay</a>
+<a href="Loans.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg></span>Loans</a>
+<a class="on" href="Profile.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"></path></svg></span>Profile</a>
+</nav>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":1850}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

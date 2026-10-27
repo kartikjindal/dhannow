@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Your loans</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1A4BB8}a:hover{color:#163F9C}
+.s{width:412px;height:915px;box-sizing:border-box;background:#F2F3F3;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;display:flex;flex-direction:column}
+.body{flex:1;padding:16px;display:flex;flex-direction:column;gap:12px}
+h1{font-size:24px;line-height:32px;font-weight:600;margin:0}
+.sub{font-size:14px;line-height:21px;color:#4A4D52;margin:0}
+.hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
+.sec{font-size:16px;font-weight:600;margin:6px 0 0}
+.card{background:#fff;border:1px solid #E5E7E8;border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:6px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+.st span{display:block;font-size:12px;color:#4A4D52}
+.st strong{font-size:15px}
+.chip{font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px}
+.empty{border:1.5px dashed #D9DBDD;border-radius:14px;padding:14px;font-size:14px;color:#4A4D52}
+.doc{display:inline-flex;align-items:center;min-height:40px;font-size:13px;font-weight:600}
+.nav{height:80px;flex:none;background:#fff;border-top:1px solid #E5E7E8;display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
+.nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:12px;color:#4A4D52;text-decoration:none}
+.nav a.on{color:#0B0B0C;font-weight:600}
+.pill{width:64px;height:32px;border-radius:16px;display:flex;align-items:center;justify-content:center}
+.on .pill{background:#EEF3FF}
+
+/* ---- app_navix UI kit (Monochrome + Cobalt), mirrors theme.css + globals.css + components/kit ---- */
+.card,.info,.side{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9)}
+.tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.btn{background:#1F5BDB;color:#fff;border-radius:999px;box-shadow:0 10px 24px -12px rgba(31,91,219,.55);transition:transform .2s,box-shadow .2s}
+.btn:hover{background:#1A4BB8;color:#fff;transform:translateY(-1px)}
+.btn2{background:#fff;border:1px solid #E5E7E8;color:#0B0B0C;border-radius:999px;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10)}
+.btn2:hover{border-color:#D9DBDD;color:#0B0B0C}
+.btn-navy{background:#0B0B0C!important;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08)!important}
+h1,.ttl,.hd h2{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.6px}
+h1,.ttl{font-size:38px;line-height:38px}
+.hd h2{font-size:32px;line-height:34px;margin:0 0 10px}
+.big{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.5px}
+.prog{background:#E5E7E8;height:6px;border-radius:999px}
+.prog i{height:6px;border-radius:999px;background:#1F5BDB}
+.f label{color:#0B0B0C;font-weight:600}
+.f input,.f select,.f textarea{background:#fff;border:1px solid #D9DBDD;border-radius:12px}
+.f input:focus,.f select:focus,.f textarea:focus{outline:none;border-color:#0B0B0C;box-shadow:0 0 0 4px rgba(17,19,24,.07)}
+.chip,.cnt{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:4px 10px;border-radius:999px}
+.ib{width:40px;height:40px;margin:4px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.06),0 3px 10px -4px rgba(17,19,24,.10);color:#0B0B0C}
+.ic,.ico{background:#fff;border:1px solid #E5E7E8;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.nav{background:#FAFAFA;border-top:1px solid #E5E7E8;padding:0 8px}
+.nav .pill{width:56px;height:32px;border-radius:999px}
+.nav .on .pill,.on .pill{background:#0B0B0C;color:#fff}
+.nav a.on{color:#0B0B0C;font-weight:600}
+.trust span{display:inline-flex;align-items:center;gap:4px}
+.trust span::before{content:"";width:6px;height:6px;border-radius:50%;background:#17804F}
+.seg .on{border:1px solid #0B0B0C!important;background:#0B0B0C!important;color:#fff!important}
+.opt{background:#fff;border-radius:16px}
+@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:no-preference){.card,.info{animation:rise .6s cubic-bezier(.16,1,.3,1) backwards}}
+</style>
+</helmet>
+<main class="s">
+<div class="body">
+<h1>Your loans</h1>
+<p class="sub">Every advance you’ve applied for, with its current status.</p>
+<p class="sec">Active advances</p>
+<div class="card">
+<div style="display: flex; justify-content: space-between; align-items: center"><strong>Loan #20417</strong><span class="chip" style="background: #D1FAE5; color: #065F46">Active loan</span></div>
+<div class="grid">
+<div class="st"><span>Principal</span><strong>₹1,000</strong></div>
+<div class="st"><span>Net disbursed</span><strong>₹742</strong></div>
+<div class="st"><span>Total repayable</span><strong>₹1,000</strong></div>
+<div class="st"><span>Outstanding</span><strong>₹1,000</strong></div>
+<div class="st"><span>Disbursed on</span><strong>5 Oct 2026</strong></div>
+<div class="st"><span>Loan #</span><strong>#20417</strong></div>
+</div>
+<a href="LoanDetails.dc.html" style="font-size: 14px; font-weight: 600; min-height: 44px; display: flex; align-items: center">View full details</a>
+<div style="display: flex; gap: 14px; flex-wrap: wrap; border-top: 1px solid #E5E7E8; padding-top: 6px"><a class="doc" href="KfsView.dc.html">KFS</a><a class="doc" href="#">Sanction letter</a><a class="doc" href="#">Loan agreement</a></div>
+<p class="hint">Documents open in-app with Download and Share (per the Loan Agreement Access and KFS policies).</p>
+</div>
+<p class="sec">In progress</p>
+<div class="empty">Nothing in progress.</div>
+<p class="sec">Past loans</p>
+<div class="empty">No past loans yet.</div>
+<p class="hint">No loans at all: “No loans yet — When you apply for an advance it’ll show up here with live status.” with Apply. Empty active: “No active advance right now.” Pull down to refresh.</p>
+<a href="Transactions.dc.html" style="font-size: 14px; font-weight: 600; min-height: 44px; display: flex; align-items: center">See all transactions</a>
+</div>
+<nav class="nav" aria-label="Main">
+<a href="Home.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 11 12 4l9 7v9h-6v-6H9v6H3z"></path></svg></span>Home</a>
+<a href="Repay.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18v12H3z"></path><path d="M16 13h2"></path><path d="M3 7l13-4v4"></path></svg></span>Repay</a>
+<a class="on" href="Loans.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg></span>Loans</a>
+<a href="Profile.dc.html"><span class="pill"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"></path></svg></span>Profile</a>
+</nav>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":412,"height":915}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

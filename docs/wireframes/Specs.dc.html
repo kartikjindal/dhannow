@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DhanNow specs</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0}
+.r{width:1760px;height:1180px;box-sizing:border-box;background:#F2F3F3;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;padding:40px;display:flex;flex-direction:column;gap:20px}
+.cols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px;flex:1}
+.col{background:#fff;border:1px solid #E5E7E8;border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:10px}
+h2{font-size:18px;margin:0}
+.id{font-size:12px;color:#4A4D52;margin:0}
+ul{margin:0;padding-left:18px;font-size:13px;line-height:20px}
+li{margin-bottom:4px}
+.lbl{font-size:12px;font-weight:600;color:#1A4BB8;margin:6px 0 0}
+.warn{background:#FEF3C7;border-radius:10px;padding:10px 12px;font-size:12px;line-height:18px;color:#92400E}
+</style>
+</helmet>
+<div class="r">
+<div><h1 style="margin: 0; font-size: 28px">Specs this wireframe follows</h1><p class="id">All DhanNow documents are drafts pending Legal, Compliance, Tax and lender approval. Full backend gap list: DhanNow_Loan_Engine_Difference.md</p></div>
+<div class="cols">
+<div class="col">
+<h2>KFS Information Policy</h2><p class="id">DHAN_NOW_KFS_Information_Policy.docx · DN-LGL-022 v1.0</p>
+<p class="lbl">Must show before signing</p>
+<ul><li>Actual lender’s legal name</li><li>Approved amount, tenure, rate and method</li><li>Processing fee, GST, other charges</li><li>Net disbursal and APR</li><li>Repayment schedule and due dates</li><li>Penal charges, cooling-off / look-up period</li><li>Grievance details</li></ul>
+<p class="lbl">App screens</p>
+<ul><li>B1 Choose amount, B5 Loan summary (cost breakdown)</li><li>B8 Agreement: KFS opened before e-sign</li><li>C8 Your loans: KFS download and retain</li></ul>
+<div class="warn">Example in the policy: ₹1,000 → fee ₹100, GST ₹18, 14-day interest ₹140, net ₹742, repay ₹1,000 on Day 14. Current backend differs (see diff doc).</div>
+</div>
+<div class="col">
+<h2>Sanction Letter Template</h2><p class="id">DHAN_NOW_Sanction_Letter_Template.docx</p>
+<p class="lbl">Fields</p>
+<ul><li>Letter no., application no., loan account no.</li><li>Offer validity and acceptance deadline</li><li>Lender legal name and address</li><li>Principal, purpose, tenure, rate, APR</li><li>Fee, GST, other charges, total deductions, net, total payable</li><li>First and final due date, penal, cooling-off, prepayment</li><li>Repayment method and beneficiary</li><li>Borrower acceptance with date and time</li></ul>
+<p class="lbl">App screens</p>
+<ul><li>B8 Agreement and signature, B9 Sanctioned</li><li>C8 Your loans: document list</li></ul>
+<div class="warn">Never issue with blank terms or an unverified lender. Pay only verified beneficiaries; never share OTP or UPI PIN.</div>
+</div>
+<div class="col">
+<h2>Loan Agreement Access Policy</h2><p class="id">Section inside Document (11).docx (a separate DHAN_NOW_Loan_Agreement_Access_Policy.docx was not found)</p>
+<p class="lbl">Rules</p>
+<ul><li>Access through the authorised app journey, secure link or email</li><li>Identity check may be required before opening</li><li>No one can see another customer’s agreement</li><li>Viewing is not acceptance; acceptance = e-sign with document version and time recorded</li><li>Customer can download or retain a copy</li></ul>
+<p class="lbl">App screens</p>
+<ul><li>C8 Your loans: KFS, Sanction letter, Loan agreement with Download / Share</li><li>Fingerprint or OTP check before opening (E5 pattern)</li></ul>
+</div>
+<div class="col">
+<h2>IT Handover v2</h2><p class="id">Dhan_Now_Detailed_Payday_Loan_IT_Handover_v2.pptx · 16 Oct 2026</p>
+<p class="lbl">Product</p>
+<ul><li>14 days from disbursal; principal repaid on Day 14</li><li>Credit ladder ₹1k → 2k → 3k → 4k → 5k → 7k → 10k</li><li>Up one level only after full on-time or early repayment</li><li>Rollover (₹258 per ₹1,000, +14 days): OFF until approved</li><li>EMI conversion: recovery-only, Admin-approved</li></ul>
+<p class="lbl">Statuses</p>
+<ul><li>DUE_TODAY, OVERDUE_D1, OVERDUE_REVIEW, RESTRUCTURE_PENDING, RESTRUCTURED, DISPUTED, FRAUD_REVIEW, CLOSED</li></ul>
+<p class="lbl">Customer notices</p>
+<ul><li>Offer, disbursal, pre-due, due-day, overdue, rollover quote, EMI proposal, closure receipt</li></ul>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1760,"height":1180}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
