@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>G3 Extension approvals</title>
+<title>G3 Collection Head: Payment approvals</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -13,59 +13,69 @@
 body{margin:0}
 a{color:#1A4BB8}
 .r{width:1440px;height:960px;box-sizing:border-box;background:#E4E6E7;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;padding:20px}
-.fr{background:#F2F3F3;border-radius:32px;height:100%;box-sizing:border-box;display:flex;overflow:hidden}
-.sb{width:200px;flex:none;padding:22px 14px;display:flex;flex-direction:column;gap:6px}
+.fr{background:#F2F3F3;border-radius:32px;height:100%;box-sizing:border-box;display:flex;overflow:hidden;position:relative}
+.sb{width:210px;flex:none;padding:22px 14px;display:flex;flex-direction:column;gap:6px}
 .logo{display:flex;align-items:center;gap:8px;font-weight:700;margin:0 6px 18px}
 .logo i{width:30px;height:30px;border-radius:9px;background:#1F5BDB;color:#fff;font-style:normal;display:flex;align-items:center;justify-content:center}
 .nv{display:block;padding:9px 14px;border-radius:999px;font-size:13px;font-weight:500;color:#4A4D52;text-decoration:none;background:#fff;border:1px solid #E5E7E8}
 .nv.on{background:#0B0B0C;border-color:#0B0B0C;color:#fff}
-.mn{flex:1;padding:22px 26px 22px 6px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.mn{flex:1;padding:22px 26px 22px 6px;display:flex;flex-direction:column;gap:14px;min-width:0}
 .top{display:flex;align-items:center;gap:12px}
 .srch{flex:1;height:38px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;display:flex;align-items:center;padding:0 16px;font-size:13px;color:#8B8F96}
 .usr{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E5E7E8;border-radius:999px;padding:4px 14px 4px 4px;font-size:12px}
 .usr i{width:30px;height:30px;border-radius:50%;background:#EEF3FF;color:#1A4BB8;font-style:normal;font-weight:700;display:flex;align-items:center;justify-content:center}
-.ttl{font-family:"Bebas Neue",Inter,sans-serif;font-size:40px;line-height:40px;letter-spacing:.6px;margin:0}
-.card{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9);padding:18px}
+.ttl{font-family:"Bebas Neue",Inter,sans-serif;font-size:38px;line-height:38px;letter-spacing:.6px;margin:0}
+.card{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9);padding:16px 18px}
 .tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
 .pl{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 9px;border-radius:999px;white-space:nowrap}
 .hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
-h3{font-size:15px;font-weight:600;margin:0}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;font-size:11px;font-weight:600;color:#8B8F96;padding:8px 10px;border-bottom:1px solid #E5E7E8}
-td{padding:11px 10px;border-bottom:1px solid #E5E7E8;vertical-align:middle}
+h3{font-size:15px;font-weight:600;margin:0;display:flex;align-items:center;gap:8px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;font-size:11px;font-weight:600;color:#8B8F96;padding:8px 8px;border-bottom:1px solid #E5E7E8;white-space:nowrap}
+td{padding:10px 8px;border-bottom:1px solid #E5E7E8;vertical-align:middle;white-space:nowrap}
 tr.hl td{background:#EEF3FF}
-.btn{height:40px;padding:0 18px;white-space:nowrap;border-radius:999px;background:#1F5BDB;color:#fff;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;box-shadow:0 10px 24px -12px rgba(31,91,219,.55)}
-.btn2{height:40px;padding:0 18px;border-radius:999px;background:#fff;color:#0B0B0C;border:1px solid #E5E7E8;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none}
-.rw{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:8px 0;border-top:1px solid #E5E7E8}
+.btn{height:36px;padding:0 16px;border-radius:999px;background:#1F5BDB;color:#fff;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;white-space:nowrap;box-shadow:0 10px 24px -12px rgba(31,91,219,.55)}
+.btn2{height:36px;padding:0 16px;border-radius:999px;background:#fff;color:#0B0B0C;border:1px solid #E5E7E8;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;white-space:nowrap}
+.btnx{height:36px;padding:0 16px;border-radius:999px;background:#E3E5E6;color:#8B8F96;font-weight:600;font-size:13px;display:inline-flex;align-items:center;white-space:nowrap}
+.rw{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:7px 0;border-top:1px solid #E5E7E8}
 .rw:first-child{border-top:0}.rw span:first-child{color:#4A4D52}
+.fg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.fg div{font-size:13px}.fg div span{display:block;font-size:11px;color:#8B8F96}
 .fld{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600}
-.fld span.in{height:38px;border:1px solid #D9DBDD;border-radius:12px;background:#fff;display:flex;align-items:center;padding:0 12px;font-weight:400;font-size:13px}
+.in{height:36px;border:1px solid #D9DBDD;border-radius:12px;background:#fff;display:flex;align-items:center;padding:0 12px;font-weight:400;font-size:13px}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
 .chips a{padding:7px 12px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;font-size:12px;font-weight:500;color:#4A4D52;text-decoration:none}
 .chips a.on{background:#0B0B0C;color:#fff;border-color:#0B0B0C}
-.note{font-size:11px;line-height:16px;color:#4A4D52;background:#ECEDEE;border-radius:12px;padding:10px 12px}
+.note{font-size:11px;line-height:16px;color:#4A4D52;background:#ECEDEE;border-radius:12px;padding:9px 12px}
+.newb{outline:2px dashed #1F5BDB;outline-offset:3px;border-radius:22px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.tabs span{padding:6px 12px;border-radius:999px;font-size:12px;font-weight:500;background:#fff;border:1px solid #E5E7E8;color:#4A4D52}
+.tabs span.on{background:#0B0B0C;color:#fff;border-color:#0B0B0C}
+.step{display:flex;align-items:center;gap:6px;font-size:12px}
+.dot{width:18px;height:18px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center}
+.ok{background:#17804F}.now{border:2px solid #1F5BDB;box-sizing:border-box;box-shadow:0 0 0 4px rgba(31,91,219,.15)}.todo{border:2px solid #D9DBDD;box-sizing:border-box}
+.ln{flex:1;height:2px;background:#E5E7E8;min-width:12px}.ln.ok2{background:#17804F}
 </style>
 </helmet>
 <div class="r"><div class="fr">
-<aside class="sb"><div class="logo"><i>D</i>DHAN NOW <span style="font-size:10px;color:#8B8F96;font-weight:500">staff</span></div><a href="#" class="nv">Dashboard</a><a href="#" class="nv">Applications</a><a href="#" class="nv">Customers</a><a href="#" class="nv">Loans</a><a href="#" class="nv on">Collections</a><a href="#" class="nv">Accounting</a><a href="#" class="nv">Reports</a></aside>
+<aside class="sb"><div class="logo"><i>D</i>DHAN NOW <span style="font-size:10px;color:#8B8F96;font-weight:500">staff</span></div><a href="#" class="nv">Dashboard</a><a href="#" class="nv on">Payment approvals</a><a href="#" class="nv">Customers</a><a href="#" class="nv">Loans</a><a href="#" class="nv">DPD buckets (all loans)</a><a href="#" class="nv">Mandates & debits</a><a href="#" class="nv">Settlements</a><a href="#" class="nv">Refunds owed</a><a href="#" class="nv">Reports</a></aside>
 <main class="mn">
 <div class="top"><div class="srch">Search loan, mobile, PAN…</div><div class="usr"><i>A</i><span><strong>Arjun Patel</strong><br><span style="color:#8B8F96">Collection Head</span></span></div></div>
-
-<div><h1 class="ttl">Extension approvals</h1><p class="hint">Three different people: the officer offers, the Collection Head approves, the Accountant verifies the money. Same rule as settlements.</p></div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-<div class="card" style="display:flex;flex-direction:column;gap:10px"><div style="display:flex;justify-content:space-between;align-items:center"><h3>Collection Head · to approve</h3><span class="pl" style="background:#FEF6D8;color:#6F4F00">2 waiting</span></div>
-<div class="tile" style="padding:14px;display:flex;flex-direction:column;gap:8px"><div style="display:flex;justify-content:space-between"><strong>Aarav Sharma · #20417</strong><span class="pl" style="background:#ECEDEE;color:#4A4D52">Ext 0/3</span></div>
-<div class="rw"><span>Charge (fee + GST + interest)</span><strong>₹258</strong></div><div class="rw"><span>Late charge to 22 Oct</span><strong>₹60</strong></div><div class="rw"><span>Due 19 Oct → 2 Nov</span><strong>+14 days</strong></div><div class="rw"><span>Offered by</span><strong>Sana K. · CASHFLOW_SALARY_DELAY</strong></div>
-<div style="display:flex;gap:8px"><a class="btn" href="#">Approve</a><a class="btn2" href="#">Reject with reason</a></div><p class="hint">You can’t approve an extension you offered yourself.</p></div>
-<div class="tile" style="padding:14px;display:flex;justify-content:space-between;align-items:center"><span><strong>Imran Ali · #20410</strong><br><span class="hint">₹1,290 + ₹100 late · offered by Kabir S.</span></span><span class="pl" style="background:#ECEDEE;color:#4A4D52">Ext 0/3</span></div>
-</div>
-<div class="card" style="display:flex;flex-direction:column;gap:10px"><div style="display:flex;justify-content:space-between;align-items:center"><h3>Accountant · extension payments to verify</h3><span class="pl" style="background:#EEF3FF;color:#1A4BB8">5 waiting</span></div>
-<div class="tile" style="padding:14px;display:flex;flex-direction:column;gap:8px"><div style="display:flex;justify-content:space-between"><strong>Rohit Verma · #20291</strong><span class="pl" style="background:#EEF3FF;color:#1A4BB8">Ext 2/3</span></div>
-<div class="rw"><span>Source</span><strong>Borrower app · UPI</strong></div><div class="rw"><span>UTR</span><strong>4290 1123 8876 ✓ matched in bank</strong></div><div class="rw"><span>Paid on (bank credit)</span><strong>22 Oct 2026</strong></div><div class="rw"><span>Required for 22 Oct</span><strong>₹1,554 (₹774 + ₹780 late)</strong></div><div class="rw"><span>Received</span><strong style="color:#17804F">₹1,554 ✓</strong></div><div class="rw"><span>On verify</span><strong>Due 9 Oct → 23 Oct · Ext 3/3</strong></div>
-<div style="display:flex;gap:8px"><a class="btn" href="StaffLoanExtensions.dc.html">Verify and extend</a><a class="btn2" href="#">Reject with remarks</a></div>
-<p class="hint">Less than required: can’t extend; choose “Credit as part payment” or reject. More: extend + refund case for the excess.</p></div>
-</div></div>
-<p class="note"><strong>Two ways the money arrives:</strong> (1) the borrower pays in the app after confirming with OTP (C12 → C12b); (2) the officer logs it from the case with kind <em>Extension charge</em>, UTR and screenshot. Both land in this queue. Verifying is the only step that moves the due date, books fee, GST, interest and late charge as income, and sends “Loan extended to …”.</p>
+<div><h1 class="ttl">Payment approvals</h1><p class="hint">Real page: /staff/applications as Collection Head (RoleQueues → CollectionPaymentApprovalQueue, polls 10 s). A second queue is added above the existing settlement one.</p></div>
+<div class="card newb" style="display:flex;flex-direction:column;gap:10px"><div style="display:flex;justify-content:space-between;align-items:center"><h3>Extension offers to approve <span class="pl" style="background:#1F5BDB;color:#fff">New</span></h3><span class="pl" style="background:#FEF6D8;color:#6F4F00">2 waiting</span></div>
+<div class="tile" style="padding:12px 14px;display:grid;grid-template-columns:2.2fr 1.3fr 1.3fr auto;gap:14px;align-items:center">
+<div><strong>Aarav Sharma · Loan #20417 · <span class="pl" style="background:#ECEDEE;color:#4A4D52">0/3</span></strong><p class="hint">Offered by Sana K. 22 Oct 11:12 · Salary delayed · “Requested on call 22 Oct 11:05, CL-88231”</p></div>
+<div style="font-size:12.5px"><span class="hint">Charge</span><br><strong>₹258 + ₹60 late = ₹318</strong></div>
+<div style="font-size:12.5px"><span class="hint">Due date</span><br><strong>19 Oct → 2 Nov · pay by 22 Oct</strong></div>
+<div style="display:flex;gap:6px"><span class="btn">Approve</span><span class="btn2">Reject…</span></div></div>
+<div class="tile" style="padding:12px 14px;display:grid;grid-template-columns:2.2fr 1.3fr 1.3fr auto;gap:14px;align-items:center;opacity:.75">
+<div><strong>Imran Ali · Loan #20410 · <span class="pl" style="background:#ECEDEE;color:#4A4D52">0/3</span></strong><p class="hint">Offered by <strong>you</strong> (working as Executive) 22 Oct 10:02</p></div>
+<div style="font-size:12.5px"><span class="hint">Charge</span><br><strong>₹1,290 + ₹100 = ₹1,390</strong></div>
+<div style="font-size:12.5px"><span class="hint">Due date</span><br><strong>21 Oct → 4 Nov</strong></div>
+<div><span class="btnx">You offered this</span></div></div>
+<p class="hint">Reject needs a reason (picklist + note) and tells the officer, not the borrower. Approve re-checks eligibility on the server (loan still due/overdue, no new payment, cap) and fails with the reason if anything changed. Each row has its own spinner (today one flag spins every row: fixed).</p></div>
+<div class="card" style="display:flex;flex-direction:column;gap:8px"><div style="display:flex;justify-content:space-between;align-items:center"><h3>Settlement payments to approve</h3><span class="pl" style="background:#ECEDEE;color:#4A4D52">0 waiting</span></div><p class="hint">Unchanged existing queue.</p></div>
+<p class="note">After Approve: borrower gets an in-app notification + email (SMS once the DLT template “DN_EXT_OFFER” is approved; push via FCM). The extension appears on the borrower’s dashboard from the server on next load whether or not any notification arrives. If the pay-by day passes before the borrower confirms and pays, the offer expires automatically (00:05 IST sweep) and the officer is told.</p>
 </main>
 </div></div>
 </x-dc>

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>G4 Accountant: Repayments to verify</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1A4BB8}
+.r{width:1440px;height:960px;box-sizing:border-box;background:#E4E6E7;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;padding:20px}
+.fr{background:#F2F3F3;border-radius:32px;height:100%;box-sizing:border-box;display:flex;overflow:hidden;position:relative}
+.sb{width:210px;flex:none;padding:22px 14px;display:flex;flex-direction:column;gap:6px}
+.logo{display:flex;align-items:center;gap:8px;font-weight:700;margin:0 6px 18px}
+.logo i{width:30px;height:30px;border-radius:9px;background:#1F5BDB;color:#fff;font-style:normal;display:flex;align-items:center;justify-content:center}
+.nv{display:block;padding:9px 14px;border-radius:999px;font-size:13px;font-weight:500;color:#4A4D52;text-decoration:none;background:#fff;border:1px solid #E5E7E8}
+.nv.on{background:#0B0B0C;border-color:#0B0B0C;color:#fff}
+.mn{flex:1;padding:22px 26px 22px 6px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.top{display:flex;align-items:center;gap:12px}
+.srch{flex:1;height:38px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;display:flex;align-items:center;padding:0 16px;font-size:13px;color:#8B8F96}
+.usr{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E5E7E8;border-radius:999px;padding:4px 14px 4px 4px;font-size:12px}
+.usr i{width:30px;height:30px;border-radius:50%;background:#EEF3FF;color:#1A4BB8;font-style:normal;font-weight:700;display:flex;align-items:center;justify-content:center}
+.ttl{font-family:"Bebas Neue",Inter,sans-serif;font-size:38px;line-height:38px;letter-spacing:.6px;margin:0}
+.card{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9);padding:16px 18px}
+.tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
+.pl{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 9px;border-radius:999px;white-space:nowrap}
+.hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
+h3{font-size:15px;font-weight:600;margin:0;display:flex;align-items:center;gap:8px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;font-size:11px;font-weight:600;color:#8B8F96;padding:8px 8px;border-bottom:1px solid #E5E7E8;white-space:nowrap}
+td{padding:10px 8px;border-bottom:1px solid #E5E7E8;vertical-align:middle;white-space:nowrap}
+tr.hl td{background:#EEF3FF}
+.btn{height:36px;padding:0 16px;border-radius:999px;background:#1F5BDB;color:#fff;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;white-space:nowrap;box-shadow:0 10px 24px -12px rgba(31,91,219,.55)}
+.btn2{height:36px;padding:0 16px;border-radius:999px;background:#fff;color:#0B0B0C;border:1px solid #E5E7E8;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;white-space:nowrap}
+.btnx{height:36px;padding:0 16px;border-radius:999px;background:#E3E5E6;color:#8B8F96;font-weight:600;font-size:13px;display:inline-flex;align-items:center;white-space:nowrap}
+.rw{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:7px 0;border-top:1px solid #E5E7E8}
+.rw:first-child{border-top:0}.rw span:first-child{color:#4A4D52}
+.fg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.fg div{font-size:13px}.fg div span{display:block;font-size:11px;color:#8B8F96}
+.fld{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600}
+.in{height:36px;border:1px solid #D9DBDD;border-radius:12px;background:#fff;display:flex;align-items:center;padding:0 12px;font-weight:400;font-size:13px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chips a{padding:7px 12px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;font-size:12px;font-weight:500;color:#4A4D52;text-decoration:none}
+.chips a.on{background:#0B0B0C;color:#fff;border-color:#0B0B0C}
+.note{font-size:11px;line-height:16px;color:#4A4D52;background:#ECEDEE;border-radius:12px;padding:9px 12px}
+.newb{outline:2px dashed #1F5BDB;outline-offset:3px;border-radius:22px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.tabs span{padding:6px 12px;border-radius:999px;font-size:12px;font-weight:500;background:#fff;border:1px solid #E5E7E8;color:#4A4D52}
+.tabs span.on{background:#0B0B0C;color:#fff;border-color:#0B0B0C}
+.step{display:flex;align-items:center;gap:6px;font-size:12px}
+.dot{width:18px;height:18px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center}
+.ok{background:#17804F}.now{border:2px solid #1F5BDB;box-sizing:border-box;box-shadow:0 0 0 4px rgba(31,91,219,.15)}.todo{border:2px solid #D9DBDD;box-sizing:border-box}
+.ln{flex:1;height:2px;background:#E5E7E8;min-width:12px}.ln.ok2{background:#17804F}
+</style>
+</helmet>
+<div class="r"><div class="fr">
+<aside class="sb"><div class="logo"><i>D</i>DHAN NOW <span style="font-size:10px;color:#8B8F96;font-weight:500">staff</span></div><a href="#" class="nv">Dashboard</a><a href="#" class="nv on">Repayments to verify</a><a href="#" class="nv">Customers</a><a href="#" class="nv">Loans</a><a href="#" class="nv">Transactions</a><a href="#" class="nv">Reports</a></aside>
+<main class="mn">
+<div class="top"><div class="srch">Search loan, mobile, PAN…</div><div class="usr"><i>D</i><span><strong>Deepa Iyer</strong><br><span style="color:#8B8F96">Accountant</span></span></div></div>
+<div><h1 class="ttl">Repayments to verify</h1><p class="hint">Real page: /staff/applications as Accountant (RepaymentVerifyQueue polls 8 s + CollectionPaymentValidationQueue polls 10 s). Extension payments arrive in whichever queue matches how they were paid.</p></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+<div class="card" style="display:flex;flex-direction:column;gap:10px"><h3>Borrower payments (app)</h3>
+<div class="tile newb" style="padding:12px 14px;display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between"><strong>Rohit Verma · #20291</strong><span><span class="pl" style="background:#1F5BDB;color:#fff">Extension 3/3</span></span></div>
+<div class="rw"><span>Amount · UPI · UTR</span><strong>₹1,554 · 4290 1123 8876</strong></div><div class="rw"><span>Paid on (enter from bank statement)</span><strong>22 Oct 2026</strong></div><div class="rw"><span>Required for that date</span><strong>₹1,554 = ₹774 + ₹780 late ✓</strong></div><div class="rw"><span>On verify</span><strong>Due 9 Oct → 23 Oct · Ext 3 of 3</strong></div>
+<div style="display:flex;gap:6px"><span class="btn">Verify and extend</span><span class="btn2">Reject…</span><span class="btn2">Count as part payment</span></div>
+<p class="hint">Mismatch shows red: less → only “Count as part payment” or “Reject”; more → “Verify, extend and open refund for ₹X”.</p></div>
+<div class="tile" style="padding:12px 14px;font-size:12.5px"><strong>Priya Menon · #20388 · ₹2,000 · Repayment</strong><p class="hint">Ordinary repayment row, unchanged. If an extension is open and the amount equals its charge, a hint asks “Is this the extension charge?” and offers “Treat as extension payment” (audited).</p></div>
+</div>
+<div class="card" style="display:flex;flex-direction:column;gap:10px"><h3>Collections payments to validate</h3>
+<div class="tile newb" style="padding:12px 14px;display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between"><strong>Imran Ali · #20410</strong><span class="pl" style="background:#1F5BDB;color:#fff">Extension charge</span></div>
+<div class="rw"><span>Logged by</span><strong>Kabir S. · 23 Oct 15:10</strong></div><div class="rw"><span>Amount · UTR</span><strong>₹1,410 · 8831 2207 1190</strong></div><div class="rw"><span>Required for 23 Oct</span><strong>₹1,410 = ₹1,290 + ₹120 late ✓</strong></div><div class="rw"><span>On validate</span><strong>Due 21 Oct → 4 Nov · Ext 1 of 3</strong></div>
+<div class="fld">Remarks (required to reject)<span class="in">—</span></div>
+<div style="display:flex;gap:6px"><span class="btn">Validate and extend</span><span class="btn2">Reject</span></div></div>
+<p class="hint">Today validate always credits principal (creditCollectionPayment). For kind EXTENSION it calls applyExtension instead; principal is untouched.</p></div></div>
+<p class="note"><strong>Server guarantees behind both buttons:</strong> loan advisory lock (same lock NACH uses) + @Version on the extension and payment → a double click or two accountants can’t extend twice (second gets “Already verified by Deepa I. at 15:21”). Same UTR across borrower and officer paths is one payment. After verifying, every affected view is refreshed (repayments, outstanding, customer pop-up, worklist, case), not just this queue (today only the queue refreshes).</p>
+</main>
+</div></div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":960}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

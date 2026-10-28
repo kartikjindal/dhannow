@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>G2 Case: offer extension</title>
+<title>G2 Customer pop-up: Collections tab + Loan extension</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -12,70 +12,78 @@
 <style>
 body{margin:0}
 a{color:#1A4BB8}
-.r{width:1440px;height:960px;box-sizing:border-box;background:#E4E6E7;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;padding:20px}
-.fr{background:#F2F3F3;border-radius:32px;height:100%;box-sizing:border-box;display:flex;overflow:hidden}
-.sb{width:200px;flex:none;padding:22px 14px;display:flex;flex-direction:column;gap:6px}
+.r{width:1440px;height:1060px;box-sizing:border-box;background:#E4E6E7;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;padding:20px}
+.fr{background:#F2F3F3;border-radius:32px;height:100%;box-sizing:border-box;display:flex;overflow:hidden;position:relative}
+.sb{width:210px;flex:none;padding:22px 14px;display:flex;flex-direction:column;gap:6px}
 .logo{display:flex;align-items:center;gap:8px;font-weight:700;margin:0 6px 18px}
 .logo i{width:30px;height:30px;border-radius:9px;background:#1F5BDB;color:#fff;font-style:normal;display:flex;align-items:center;justify-content:center}
 .nv{display:block;padding:9px 14px;border-radius:999px;font-size:13px;font-weight:500;color:#4A4D52;text-decoration:none;background:#fff;border:1px solid #E5E7E8}
 .nv.on{background:#0B0B0C;border-color:#0B0B0C;color:#fff}
-.mn{flex:1;padding:22px 26px 22px 6px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.mn{flex:1;padding:22px 26px 22px 6px;display:flex;flex-direction:column;gap:14px;min-width:0}
 .top{display:flex;align-items:center;gap:12px}
 .srch{flex:1;height:38px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;display:flex;align-items:center;padding:0 16px;font-size:13px;color:#8B8F96}
 .usr{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E5E7E8;border-radius:999px;padding:4px 14px 4px 4px;font-size:12px}
 .usr i{width:30px;height:30px;border-radius:50%;background:#EEF3FF;color:#1A4BB8;font-style:normal;font-weight:700;display:flex;align-items:center;justify-content:center}
-.ttl{font-family:"Bebas Neue",Inter,sans-serif;font-size:40px;line-height:40px;letter-spacing:.6px;margin:0}
-.card{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9);padding:18px}
+.ttl{font-family:"Bebas Neue",Inter,sans-serif;font-size:38px;line-height:38px;letter-spacing:.6px;margin:0}
+.card{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9);padding:16px 18px}
 .tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
 .pl{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 9px;border-radius:999px;white-space:nowrap}
 .hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
-h3{font-size:15px;font-weight:600;margin:0}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;font-size:11px;font-weight:600;color:#8B8F96;padding:8px 10px;border-bottom:1px solid #E5E7E8}
-td{padding:11px 10px;border-bottom:1px solid #E5E7E8;vertical-align:middle}
+h3{font-size:15px;font-weight:600;margin:0;display:flex;align-items:center;gap:8px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;font-size:11px;font-weight:600;color:#8B8F96;padding:8px 8px;border-bottom:1px solid #E5E7E8;white-space:nowrap}
+td{padding:10px 8px;border-bottom:1px solid #E5E7E8;vertical-align:middle;white-space:nowrap}
 tr.hl td{background:#EEF3FF}
-.btn{height:40px;padding:0 18px;white-space:nowrap;border-radius:999px;background:#1F5BDB;color:#fff;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;box-shadow:0 10px 24px -12px rgba(31,91,219,.55)}
-.btn2{height:40px;padding:0 18px;border-radius:999px;background:#fff;color:#0B0B0C;border:1px solid #E5E7E8;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none}
-.rw{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:8px 0;border-top:1px solid #E5E7E8}
+.btn{height:36px;padding:0 16px;border-radius:999px;background:#1F5BDB;color:#fff;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;white-space:nowrap;box-shadow:0 10px 24px -12px rgba(31,91,219,.55)}
+.btn2{height:36px;padding:0 16px;border-radius:999px;background:#fff;color:#0B0B0C;border:1px solid #E5E7E8;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;white-space:nowrap}
+.btnx{height:36px;padding:0 16px;border-radius:999px;background:#E3E5E6;color:#8B8F96;font-weight:600;font-size:13px;display:inline-flex;align-items:center;white-space:nowrap}
+.rw{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:7px 0;border-top:1px solid #E5E7E8}
 .rw:first-child{border-top:0}.rw span:first-child{color:#4A4D52}
+.fg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.fg div{font-size:13px}.fg div span{display:block;font-size:11px;color:#8B8F96}
 .fld{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600}
-.fld span.in{height:38px;border:1px solid #D9DBDD;border-radius:12px;background:#fff;display:flex;align-items:center;padding:0 12px;font-weight:400;font-size:13px}
+.in{height:36px;border:1px solid #D9DBDD;border-radius:12px;background:#fff;display:flex;align-items:center;padding:0 12px;font-weight:400;font-size:13px}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
 .chips a{padding:7px 12px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;font-size:12px;font-weight:500;color:#4A4D52;text-decoration:none}
 .chips a.on{background:#0B0B0C;color:#fff;border-color:#0B0B0C}
-.note{font-size:11px;line-height:16px;color:#4A4D52;background:#ECEDEE;border-radius:12px;padding:10px 12px}
+.note{font-size:11px;line-height:16px;color:#4A4D52;background:#ECEDEE;border-radius:12px;padding:9px 12px}
+.newb{outline:2px dashed #1F5BDB;outline-offset:3px;border-radius:22px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.tabs span{padding:6px 12px;border-radius:999px;font-size:12px;font-weight:500;background:#fff;border:1px solid #E5E7E8;color:#4A4D52}
+.tabs span.on{background:#0B0B0C;color:#fff;border-color:#0B0B0C}
+.step{display:flex;align-items:center;gap:6px;font-size:12px}
+.dot{width:18px;height:18px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center}
+.ok{background:#17804F}.now{border:2px solid #1F5BDB;box-sizing:border-box;box-shadow:0 0 0 4px rgba(31,91,219,.15)}.todo{border:2px solid #D9DBDD;box-sizing:border-box}
+.ln{flex:1;height:2px;background:#E5E7E8;min-width:12px}.ln.ok2{background:#17804F}
 </style>
 </helmet>
 <div class="r"><div class="fr">
-<aside class="sb"><div class="logo"><i>D</i>DHAN NOW <span style="font-size:10px;color:#8B8F96;font-weight:500">staff</span></div><a href="#" class="nv">Dashboard</a><a href="#" class="nv">Applications</a><a href="#" class="nv">Customers</a><a href="#" class="nv">Loans</a><a href="#" class="nv on">Collections</a><a href="#" class="nv">Accounting</a><a href="#" class="nv">Reports</a></aside>
+<aside class="sb"><div class="logo"><i>D</i>DHAN NOW <span style="font-size:10px;color:#8B8F96;font-weight:500">staff</span></div><a href="#" class="nv">Dashboard</a><a href="#" class="nv">My repayment book</a><a href="#" class="nv">Customers</a><a href="#" class="nv">Loans</a><a href="#" class="nv on">DPD buckets (all loans)</a><a href="#" class="nv">Settlements</a><a href="#" class="nv">Reports</a></aside>
 <main class="mn">
 <div class="top"><div class="srch">Search loan, mobile, PAN…</div><div class="usr"><i>S</i><span><strong>Sana Khan</strong><br><span style="color:#8B8F96">Collection Executive</span></span></div></div>
-
-<div style="display:flex;align-items:center;gap:12px"><a href="StaffCollections.dc.html" style="font-size:13px">← Collections</a><h1 class="ttl" style="font-size:34px">Aarav Sharma · Loan #20417</h1><span class="pl" style="background:#FDECEC;color:#A11F24">3 days late</span><span class="pl" style="background:#ECEDEE;color:#4A4D52">Ext 0/3</span></div>
-<div style="display:grid;grid-template-columns:1fr 1.15fr;gap:16px;flex:1;min-height:0">
-<div style="display:flex;flex-direction:column;gap:14px">
-<div class="card"><h3>Loan</h3><div style="margin-top:8px">
-<div class="rw"><span>Principal</span><strong>₹1,000</strong></div><div class="rw"><span>Disbursed (confirmed)</span><strong>5 Oct · ₹742</strong></div><div class="rw"><span>Due date (schedule v1)</span><strong>19 Oct 2026</strong></div><div class="rw"><span>Late charge so far</span><strong style="color:#C62A2F">₹60 (3 × ₹20)</strong></div><div class="rw"><span>Outstanding</span><strong>₹1,060</strong></div><div class="rw"><span>Credit level</span><strong>L1 · ₹1,000</strong></div></div></div>
-<div class="card"><h3>Call log</h3><div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
-<div class="tile" style="padding:10px 12px;font-size:13px"><strong>22 Oct, 11:05 · Sana K.</strong><p class="hint">Borrower can’t pay ₹1,000 this week, salary delayed. Asked to extend. Agreed charge ₹318 if paid today.</p></div>
-<div class="tile" style="padding:10px 12px;font-size:13px"><strong>20 Oct, 16:40 · Sana K.</strong><p class="hint">Reminder call, no answer. SMS sent.</p></div></div></div>
-<div style="display:flex;gap:10px"><a class="btn2" href="#">Log payment</a><a class="btn2" href="#">Propose settlement</a><a class="btn2" href="#">Promise to pay</a></div>
+<div class="card" style="padding:14px 18px;display:flex;flex-direction:column;gap:10px;flex:1;min-height:0">
+<div style="display:flex;align-items:center;gap:10px"><strong style="font-size:17px">Aarav Sharma · DN0001217 · Loan #20417</strong><span class="pl" style="background:#FDECEC;color:#A11F24">Overdue · 3 DPD</span><span style="margin-left:auto" class="hint">Customer pop-up (ApplicationDetailDialog) · polls every 8 s</span><span class="btn2" style="height:30px">✕</span></div>
+<div class="tabs"><span class="">Customer</span><span class="">Loan</span><span class="">Disbursal</span><span class="">Repayment</span><span class="on">Collections</span><span class="">Third-party logs</span><span class="">Banking</span><span class="">Credit report</span><span class="">BRE</span><span class="">Journey</span><span class="">Documents</span><span class="">Activity</span><span class="">Mandate</span></div>
+<div style="display:grid;grid-template-columns:1fr 1.2fr;gap:14px;flex:1;min-height:0">
+<div style="display:flex;flex-direction:column;gap:12px">
+<div class="card"><h3>Collections</h3><div class="fg" style="margin-top:10px"><div><span>DPD</span>3 · <span class="pl" style="background:#FEF6D8;color:#6F4F00">2–7 days</span></div><div><span>Assigned officer</span>Sana Khan</div><div><span>Case status</span>Open</div><div><span>Promise to pay</span>—</div><div><span>Last interaction</span>22 Oct · Call</div><div><span>Extensions <span class="pl" style="background:#1F5BDB;color:#fff">New</span></span>0 of 3 · due 19 Oct</div></div></div>
+<div class="card"><h3>Interactions <span class="pl" style="background:#EEF3FF;color:#1A4BB8">2</span></h3><div class="tile" style="padding:9px 12px;margin-top:8px;font-size:12.5px"><strong>22 Oct 11:05 · Call · Requested extension <span class="pl" style="background:#1F5BDB;color:#fff">New</span></strong><p class="hint">Salary delayed; asked for 14 more days. Recording CL-88231.</p></div><p class="hint" style="margin-top:6px">New outcome value “Requested extension” added to the hard-coded OUTCOMES list.</p></div>
+<div class="card" style="opacity:.6"><h3>Propose settlement</h3><p class="hint" style="margin-top:6px">Disabled while an extension is open on this loan (server rule: settlement ⟂ extension). Shows: “Close or cancel the extension first.”</p></div>
+<div class="card"><h3>Payments</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px"><div class="fld">Kind<span class="in">Extension charge <span class="pl" style="background:#1F5BDB;color:#fff">New</span> ▾</span></div><div class="fld">Amount<span class="in" style="background:#F2F3F3">₹318 · locked to quote</span></div><div class="fld">Paid on<span class="in">22 Oct 2026</span></div><div class="fld">Txn id (required for extension)<span class="in">UTR</span></div></div><p class="hint" style="margin-top:6px">Extension charge is selectable only when an extension is <em>Borrower confirmed</em>; amount and extension id are filled by the server quote for the paid-on date. Goes to the Accountant like any collections payment.</p></div>
 </div>
-<div class="card" style="border:2px solid #1F5BDB;display:flex;flex-direction:column;gap:12px">
-<div style="display:flex;justify-content:space-between;align-items:center"><h3>Offer extension · 1 of 3</h3><span class="pl" style="background:#E3F7EC;color:#116A40">Eligible</span></div>
-<p class="hint">Eligible: due date reached, no open dispute, no payment awaiting verification, 0 of 3 used. Quote is calculated by the server from the loan’s pricing version.</p>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="fld">Borrower will pay on<span class="in">22 Oct 2026 (today) ▾</span></div><div class="fld">New due date<span class="in" style="background:#F2F3F3">2 Nov 2026 · 19 Oct + 14</span></div></div>
-<div class="tile" style="padding:6px 14px">
-<div class="rw"><span>Processing fee 10%</span><strong>₹100</strong></div><div class="rw"><span>GST 18% on fee</span><strong>₹18</strong></div><div class="rw"><span>Interest 14 days × 1%</span><strong>₹140</strong></div><div class="rw"><span>Late charge to 22 Oct</span><strong>₹60</strong></div><div class="rw" style="font-weight:700"><span style="color:#0B0B0C">Borrower pays to extend</span><strong style="font-size:16px">₹318</strong></div><div class="rw"><span>Principal still due on 2 Nov</span><strong>₹1,000</strong></div></div>
-<div class="fld">Reason code<span class="in">CASHFLOW_SALARY_DELAY ▾</span></div>
-<div class="fld">Call note (required)<span class="in" style="height:54px;align-items:flex-start;padding-top:9px">Borrower requested on call 22 Oct 11:05, recording #CL-88231.</span></div>
-<div style="display:flex;gap:10px;align-items:center"><a class="btn" href="StaffExtensionApprove.dc.html">Send to Collection Head</a><span class="hint">Then the borrower gets an SMS + push to confirm in the app (OTP) and pay.</span></div>
-<p class="note">Paying on a later day: quote recalculates (+₹20 late charge per day). The offer expires at 23:59 IST on the chosen pay-by day. At 3 of 3 this panel is replaced by “Cap reached”; only an Admin override with reason can offer a 4th.</p>
-</div></div>
+<div class="card newb" style="border:2px solid #1F5BDB;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;justify-content:space-between;align-items:center"><h3>Loan extension <span class="pl" style="background:#1F5BDB;color:#fff">New</span></h3><span class="pl" style="background:#E3F7EC;color:#116A40">Eligible · 0 of 3 used</span></div>
+<div style="display:flex;align-items:center;gap:6px"><span class="step"><span class="dot now"></span><span style="font-weight:600">Offered</span></span><span class="ln"></span><span class="step"><span class="dot todo"></span><span style="color:#8B8F96">Head approved</span></span><span class="ln"></span><span class="step"><span class="dot todo"></span><span style="color:#8B8F96">Borrower confirmed</span></span><span class="ln"></span><span class="step"><span class="dot todo"></span><span style="color:#8B8F96">Paid</span></span><span class="ln"></span><span class="step"><span class="dot todo"></span><span style="color:#8B8F96">Verified · extended</span></span></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="fld">Borrower will pay on<span class="in">22 Oct 2026 (today) ▾</span></div><div class="fld">New due date<span class="in" style="background:#F2F3F3">2 Nov 2026 (19 Oct + 14)</span></div></div>
+<div class="tile" style="padding:4px 14px"><div class="rw"><span>Fee 10% · GST 18% · interest 14 d</span><strong>₹100 · ₹18 · ₹140</strong></div><div class="rw"><span>Late charge to 22 Oct (3 × ₹20)</span><strong>₹60</strong></div><div class="rw" style="font-weight:700"><span style="color:#0B0B0C">Borrower pays to extend</span><strong>₹318</strong></div><div class="rw"><span>Principal still due on 2 Nov</span><strong>₹1,000</strong></div></div>
+<div style="display:grid;grid-template-columns:1fr 1.4fr;gap:10px"><div class="fld">Reason<span class="in">Salary delayed ▾</span></div><div class="fld">Call note (required)<span class="in">Requested on call 22 Oct 11:05, CL-88231</span></div></div>
+<div style="display:flex;gap:10px;align-items:center"><span class="btn">Offer extension</span><span class="hint">Goes to the Collection Head. Offer expires 23:59 IST on the pay-by day.</span></div>
+<div class="note"><strong>Panel states</strong> (all read from GET /loans/{id}/extensions, never inferred): <em>Not eligible</em> with the exact reason (not yet due · repayment awaiting verification · settlement open · dispute or fraud hold · restructure · NACH debit in flight · cap reached) · <em>Offered</em> (Cancel offer) · <em>With borrower</em> (Resend notification; shows “seen in app 11:20” or “not opened yet”) · <em>Paid, awaiting accountant</em> · <em>Extended</em> (history list) · <em>Expired / Declined / Rejected</em> with who and why, and “Offer again”. Buttons are disabled while a request runs; a 409 STALE_STATE refetches and says “Someone else just changed this extension”.</div>
+</div></div></div>
 </main>
 </div></div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":960}}'>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1060}}'>
 class Component extends DCLogic {
 renderVals() { return {}; }
 }

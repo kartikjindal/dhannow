@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>C12d Extension states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Bebas+Neue&amp;display=swap">
+<style>
+body{margin:0}
+.r{width:1760px;height:1280px;box-sizing:border-box;background:#E4E6E7;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;padding:28px}
+.frame{background:#F2F3F3;border-radius:32px;padding:32px;height:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:20px}
+.ttl{font-family:"Bebas Neue",Inter,sans-serif;font-size:42px;line-height:42px;letter-spacing:.6px;margin:0}
+.lead{font-size:14px;line-height:21px;color:#4A4D52;margin:6px 0 0;max-width:1100px}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.cell{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9);padding:16px}
+.lbl{font-size:13px;font-weight:700;margin-bottom:2px}
+.hint{font-size:12px;line-height:17px;color:#4A4D52}
+.ph{background:#F2F3F3;border:1px solid #E5E7E8;border-radius:20px;padding:12px;display:flex;flex-direction:column;gap:8px;min-height:150px}
+.bn{border:1px solid #E5E7E8;border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.bn span{font-size:12px;line-height:17px;color:#4A4D52}
+.b1{height:36px;border-radius:999px;background:#1F5BDB;color:#fff;font-weight:600;font-size:13px;display:flex;align-items:center;justify-content:center}
+.b2{height:34px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;font-weight:600;font-size:13px;display:flex;align-items:center;justify-content:center}
+.bn span.b1{color:#fff;font-size:13px}
+.bn span.b2{color:#0B0B0C;font-size:13px}
+.mini{font-size:11px;line-height:15px;color:#4A4D52}
+.srv{font-size:11px;line-height:15px;color:#4A4D52;margin:8px 0 0}
+</style>
+</helmet>
+<div class="r"><div class="frame">
+<div><h1 class="ttl">C12d Extension: every state the app can show</h1><p class="lead">The app never guesses. Every screen reads the extension status from the server on open, on app resume, on pull-to-refresh and when a push arrives; the notification is only a doorbell. So whatever staff did, the app shows the same thing the console shows, within one refresh.</p></div>
+<div class="grid"><div class="cell"><div class="lbl">S1 · Offer waiting (dashboard banner)</div><p class="hint" style="margin:0 0 8px">Head approved; borrower opens the app, with or without having seen the notification.</p>
+<div class="ph"><div class="bn" style="background:#EEF3FF;border-color:#C9D8FF"><strong>Extension offered by our team</strong><span>Pay ₹318 by 11:59 pm today to move your due date to 2 Nov.</span><span class="b1">Review and confirm</span></div><div class="mini">Loan card (overdue) stays below. The banner comes from GET /loans/{id} → pendingExtension, not from the notification.</div></div><p class="srv"><strong>Server:</strong> status APPROVED, pay_by ≥ today</p></div><div class="cell"><div class="lbl">S2 · Offer expired</div><p class="hint" style="margin:0 0 8px">Opened after 23:59 IST on the pay-by day (old notification, or app left open overnight).</p>
+<div class="ph"><div class="bn" style="background:#F2F3F3"><strong>This offer has expired</strong><span>It ended at 11:59 pm on 22 Oct. Nothing changed on your loan. Call us for a new offer.</span><span class="b1">Call 9211331169</span><span class="b2">Back to dashboard</span></div></div><p class="srv"><strong>Server:</strong> status EXPIRED (00:05 sweep) or APPROVED with pay_by &lt; today (treated as expired on read)</p></div><div class="cell"><div class="lbl">S3 · Already extended</div><p class="hint" style="margin:0 0 8px">Opened from an old notification after the extension went through, or on a second phone.</p>
+<div class="ph"><div class="bn" style="background:#E3F7EC;border-color:#C2EED6"><strong>Already extended to 2 Nov</strong><span>Extension 1 of 3 was verified on 22 Oct. You don’t need to do anything.</span><span class="b1">Go to dashboard</span></div></div><p class="srv"><strong>Server:</strong> status ACTIVE; screen chosen by status, never by the notification text</p></div><div class="cell"><div class="lbl">S4 · Offer withdrawn</div><p class="hint" style="margin:0 0 8px">Officer cancelled, Head rejected, or the loan became ineligible (e.g. repaid, settlement opened).</p>
+<div class="ph"><div class="bn" style="background:#F2F3F3"><strong>This offer was withdrawn</strong><span>Your due date is still 19 Oct. If you need more time, call our collections team.</span><span class="b1">Call 9211331169</span></div></div><p class="srv"><strong>Server:</strong> status CANCELLED / REJECTED; borrower never sees internal reasons</p></div><div class="cell"><div class="lbl">S5 · OTP problems</div><p class="hint" style="margin:0 0 8px">Code not received, wrong code 5 times, or SMS delayed.</p>
+<div class="ph"><div class="bn" style="background:#FDECEC;border-color:#FAD3D4"><strong>Too many wrong codes</strong><span>Try again after 3:45 pm. Your offer stays open until 11:59 pm today.</span><span class="b2">Resend code</span></div><div class="mini">Resend after 30 s, max 5 per 15 min (existing OTP service). Code also readable by SMS autofill. If the pay-by day ends while locked, S2 applies.</div></div><p class="srv"><strong>Server:</strong> OTP purpose LOAN_EXTENSION; accept is idempotent (a retry after a crash returns the same result)</p></div><div class="cell"><div class="lbl">S6 · Paid, being checked</div><p class="hint" style="margin:0 0 8px">Borrower submitted UTR in the app (or the officer logged it).</p>
+<div class="ph"><div class="bn" style="background:#FEF6D8;border-color:#FCEAA6"><strong>Payment received, checking with the bank</strong><span>₹318 · UTR 4290…8876. Your due date stays 19 Oct until it’s verified, usually the same day. No late charge is added for days while we check if your payment was on time.</span></div></div><p class="srv"><strong>Server:</strong> status PAYMENT_PENDING; on-time judged by bank paid_on, not verification time</p></div><div class="cell"><div class="lbl">S7 · Payment not matched</div><p class="hint" style="margin:0 0 8px">Accountant rejected the extension payment (wrong amount, unmatched UTR, wrong account).</p>
+<div class="ph"><div class="bn" style="background:#FDECEC;border-color:#FAD3D4"><strong>We couldn’t match your payment</strong><span>Reason: reference not found in our bank. Check the UTR and send it again before 11:59 pm.</span><span class="b1">Correct the reference</span><span class="b2">Call us</span></div></div><p class="srv"><strong>Server:</strong> payment REJECTED with picklist reason; extension back to ACCEPTED until pay_by</p></div><div class="cell"><div class="lbl">S8 · Offline or slow</div><p class="hint" style="margin:0 0 8px">No network, or the server didn’t answer.</p>
+<div class="ph"><div class="bn" style="background:#ECEDEE"><strong>You’re offline</strong><span>Showing details from 10:42 am. Confirm and pay need a connection; nothing was sent.</span><span class="b1">Try again</span></div></div><p class="srv"><strong>Server:</strong> last good response cached with its timestamp; all actions disabled</p></div><div class="cell"><div class="lbl">S9 · Something we don’t recognise</div><p class="hint" style="margin:0 0 8px">Server added a state this app version doesn’t know, or the response is malformed.</p>
+<div class="ph"><div class="bn" style="background:#F2F3F3"><strong>Your loan was updated</strong><span>Pull down to refresh. If this stays, update the app or call us.</span><span class="b1">Refresh</span><span class="b2">Update app</span></div><div class="mini">Unknown enum values decode to UNKNOWN (never a crash); minVersion from /app/config can force an update.</div></div><p class="srv"><strong>Server:</strong> contract tests fail CI before an unknown state can ship</p></div></div>
+</div></div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1760,"height":1280}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -102,6 +102,13 @@ Nothing like this exists in navix today. It is built on the navix collections ma
   - `collection_payment.extension_id`;
   - `product_config.extension_max`.
 - **Documents:** an extension addendum PDF (new due date, charges, APR) for each extension, OTP-accepted.
+- **Money model (from the navix code read, 28 Oct 2026):** navix `RepaymentService.breakdown` derives interest and penalty from the due date and subtracts every verified payment. Moving the due date or counting extension money as a payment would silently change what is owed. DhanNow owed = principal − verified *repayment* principal + late charge of the current due window. Extension money is kept out of that sum (`payment.purpose`), and a `loan_due_history` table keeps each cycle's lateness.
+- **Other navix behaviours the extension must handle:**
+  - `markInCollections` is one-way, so activation resets the status to ACTIVE or reminders stop.
+  - The worklist's +7-day horizon would hide extended loans.
+  - There is no `@Version` or lock on payments: activation runs under the loan advisory lock NACH already uses.
+  - Settlements and extensions are mutually exclusive.
+  - About 25 report queries need a purpose filter.
 - **Credit ladder:** an extended loan never raises the level.
 - **Open legal and tax risk:** re-charging PF and GST on the same principal without a new disbursal needs written Legal/tax approval before launch.
 

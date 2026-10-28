@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>G1 Collections worklist</title>
+<title>G1 DPD buckets: extension column</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -13,49 +13,59 @@
 body{margin:0}
 a{color:#1A4BB8}
 .r{width:1440px;height:960px;box-sizing:border-box;background:#E4E6E7;font-family:Inter,system-ui,sans-serif;color:#0B0B0C;padding:20px}
-.fr{background:#F2F3F3;border-radius:32px;height:100%;box-sizing:border-box;display:flex;overflow:hidden}
-.sb{width:200px;flex:none;padding:22px 14px;display:flex;flex-direction:column;gap:6px}
+.fr{background:#F2F3F3;border-radius:32px;height:100%;box-sizing:border-box;display:flex;overflow:hidden;position:relative}
+.sb{width:210px;flex:none;padding:22px 14px;display:flex;flex-direction:column;gap:6px}
 .logo{display:flex;align-items:center;gap:8px;font-weight:700;margin:0 6px 18px}
 .logo i{width:30px;height:30px;border-radius:9px;background:#1F5BDB;color:#fff;font-style:normal;display:flex;align-items:center;justify-content:center}
 .nv{display:block;padding:9px 14px;border-radius:999px;font-size:13px;font-weight:500;color:#4A4D52;text-decoration:none;background:#fff;border:1px solid #E5E7E8}
 .nv.on{background:#0B0B0C;border-color:#0B0B0C;color:#fff}
-.mn{flex:1;padding:22px 26px 22px 6px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.mn{flex:1;padding:22px 26px 22px 6px;display:flex;flex-direction:column;gap:14px;min-width:0}
 .top{display:flex;align-items:center;gap:12px}
 .srch{flex:1;height:38px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;display:flex;align-items:center;padding:0 16px;font-size:13px;color:#8B8F96}
 .usr{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E5E7E8;border-radius:999px;padding:4px 14px 4px 4px;font-size:12px}
 .usr i{width:30px;height:30px;border-radius:50%;background:#EEF3FF;color:#1A4BB8;font-style:normal;font-weight:700;display:flex;align-items:center;justify-content:center}
-.ttl{font-family:"Bebas Neue",Inter,sans-serif;font-size:40px;line-height:40px;letter-spacing:.6px;margin:0}
-.card{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9);padding:18px}
+.ttl{font-family:"Bebas Neue",Inter,sans-serif;font-size:38px;line-height:38px;letter-spacing:.6px;margin:0}
+.card{background:#FAFAFA;border:1px solid #E5E7E8;border-radius:22px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9);padding:16px 18px}
 .tile{background:#fff;border:1px solid #E5E7E8;border-radius:16px;box-shadow:0 1px 2px rgba(17,19,24,.05)}
 .pl{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 9px;border-radius:999px;white-space:nowrap}
 .hint{font-size:12px;line-height:18px;color:#4A4D52;margin:0}
-h3{font-size:15px;font-weight:600;margin:0}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;font-size:11px;font-weight:600;color:#8B8F96;padding:8px 10px;border-bottom:1px solid #E5E7E8}
-td{padding:11px 10px;border-bottom:1px solid #E5E7E8;vertical-align:middle}
+h3{font-size:15px;font-weight:600;margin:0;display:flex;align-items:center;gap:8px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;font-size:11px;font-weight:600;color:#8B8F96;padding:8px 8px;border-bottom:1px solid #E5E7E8;white-space:nowrap}
+td{padding:10px 8px;border-bottom:1px solid #E5E7E8;vertical-align:middle;white-space:nowrap}
 tr.hl td{background:#EEF3FF}
-.btn{height:40px;padding:0 18px;white-space:nowrap;border-radius:999px;background:#1F5BDB;color:#fff;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;box-shadow:0 10px 24px -12px rgba(31,91,219,.55)}
-.btn2{height:40px;padding:0 18px;border-radius:999px;background:#fff;color:#0B0B0C;border:1px solid #E5E7E8;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none}
-.rw{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:8px 0;border-top:1px solid #E5E7E8}
+.btn{height:36px;padding:0 16px;border-radius:999px;background:#1F5BDB;color:#fff;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;white-space:nowrap;box-shadow:0 10px 24px -12px rgba(31,91,219,.55)}
+.btn2{height:36px;padding:0 16px;border-radius:999px;background:#fff;color:#0B0B0C;border:1px solid #E5E7E8;font-weight:600;font-size:13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;white-space:nowrap}
+.btnx{height:36px;padding:0 16px;border-radius:999px;background:#E3E5E6;color:#8B8F96;font-weight:600;font-size:13px;display:inline-flex;align-items:center;white-space:nowrap}
+.rw{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:7px 0;border-top:1px solid #E5E7E8}
 .rw:first-child{border-top:0}.rw span:first-child{color:#4A4D52}
+.fg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.fg div{font-size:13px}.fg div span{display:block;font-size:11px;color:#8B8F96}
 .fld{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600}
-.fld span.in{height:38px;border:1px solid #D9DBDD;border-radius:12px;background:#fff;display:flex;align-items:center;padding:0 12px;font-weight:400;font-size:13px}
+.in{height:36px;border:1px solid #D9DBDD;border-radius:12px;background:#fff;display:flex;align-items:center;padding:0 12px;font-weight:400;font-size:13px}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
 .chips a{padding:7px 12px;border-radius:999px;background:#fff;border:1px solid #E5E7E8;font-size:12px;font-weight:500;color:#4A4D52;text-decoration:none}
 .chips a.on{background:#0B0B0C;color:#fff;border-color:#0B0B0C}
-.note{font-size:11px;line-height:16px;color:#4A4D52;background:#ECEDEE;border-radius:12px;padding:10px 12px}
+.note{font-size:11px;line-height:16px;color:#4A4D52;background:#ECEDEE;border-radius:12px;padding:9px 12px}
+.newb{outline:2px dashed #1F5BDB;outline-offset:3px;border-radius:22px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.tabs span{padding:6px 12px;border-radius:999px;font-size:12px;font-weight:500;background:#fff;border:1px solid #E5E7E8;color:#4A4D52}
+.tabs span.on{background:#0B0B0C;color:#fff;border-color:#0B0B0C}
+.step{display:flex;align-items:center;gap:6px;font-size:12px}
+.dot{width:18px;height:18px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center}
+.ok{background:#17804F}.now{border:2px solid #1F5BDB;box-sizing:border-box;box-shadow:0 0 0 4px rgba(31,91,219,.15)}.todo{border:2px solid #D9DBDD;box-sizing:border-box}
+.ln{flex:1;height:2px;background:#E5E7E8;min-width:12px}.ln.ok2{background:#17804F}
 </style>
 </helmet>
 <div class="r"><div class="fr">
-<aside class="sb"><div class="logo"><i>D</i>DHAN NOW <span style="font-size:10px;color:#8B8F96;font-weight:500">staff</span></div><a href="#" class="nv">Dashboard</a><a href="#" class="nv">Applications</a><a href="#" class="nv">Customers</a><a href="#" class="nv">Loans</a><a href="#" class="nv on">Collections</a><a href="#" class="nv">Accounting</a><a href="#" class="nv">Reports</a></aside>
+<aside class="sb"><div class="logo"><i>D</i>DHAN NOW <span style="font-size:10px;color:#8B8F96;font-weight:500">staff</span></div><a href="#" class="nv">Dashboard</a><a href="#" class="nv">My repayment book</a><a href="#" class="nv">Customers</a><a href="#" class="nv">Loans</a><a href="#" class="nv on">DPD buckets (all loans)</a><a href="#" class="nv">Settlements</a><a href="#" class="nv">Reports</a></aside>
 <main class="mn">
 <div class="top"><div class="srch">Search loan, mobile, PAN…</div><div class="usr"><i>S</i><span><strong>Sana Khan</strong><br><span style="color:#8B8F96">Collection Executive</span></span></div></div>
-
-<div style="display:flex;align-items:flex-end;justify-content:space-between"><div><h1 class="ttl">Collections</h1><p class="hint">Due today, overdue and extended loans. Extensions are offered only from a collections call.</p></div>
-<div style="display:flex;gap:10px"><div class="tile" style="padding:10px 14px;min-width:120px"><p class="hint" style="font-size:11px">Due today</p><strong style="font-size:20px">18</strong></div><div class="tile" style="padding:10px 14px;min-width:120px"><p class="hint" style="font-size:11px">Overdue</p><strong style="font-size:20px">64</strong></div><div class="tile" style="padding:10px 14px;min-width:120px"><p class="hint" style="font-size:11px">Extended (active)</p><strong style="font-size:20px">23</strong></div><div class="tile" style="padding:10px 14px;min-width:120px"><p class="hint" style="font-size:11px">Ext. payments to verify</p><strong style="font-size:20px">5</strong></div></div></div>
-<div class="chips"><a class="on" href="#">All open</a><a href="#">Due today</a><a href="#">1 day late</a><a href="#">Under review (7+ days)</a><a href="#">Extension offered</a><a href="#">Extension payment pending</a><a href="#">Extended</a><a href="#">Cap reached</a></div>
-<div class="card" style="padding:6px 12px"><table><thead><tr><th>Borrower</th><th>Due</th><th>Days late</th><th>Outstanding</th><th>Extensions</th><th>Status / next action</th><th>Officer</th><th></th></tr></thead><tbody><tr class="hl"><td><strong>Aarav Sharma</strong><br><span class="hint">Loan #20417</span></td><td>19 Oct</td><td>3</td><td><strong>₹1,060</strong></td><td><span class="pl" style="background:#ECEDEE;color:#4A4D52">Ext 0/3</span></td><td><span class="pl" style="background:#FEF6D8;color:#6F4F00">Called · wants extension</span></td><td>Sana K.</td><td><a class="btn" href="StaffExtensionOffer.dc.html" style="height:32px">Open case</a></td></tr><tr class=""><td><strong>Priya Menon</strong><br><span class="hint">Loan #20388</span></td><td>22 Oct</td><td>0</td><td><strong>₹2,000</strong></td><td><span class="pl" style="background:#EEF3FF;color:#1A4BB8">Ext 1/3</span></td><td><span class="pl" style="background:#FDECEC;color:#A11F24">Due today</span></td><td>Sana K.</td><td><a href="#" style="font-size:13px;font-weight:600">Open</a></td></tr><tr class=""><td><strong>Rohit Verma</strong><br><span class="hint">Loan #20291</span></td><td>9 Oct</td><td>13</td><td><strong>₹3,780</strong></td><td><span class="pl" style="background:#EEF3FF;color:#1A4BB8">Ext 2/3</span></td><td><span class="pl" style="background:#EEF3FF;color:#1A4BB8">Extension payment pending</span></td><td>Kabir S.</td><td><a href="#" style="font-size:13px;font-weight:600">Open</a></td></tr><tr class=""><td><strong>Neha Joshi</strong><br><span class="hint">Loan #20154</span></td><td>30 Sep</td><td>22</td><td><strong>₹1,440</strong></td><td><span class="pl" style="background:#FDECEC;color:#A11F24">Ext 3/3 · cap</span></td><td><span class="pl" style="background:#FDECEC;color:#A11F24">Cap reached · repay or settle</span></td><td>Sana K.</td><td><a href="#" style="font-size:13px;font-weight:600">Open</a></td></tr><tr class=""><td><strong>Imran Ali</strong><br><span class="hint">Loan #20410</span></td><td>21 Oct</td><td>1</td><td><strong>₹5,100</strong></td><td><span class="pl" style="background:#ECEDEE;color:#4A4D52">Ext 0/3</span></td><td><span class="pl" style="background:#ECEDEE;color:#4A4D52">Promise to pay 24 Oct</span></td><td>Kabir S.</td><td><a href="#" style="font-size:13px;font-weight:600">Open</a></td></tr></tbody></table></div>
-<p class="note"><strong>Extensions column</strong> shows used / allowed (cap from product config, default 3). Outstanding = principal + late charge; extension charges are separate and never added to it. “Cap reached” rows offer only Log payment, Settlement or Admin override.</p>
+<div style="display:flex;align-items:flex-end;justify-content:space-between"><div><h1 class="ttl">DPD buckets (all loans)</h1><p class="hint">Real page: app/staff/collections/page.tsx. Same cards, search, filters, bulk assign and export; one new column and one new facet.</p></div><div style="display:flex;gap:8px"><span class="btn2">Export</span><span class="btn2">Refresh</span></div></div>
+<div style="display:flex;gap:8px"><div class="tile" style="padding:10px 14px;border:2px solid #0B0B0C;min-width:104px"><p class="hint" style="font-size:11px">All loans</p><strong style="font-size:20px">146</strong></div><div class="tile" style="padding:10px 14px;min-width:104px"><p class="hint" style="font-size:11px">Due today</p><strong style="font-size:20px">18</strong></div><div class="tile" style="padding:10px 14px;min-width:104px"><p class="hint" style="font-size:11px">1 day late</p><strong style="font-size:20px">9</strong></div><div class="tile" style="padding:10px 14px;min-width:104px"><p class="hint" style="font-size:11px">2–7 days</p><strong style="font-size:20px">21</strong></div><div class="tile" style="padding:10px 14px;min-width:104px"><p class="hint" style="font-size:11px">Review 8–30</p><strong style="font-size:20px">34</strong></div><div class="tile" style="padding:10px 14px;min-width:104px"><p class="hint" style="font-size:11px">31–60</p><strong style="font-size:20px">11</strong></div><div class="tile" style="padding:10px 14px;min-width:104px"><p class="hint" style="font-size:11px">61+</p><strong style="font-size:20px">6</strong></div></div>
+<div class="chips"><a class="on" href="#">Any extension state</a><a href="#">No extension</a><a href="#">Offer · with Head</a><a href="#">Offer · with borrower</a><a href="#">Ext. payment · accountant</a><a href="#">Extended (not yet due)</a><a href="#">Cap reached</a><span style="margin-left:4px"><span class="pl" style="background:#1F5BDB;color:#fff">New</span></span></div>
+<div class="card newb" style="padding:6px 10px"><table><thead><tr><th>S.No.</th><th>Customer ID</th><th>Borrower</th><th>Loan</th><th>Principal</th><th>Outstanding</th><th>Due</th><th>DPD</th><th>Bucket</th><th>Stage</th><th>Ext. <span class="pl" style="background:#1F5BDB;color:#fff">New</span></th><th>Collections exec</th><th></th></tr></thead><tbody><tr class="hl"><td>1</td><td>DN0001217</td><td><strong>Aarav Sharma</strong></td><td>#20417</td><td>₹1,000</td><td><strong>₹1,060</strong></td><td>19 Oct</td><td>3</td><td><span class="pl" style="background:#FEF6D8;color:#6F4F00">2–7 days</span></td><td><span class="pl" style="background:#EEF3FF;color:#1A4BB8">Offer · with Head</span></td><td><span class="pl" style="background:#ECEDEE;color:#4A4D52">0/3</span></td><td>Sana K.</td><td><a href="StaffExtensionOffer.dc.html" style="font-weight:600">Open</a></td></tr><tr class=""><td>2</td><td>DN0001144</td><td><strong>Priya Menon</strong></td><td>#20388</td><td>₹2,000</td><td><strong>₹2,000</strong></td><td>22 Oct</td><td>—</td><td><span class="pl" style="background:#FDECEC;color:#A11F24">Due today</span></td><td><span class="pl" style="background:#ECEDEE;color:#4A4D52">Overdue · 0 DPD</span></td><td><span class="pl" style="background:#EEF3FF;color:#1A4BB8">1/3</span></td><td>Sana K.</td><td><a href="StaffExtensionOffer.dc.html" style="font-weight:600">Open</a></td></tr><tr class=""><td>3</td><td>DN0000981</td><td><strong>Rohit Verma</strong></td><td>#20291</td><td>₹3,000</td><td><strong>₹3,780</strong></td><td>9 Oct</td><td>13</td><td><span class="pl" style="background:#FDECEC;color:#A11F24">Review 8–30</span></td><td><span class="pl" style="background:#EEF3FF;color:#1A4BB8">Ext. payment · accountant</span></td><td><span class="pl" style="background:#EEF3FF;color:#1A4BB8">2/3</span></td><td>Kabir S.</td><td><a href="StaffExtensionOffer.dc.html" style="font-weight:600">Open</a></td></tr><tr class=""><td>4</td><td>DN0000870</td><td><strong>Neha Joshi</strong></td><td>#20154</td><td>₹1,000</td><td><strong>₹1,440</strong></td><td>30 Sep</td><td>22</td><td><span class="pl" style="background:#FDECEC;color:#A11F24">Review 8–30</span></td><td><span class="pl" style="background:#FDECEC;color:#A11F24">Cap reached</span></td><td><span class="pl" style="background:#FDECEC;color:#A11F24">3/3 cap</span></td><td>Sana K.</td><td><a href="StaffExtensionOffer.dc.html" style="font-weight:600">Open</a></td></tr><tr class=""><td>5</td><td>DN0001301</td><td><strong>Imran Ali</strong></td><td>#20410</td><td>₹5,000</td><td><strong>₹5,100</strong></td><td>21 Oct</td><td>1</td><td><span class="pl" style="background:#FEF6D8;color:#6F4F00">1 day late</span></td><td><span class="pl" style="background:#ECEDEE;color:#4A4D52">PTP 24 Oct</span></td><td><span class="pl" style="background:#ECEDEE;color:#4A4D52">0/3</span></td><td>Kabir S.</td><td><a href="StaffExtensionOffer.dc.html" style="font-weight:600">Open</a></td></tr><tr class=""><td>6</td><td>DN0000732</td><td><strong>Kavya Rao</strong></td><td>#20033</td><td>₹2,000</td><td><strong>₹2,000</strong></td><td>2 Nov</td><td>—</td><td><span class="pl" style="background:#E3F7EC;color:#116A40">Extended · not due</span></td><td><span class="pl" style="background:#EEF3FF;color:#1A4BB8">Extended to 2 Nov</span></td><td><span class="pl" style="background:#EEF3FF;color:#1A4BB8">1/3</span></td><td>Sana K.</td><td><a href="StaffExtensionOffer.dc.html" style="font-weight:600">Open</a></td></tr></tbody></table></div>
+<p class="note"><strong>Changes vs today:</strong> (1) “Ext.” column = activated / cap, sortable, plus an <em>extension state</em> facet (server f.extState). (2) Extended loans stay listed until repaid (badge “Extended · not due”) instead of disappearing for a week: today the +7-day horizon (LoanDirectoryAdapter.listCollectible) and the upcoming-watchlist case filter would hide them. (3) Outstanding = principal + late charge; extension charges are never in it. (4) Bucket cards use the DhanNow buckets. Signals, Mobile, PAN, Employer, Salary, Credit exec and Disbursed-by columns stay (scroll right). Polls every 8 s as today.</p>
 </main>
 </div></div>
 </x-dc>

@@ -82,7 +82,7 @@ Rule throughout: **reuse navix code unchanged wherever DhanNow does not differ.*
 | Namespace | Keep `com.navix`, `navix-*` modules and `NAVIX_*` env. Only the user-visible brand changes to DHAN NOW |
 | Web | **Static site + app + staff console** (user decision, 2026-10-27). `dhannow.com` = the existing static site (`dhannow/website` → `site/`), which hosts legal pages, app links and the APK download. Borrowers use only the Android app; there is no borrower web login in v1. The Next.js fork is reduced to the **staff console** at `staff.dhannow.com` |
 | Infra | New AWS stack: own RDS, S3, KMS, SSM prefix `/dhannow/<env>/`, ECS, ALB with HTTPS. Domains `dhannow.com`, `staff.dhannow.com`, `api.dhannow.com`. App ID `com.dhannow.app` |
-| Fork base | `origin/app_navix` head (`ae244485`): main + the "Monochrome + Ember" reskin, UI kit, BRE tab and Aadhaar–PAN linkage. The demo-only `redact-figures` blur is turned off |
+| Fork base | **navix `main`** (`67d8f675`, 26 Oct). It has 141 commits that `app_navix` lacks, including the settlement-closing fix, the NACH stack, the SQL-paged worklist and per-loan grace. The 11 `app_navix` commits (Monochrome reskin + UI kit, BRE tab, Aadhaar–PAN linkage) are merged on top in Phase 0. The demo-only `redact-figures` blur is turned off |
 | Design system | **app_navix UI kit**, not just its colours. See "Design system" below. Applies to the wireframe, the Flutter app and the web. **Accent changed from ember orange to cobalt blue** (user choice, 2026-10-27): primary/fills `#1F5BDB` (white text 5.9:1), links/pressed `#1A4BB8`, tint `#EEF3FF`. Wherever the sections below say ember, read cobalt |
 | Payments | Manual UPI/bank + UTR + screenshot, verified by the accountant. **eNACH (Digio) code kept and updated, but `digio-mandate` and `digio-debit` stay OFF**, so the Autopay step is skipped by the journey. `PaymentGatewayPort` + webhook idempotency scaffold behind flag `payment-gateway` |
 | Profile | View-only. **No mobile, email or any other detail change**, in the app or via support |
@@ -185,7 +185,7 @@ The wireframe is the app's spec, so it is fixed first and re-published to https:
 
 ## Phase 0: Fork and bootstrap (week 1)
 
-1. `git init` in `dhannow/`. Export `origin/app_navix` (`git archive ae244485`), then copy `backend/`, `frontend/` → `web/`, `Dockerfile.backend*` and `docker-compose*.yml`.
+1. In `dhannow/`: export navix `main` (`git archive 67d8f675`), then copy `backend/`, `frontend/` → `web/`, `Dockerfile.backend*` and `docker-compose*.yml`. Merge the 11 `origin/app_navix` commits (`49067796`…`ae244485`) on a branch, resolve conflicts in favour of `main` behaviour and `app_navix` styling, and run both test suites before continuing.
    - Exclude `target/`, `node_modules/`, `.env`, `.code-review-graph/` and `docs/claude-in-chrome/` (it contains credentials).
    - Record the navix commit hash (`67d8f675`) in `docs/UPSTREAM.md` so later navix fixes can be cherry-picked.
 2. Pull the wireframe boards into `docs/wireframes/` (Artifact read of every `project/*.dc.html` + `canvas.json`). Move the difference doc and the DhanNow `.docx` sources into `docs/product/`.
@@ -342,71 +342,162 @@ Status is split into separate dimensions on `loan`, as the deck requires.
 - `schedule_instalment(schedule_id, seq, due_date, due_at, principal_paise, interest_paise, fee_paise, gst_paise, paid_paise, status)`.
 - Every loan gets a v1 BULLET schedule at disbursal. The original is immutable.
 
-**Loan extension: collections-led** (replaces the earlier borrower self-serve rollover; user decision 2026-10-27; flag `loan-extension`, ON at launch subject to the Legal sign-off in the go-live list).
+**Loan extension: collections-led** (user decision 2026-10-27; redesigned 2026-10-28 from a line-by-line read of navix `main`; flag `loan-extension`, ON at launch subject to Legal/tax sign-off). File references below are to navix `main` (`C` = `navix-collections/.../collections`, `L` = `navix-loan/.../loan`, `M` = Flyway migrations).
 
-*Rules*
+*Product rules*
 
 | Rule | Value |
 |---|---|
-| Who starts it | Only collections, after a borrower call. Borrowers have **no extend button** |
-| When | Loan is in `DUE_TODAY`, `OVERDUE_D1` or `OVERDUE_REVIEW`, with no `DISPUTED`/`FRAUD_REVIEW` hold, no repayment `PAID_PENDING_VERIFICATION`, not `RESTRUCTURE_PENDING`/`RESTRUCTURED`, and `extension_count < product_config.extension_max` (default **3**). A 4th needs an ADMIN override with reason code (audited) |
-| Charge | Pricing snapshot of the loan: fee 10% + GST 18% on the fee + 14 days × 1%/day interest on principal (₹258 per ₹1,000) **plus late charge accrued up to the pay-by date** (2%/day, cap 30, unchanged) |
-| Quote | Server-computed for a chosen pay-by date. Expires 23:59 IST that day |
-| New due date | **Previous due date + 14** (fixed 14-day grid), 23:59 IST. Late charge restarts from the new due date |
-| Principal | Unchanged and still owed |
-| Credit level | A loan that was extended never upgrades the level (`credit_level_history` reason `EXTENDED_NO_CHANGE`) |
-| Repeats | Each cycle repeats the same process. At the cap: only repay, settlement or ADMIN override |
+| Who starts it | Only collections, after a borrower call. No borrower "extend" button |
+| Eligible when | Loan lifecycle is `DUE_TODAY`, `OVERDUE_D1` or `OVERDUE_REVIEW`, and none of the following hold: a hold (`DISPUTED`, `FRAUD_REVIEW`), a repayment in `PENDING_VERIFICATION`, an open (PROPOSED or APPROVED-unpaid) settlement, a NACH debit in flight (`MandateDebitRepository.existsByLoanIdAndStatusIn`), restructure, or activated extensions ≥ cap |
+| Cap | `product_config.extension_max` = 3. A 4th needs an ADMIN override with a new permission `collections:extension-override` and a reason code. Navix ADMIN has no `collections:*` permissions today (`rbac.ts:236-254`) |
+| Charge | From the loan's pricing snapshot: fee 10% + GST 18% on the fee + principal × 1% × 14, plus late charge accrued up to the payment's bank `paid_on` (2%/day on principal; the 30-day cap counts penal days over the loan's whole life). Example: ₹1,000, 3 days late = ₹318 |
+| Quote | Pure function `ExtensionQuote.of(loan, paidOn)` using the `LoanMath` helpers. Pay-by = the officer-chosen date. The offer expires at 23:59:59 IST on pay-by |
+| New due date | Previous due date + 14, 23:59:59 IST. The late-charge window restarts from the new due date |
+| Money model | `outstanding(asOf) = principal − verified REPAYMENT principal + late charge of the current window`. Interest is prepaid at disbursal (DhanNow engine), so moving the due date never adds interest by itself. Extension money is never in the "verified" sum. This fixes the navix `RepaymentService.breakdown` (L:322-343) coupling the backend audit found |
+| Credit level | A loan with any activated extension closes with reason `EXTENDED_NO_CHANGE` |
 
-*Workflow* (reuses the navix collections maker-checker, `CollectionPaymentService` / `SettlementService` pattern):
-1. **Offer:** COLLECTION_EXECUTIVE/HEAD runs `POST /api/collections/cases/{caseId}/extensions` `{payBy, reasonCode, callNote}` → `loan_extension` PROPOSED (quote frozen for `payBy`).
-2. **Approve:** COLLECTION_HEAD, with proposer ≠ approver (`SOD_VIOLATION`, same check as `SettlementService.approve`) → APPROVED. The borrower gets SMS + push + in-app notification "Confirm your loan extension".
-3. **Borrower consent:** in the app (board C12), `GET /api/loans/{id}/extensions/pending` → `POST .../{extId}/accept` with OTP (`otp_challenge` purpose `EXTENSION_CONSENT`) → ACCEPTED, stores consent evidence + addendum version.
-4. **Payment, either side:**
-   - (a) borrower pays in the app (C12b): existing `POST /api/loan/{loanId}/repayments` with new field `purpose=EXTENSION`, `extensionId`;
-   - (b) officer logs it: `CollectionPaymentService.raise` with new `CollectionPaymentKind.EXTENSION` (+ `extensionId`), which goes straight to `PENDING_ACCOUNTANT`.
+*State machine* (`loan_extension.status`)
 
-   Both → `PAYMENT_PENDING`.
-5. **Verify:** ACCOUNTANT `validate` / `RepaymentService.verifyPayment` checks amount ≥ quote recomputed for the bank `paid_on` date.
-   - **Equal:** `ExtensionService.activate`, idempotent on `extensionId`.
-   - **Less:** cannot extend. The accountant chooses "credit as part payment" or reject with remarks.
-   - **More:** extend + `refund_case` for the excess.
-   - Verification is **the only path that moves the due date**. It replaces the navix behaviour where `validate` always calls `loanDirectory.creditCollectionPayment` (principal credit): for kind `EXTENSION` it calls the new `LoanDirectory.applyExtension(...)` instead, so the principal ledger is untouched.
-6. **Activate:**
-   - new `repayment_schedule` version (kind `EXTENSION`, parent = previous);
-   - `loan.due_date/due_at` += 14;
-   - `loan.extension_count`++;
-   - lifecycle → `ACTIVE`; penal clock reset;
-   - income booked: fee + interest as income, GST as payable, late charge as penal income, in `payment_allocation` (components `EXT_FEE`, `EXT_GST`, `EXT_INTEREST`, `PENAL`);
-   - `EXTENSION_ADDENDUM` PDF rendered (new due, charges, APR for the extension) and stored in `loan_document`;
-   - notification "Loan extended to …";
-   - `balance_adjustment` row (schedule v→v+1, approver, verifier, reason, consent).
-7. **End states:** `REJECTED` (Head), `EXPIRED` (pay-by passed without a verified payment, so the officer re-offers with a fresh quote), `CANCELLED` (officer/borrower before payment).
+- **Main path:** `OFFERED` → `APPROVED` → `ACCEPTED` → `PAYMENT_PENDING` → `ACTIVE`.
+- **Side exits:**
+  - `OFFERED` → `REJECTED` (Head) or `CANCELLED` (officer);
+  - `APPROVED` / `ACCEPTED` → `EXPIRED` (sweep at 00:05 IST after pay-by; also treated as expired on read) or `CANCELLED` (officer, or automatically when the loan becomes ineligible or is closed);
+  - `ACCEPTED` → `DECLINED` (borrower "Not now" / "I didn’t ask");
+  - `PAYMENT_PENDING` → `ACCEPTED` (payment rejected, retry until pay-by).
+- **Guard on every transition:** an allowed-transition map plus the loan advisory lock (`MandateDebitRepository.lockLoan`, the same lock NACH uses, L/repository:65) plus `@Version`. Illegal transitions return 409 `STALE_STATE` with the current state.
 
-*Data* (V103):
-- **`loan_extension`:** `id uuid`, `loan_id`, `collection_case_id`, `seq int`, `status` (`PROPOSED`, `APPROVED`, `ACCEPTED`, `PAYMENT_PENDING`, `ACTIVE`, `REJECTED`, `EXPIRED`, `CANCELLED`), `from_due_date`, `to_due_date`, `pay_by date`, `fee_paise`, `gst_paise`, `interest_paise`, `penal_paise_quoted`, `total_paise_quoted`, `pricing_version_id`, `reason_code`, `call_note`, `proposed_by/at`, `approved_by/at`, `accepted_at`, `consent_evidence jsonb`, `payment_id`, `collection_payment_id`, `verified_by/at`, `override_by`, `override_reason`, `@Version`.
-  - Unique `(loan_id, seq)`.
-  - Partial unique index: at most one non-terminal extension per loan.
-- **`loan`:** `extension_count int default 0`, `original_due_date`.
-- **`product_config`:** `extension_max int default 3`, `extension_enabled bool`.
-- **Collections:** `collection_payment.extension_id` FK; `collection_payment_kind` += `EXTENSION`.
-- **Repayments:** `payment.purpose` (`REPAYMENT` | `EXTENSION`) + `extension_id`.
+*Backend changes (exact hooks in navix `main`)*
 
-*Staff console* (wireframe row G):
-- **G1 Collections worklist:** "Extensions n/3" column, filters (Extension offered, Extension payment pending, Extended, Cap reached), KPI tile.
-- **G2 Case:** "Offer extension" panel with the server quote, pay-by date, reason code and call note. "Log payment" gets kind *Extension charge*.
-- **G3 Approvals:** Collection Head approval queue; Accountant extension-payment queue (UTR match, required vs received, outcome).
-- **G4 Customer 360 / loan:** schedule versions, extension income, addenda.
-- **Also:** loans register + dashboards gain an "Extended" segment and an "extension income" series; reports add an extension register (count, charges, cohort roll-rates).
+1. **Migration** (DhanNow V103):
+   - `loan_extension` table, columns as in the earlier draft plus `status`, `@Version`, `seen_by_borrower_at`, `declined_reason`;
+   - `unique(loan_id, seq)` and a partial unique index of one non-terminal extension per loan, so a second concurrent offer fails at the database;
+   - alter `collection_payment_kind_check` (M/V47:49-50) to add `EXTENSION`; add `collection_payment.extension_id`;
+   - `payment.purpose` (`REPAYMENT`/`EXTENSION`, default `REPAYMENT`) + `payment.extension_id`, with a check constraint;
+   - `loan.extension_count`, `loan.original_due_date`;
+   - `loan_due_history(loan_id, seq, due_date, due_at, from_at, to_at)` so DPD and lateness per cycle survive the move.
+2. **`CollectionPaymentKind`** (C/entity:8-27): add `EXTENSION`. `needsHeadApproval()` stays false; the Head approved the offer.
+   - `CollectionPaymentService.raise` (C/service:85-127) for `EXTENSION` requires an `ACCEPTED` extension on that case and sets the amount from the server quote for `paidOn`. A mismatched amount is rejected with 422 `EXTENSION_AMOUNT_MISMATCH`, never silently accepted.
+   - Fix the hard-coded kinds message at `CollectionsController:271`.
+3. **`CollectionPaymentService.validate`** (C/service:174-208):
+   - for `EXTENSION`, call the new `LoanDirectory.applyExtension(...)` instead of `creditCollectionPayment`;
+   - take the loan advisory lock and re-read the status under it. Today's `ledgerPaymentId` null check is not concurrency-safe: no `@Version`, no lock anywhere;
+   - add `@Version` to `CollectionPayment`.
+4. **`LoanDirectory` port + `LoanDirectoryAdapter`** (common :98-106, L:233-249): new `applyExtension(loanId, extensionId, paidOn, txnRef, proofRef, source)`. In one transaction under the loan lock it:
+   - writes the `payment` row (`purpose=EXTENSION`, VERIFIED, `payment_allocation` `EXT_FEE`/`EXT_GST`/`EXT_INTEREST`/`PENAL`);
+   - closes the current `loan_due_history` row and opens the next;
+   - sets due += 14 and `extension_count`++;
+   - resets lifecycle to `ACTIVE` and clears `IN_COLLECTIONS`. `markInCollections` (L:208-225) is one-way today, so an extended loan would otherwise never get reminders (`PaymentReminderScheduler:63` scans only ACTIVE/OVERDUE);
+   - writes a new schedule version, the `balance_adjustment` row, and outbox rows for the addendum PDF and notifications.
+
+   This is the only code path that moves a due date.
+5. **`RepaymentService`** (L):
+   - `recordPayment` (:72-111) takes a `purpose`. The txnRef dedupe (:87-92) becomes purpose-aware: a UTR already used for one purpose fails with 422 `UTR_USED_FOR_OTHER_PURPOSE` instead of returning the other row. The `partial` flag is skipped for `EXTENSION`.
+   - `verifyPayment` (:151-166) branches: `EXTENSION` → `applyExtension`; it refuses to revive a `REJECTED` row (existing bug at :155).
+   - The sums at :311, :375-376 and `latestVerifiedPaidOn` (:477-482) filter `purpose=REPAYMENT`.
+   - `breakdown` is rewritten to the money model above.
+6. **New `LoanExtensionService`** (navix-collections) + endpoints in `CollectionsController`. The BFF proxy only forwards GET/POST, so endpoints are GET/POST only.
+
+   | Endpoint | Role / rule |
+   |---|---|
+   | `GET /cases/{id}/extensions` | State, history and eligibility with a reason code |
+   | `POST /cases/{id}/extensions` | Offer: COLLECTION_EXECUTIVE via `assertCaseAccessible`; the case is auto-opened if missing (`CollectionsService.openCase` is idempotent) |
+   | `POST /extensions/{id}/cancel` | Officer |
+   | `POST /extensions/{id}/approve` | COLLECTION_HEAD; proposer ≠ approver, copied from `SettlementService.approve` C:134-160; re-checks eligibility |
+   | `POST /extensions/{id}/reject` | Reason picklist + note |
+   | `POST /extensions/{id}/resend` | Re-sends the borrower notification, rate-limited |
+
+   `SettlementService.propose` (C:111) refuses while an extension is non-terminal, and offering refuses while a settlement is open.
+7. **Borrower endpoints:**
+   - `GET /api/loans/{id}` gains `pendingExtension{id, status, quoteForToday, payBy, newDueDate, seq, cap}` and `extensions[]`;
+   - `POST /api/loans/{id}/extensions/{extId}/seen` (sets `seen_by_borrower_at`, shown to the officer);
+   - `/otp` uses `OtpVerifierPort.request` with the new purpose `LOAN_EXTENSION`, copying `ApplicationVerificationService` :2996-3027, with the mobile resolved server-side;
+   - `/accept {otp, consentVersion}` is idempotent;
+   - `/decline {reason}`;
+   - payment reuses `POST /api/loan/{loanId}/repayments` with `purpose=EXTENSION, extensionId`.
+8. **Schedulers:**
+   - `ExtensionExpirySweep` 00:05 IST, idempotent.
+   - The reminder scheduler needs no change once the status resets.
+   - NACH (flag off, code kept): `MandateDebitScheduler.shouldPresent` (:147-155) and `DebitService.prepare` (:270-273, :323) count attempts only since the current due cycle. Activation is refused while a debit is in flight. A debit that lands after an extension is an ordinary REPAYMENT.
+   - The single-instance scheduler issue (`SchedulingConfig` has no ShedLock) is fixed by the `scheduler_lock` table from Phase 3.
+9. **Notifications:**
+   - events `ExtensionOfferedEvent`, `ExtensionApprovedEvent`, `ExtensionAcceptedEvent`, `ExtensionPaymentRecordedEvent`, `ExtensionActivatedEvent`, `ExtensionExpiredEvent`, `ExtensionDeclinedEvent`;
+   - types after `NotificationType.java:139`:
+
+     | Type | Audience | Channels |
+     |---|---|---|
+     | `EXTENSION_TO_APPROVE` | Heads | IN_APP |
+     | `EXTENSION_OFFERED` | Borrower | IN_APP + EMAIL + PUSH; SMS once DLT `DN_EXT_OFFER` is approved |
+     | `EXTENSION_ACTIVATED` | Borrower | IN_APP + EMAIL + PUSH + SMS |
+     | `EXTENSION_EXPIRED` / `DECLINED` | Assigned executive | IN_APP |
+
+   - templates after `NotificationTemplates.java:331`;
+   - the in-app row is written through the outbox in the same transaction as the state change;
+   - the bell deep-link carries `loanId` plus a new category `EXTENSION` (borrower → extension screen; staff → `/staff/collections?open=<loanId>&tab=collections`).
+10. **Reports:** add `purpose='REPAYMENT'` (or an explicit extension-income line) to every query that reads verified `payment`, so extension money is never counted as recovery:
+    - `CollectionQueries` 38-39, 72, 83-84, 96-98, 118, 143, 207-208;
+    - `MetricSql` 66-67, 162-163;
+    - `ReportService` 300, 303, 335, 441, 474-475, 505-506, 532, 722, 749-754, 939-940, 1168-1169, 1203, 1361-1362, 1396;
+    - `TransactionLedgerQuery` 71-79 (new row type `EXTENSION`).
+
+    A guard test greps `from payment` / `join payment` and fails if a query has no purpose handling.
+11. **Worklist:** extended loans stay visible. `listCollectible`'s +7 horizon (L:155) and `CollectionsWorklistQuery:81` include loans with `extension_count > 0`, and `upcomingWatchlist`'s case filter (C:548-553) no longer hides them. New sortable column `extState` + facet.
+
+*Staff console (exact files; wireframe row G)*
+
+| Wireframe | Change |
+|---|---|
+| G1 | `app/staff/collections/page.tsx`: `WorklistRow` (`applications.ts:4214`) + `toRow`, `SORT_KEYS`/`FILTER_KEYS`/`COLUMN_LABEL`, column count 19→20 (645, 781); facet on `extState`; DhanNow bucket cards |
+| G2 | `components/staff/customer-360/collections-tab.tsx`: new `ExtensionSection` between Interactions and Payments (143-167), modelled on `SettlementSection` (315-349), gated `canInteract`, refreshing through `changed()` (84-91). Also: "Extensions n of 3" in the Collections field grid; "Requested extension" added to `OUTCOMES` (36-37); `RecordPaymentCard` gets kind `EXTENSION` through `COLLECTION_PAYMENT_KINDS` (`applications.ts:4305-4315`) with the amount locked to the quote and `extensionId` sent; settlement section disabled while an extension is open |
+| G3 | `app/staff/applications/page.tsx` RoleQueues (COLLECTION_HEAD, :187): new `ExtensionApprovalQueue` in `collection-payments.tsx`, using `QueueShell` + a 10 s poll + the settlement `ConfirmDialog`/`isOwnSettlementProposal` pre-flight. Fix the shared spinner (one pending flag per row) and the settlement-only copy (201, 208-212) |
+| G4 | Accountant: `RepaymentVerifyQueue` and `CollectionPaymentValidationQueue` show an "Extension" badge, required vs received for `paid_on`, and the new due date preview. **Widen `onDone` invalidation** (250) to `staff-repayments`, `staff-loan-out`, `customer-detail`, `collections-worklist` and `collections-case-by-loan`; today only the queue refreshes |
+| G5 | `repayment-tab.tsx`: original vs current due in `RepaymentDate`, an Extensions table, a Kind column in Payments, and `buildLedger` (`loan-ledger.ts:53-82`) excluding extension money. KPIs (`repayment-tab.tsx:341-344`, `customer-earnings`) count REPAYMENT only. `loan-behaviour.ts` judges each cycle against `loan_due_history` |
+
+Also:
+- **Known bug:** `admin-log-payment.tsx:133` invalidates with a string key while the tab uses a number. Fix it while here.
+- **Base:** staff UI work is done on navix `main` markup with the app_navix kit applied (see Phase 0).
 
 *Borrower app* (row C):
-- **C11 Notifications:** a "Confirm your loan extension" item.
-- **C12 Confirm extension:** breakdown, new due date, total cost so far, consent checkbox, OTP.
-- **C12b Pay extension charge:** amount for today, UPI/bank, UTR, screenshot.
-- **C12c Extension verified.**
-- **C1b Dashboard, extended:** "Extended 1 of 3", new due date, milestone ring for the new cycle, level stays.
-- **Elsewhere:** D6 Loan account shows "Extensions used n of 3" + addenda. C2 Overdue tells the borrower to call collections (no self-serve).
+- **Screens:** C12 confirm (OTP), C12b pay, C12c verified, C1b extended dashboard, D6 "Extensions used n of 3" + addenda, C2 overdue "call collections".
+- **C12d:** defines every state (S1–S9).
+- **Rendering rule:** the app renders **from server status only**. It refetches on open, on resume, on pull-to-refresh and on push arrival; the notification only rings the doorbell. Unknown enum values decode to `UNKNOWN` and render S9, never a crash. (The navix web crashes on unknown payment statuses at `repay/page.tsx:526-544` and `transactions/page.tsx:140-141`; the app must not repeat that, and a contract test covers it.)
 
-*Website:* `repayment-policy.html` and `loan-information.html` get an "Extending your loan" section with the same numbers (W5/W6 parity tests cover it).
+*Website:* `repayment-policy.html` and `loan-information.html` get an "Extending your loan" section with the same numbers (W5/W6 parity tests).
+
+*Extension corner cases* (each one is a test `EXT-xx`; together with CC-67…CC-71 they cover every actor × failure point)
+
+| # | Situation | Decided behaviour |
+|---|---|---|
+| EXT-01 | Two officers offer on the same loan at once | DB partial unique index; the second gets 409 `EXTENSION_ALREADY_OPEN` with the first offer shown |
+| EXT-02 | Offer on a loan that isn’t due yet / already closed / on hold / has a pending repayment / an open settlement / a debit in flight | 422 with a specific reason code; the panel shows the reason instead of the Offer button |
+| EXT-03 | Officer not assigned to the case | 422 `CASE_NOT_ASSIGNED` (existing check); the panel says who owns it |
+| EXT-04 | Head tries to approve their own offer (working as Executive) | Button replaced by "You offered this"; server 422 `SOD_VIOLATION` anyway |
+| EXT-05 | Head approves after the pay-by day | Server refuses (offer expired) and the officer re-offers with a fresh quote |
+| EXT-06 | Borrower repays in full, or the loan becomes ineligible, while an offer is open | The offer auto-cancels in the same transaction as the repayment verification; borrower sees S4; any extension payment goes to a refund case |
+| EXT-07 | Borrower never opens the app | The offer expires at pay-by (S2 if opened later); the officer sees "not opened yet" and can Resend (max 3/day) |
+| EXT-08 | Push not delivered (no FCM / notifications off) | The dashboard banner (S1) comes from the loan API, so the offer is visible on next app open regardless |
+| EXT-09 | App open on an old screen when staff act | Refetch on resume; every money action carries the extension `version`; a stale submit gets 409 → the app re-renders the current state |
+| EXT-10 | Borrower opens an old notification after things moved on | The screen is chosen by current server status (S2/S3/S4); notification text is never trusted |
+| EXT-11 | OTP not received / wrong 5× / lockout | Existing OTP limits; S5; the offer stays valid until pay-by |
+| EXT-12 | App killed after OTP verified, before the response | Accept is idempotent; the retry returns ACCEPTED |
+| EXT-13 | Borrower declines or says "I didn’t ask" | `DECLINED` + reason; the officer is notified; "I didn’t ask" also opens a complaint (CC-71) |
+| EXT-14 | Borrower pays the extension through the normal Repay screen instead of C12b | Repay shows a banner while an extension is ACCEPTED: "Pay ₹318 to extend, or ₹1,060 to repay in full". The Accountant can "Treat as extension payment" when the amount matches (audited) |
+| EXT-15 | Borrower pays and the officer also logs the same payment | Same UTR → one payment (purpose-aware dedupe). Different UTRs → the second goes to a refund case; only one payment can activate an extension |
+| EXT-16 | Wrong amount | Less → "Count as part payment" or reject. More → extend + refund case for the excess. Never auto-extend on a short payment |
+| EXT-17 | Paid on time, verified after pay-by | Allowed: the quote and on-time status follow bank `paid_on` (S6 copy says so) |
+| EXT-18 | Paid after pay-by | The quote is recomputed for that `paid_on`. If short → EXT-16. The offer may already be EXPIRED → the Accountant gets "Re-open for this payment" (Head approval required) or refund |
+| EXT-19 | Payment rejected | The borrower sees S7 with the reason and can resubmit until pay-by; state returns to ACCEPTED |
+| EXT-20 | Two accountants validate at once / double click | Loan advisory lock + `@Version` → the second gets "Already verified by … at …"; no double date move |
+| EXT-21 | Scheduler runs mid-verification (reminder, expiry sweep, NACH) | All take the same loan lock; the expiry sweep skips `PAYMENT_PENDING`; a debit in flight blocks activation (EXT-02) |
+| EXT-22 | Addendum PDF or notification fails after activation | Activation commits; the outbox retries PDF and notifications with backoff; the borrower sees "Extension letter being prepared"; an alert fires after 3 failures |
+| EXT-23 | Activation succeeds but the staff console still shows the old due date | Widened invalidation (G4) + 8 s polls; the pop-up re-reads after any mutation |
+| EXT-24 | Borrower’s app version predates extensions | `/app/config` `minVersion` forces an update; an older app never shows the banner, and S9 covers malformed data |
+| EXT-25 | Cap reached | Offer button replaced by "Cap reached: repay, settle or ADMIN override"; the override needs `collections:extension-override` + a reason and is audited |
+| EXT-26 | Late charge 30-day cap across cycles | Lifetime cap on penal days per loan; the quote shows ₹0 late charge once reached |
+| EXT-27 | Extension and dispute | A dispute raised while an extension is open cancels the offer (not an ACTIVE extension); offers are blocked while disputed |
+| EXT-28 | Loan behaviour / credit level | Per-cycle DPD from `loan_due_history`; any activated extension → no level upgrade; reports show lateness per cycle |
+| EXT-29 | Day boundary | All dates are IST via `Clock`; pay-by ends at 23:59:59 IST; the sweep runs at 00:05 so no request races the boundary |
+| EXT-30 | Reports and dashboards | The guard test fails if any `payment` query lacks purpose handling; extension income has its own series and ledger type |
 
 **EMI** (flag `emi-conversion`; V103 `emi_conversion`):
 - COLLECTION_EXECUTIVE / COLLECTION_HEAD *requests*; **ADMIN only approves** (RBAC server-side).

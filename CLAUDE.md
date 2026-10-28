@@ -38,7 +38,7 @@ All money is integer paise. All numbers come from versioned config (`pricing_con
 ## Status
 
 1. **Now:** wireframe under user review (app_navix UI kit, cobalt-blue accent). No product code is written until the user approves it.
-2. **Next:** Phase 0 of `docs/PLAN.md`: fork navix `origin/app_navix` (`ae244485`) into `backend/` and `web/` (staff console only), baseline all navix tests green, then follow the phases in order.
+2. **Next:** Phase 0 of `docs/PLAN.md`: fork navix `main` (`67d8f675`), merge the 11 `app_navix` UI commits on top, put `backend/` and `web/` (staff console only) in place, get all navix tests green, then follow the phases in order.
 
 ## Decisions already made (do not re-ask)
 
