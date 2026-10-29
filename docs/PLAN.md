@@ -187,6 +187,13 @@ The wireframe is the app's spec, so it is fixed first and re-published to https:
 
 1. In `dhannow/`: export navix `main` (`git archive 67d8f675`), then copy `backend/`, `frontend/` → `web/`, `Dockerfile.backend*` and `docker-compose*.yml`. Merge the 11 `origin/app_navix` commits (`49067796`…`ae244485`) on a branch, resolve conflicts in favour of `main` behaviour and `app_navix` styling, and run both test suites before continuing.
    - Exclude `target/`, `node_modules/`, `.env`, `.code-review-graph/` and `docs/claude-in-chrome/` (it contains credentials).
+   - **The repo is public (user decision, 2026-10-30), so scrub before the first push:**
+     - staff password hashes seeded in V17, V19, V42 and V55: blank them and use `BootstrapAdminRunner` (Phase 9, done here instead);
+     - remove `aws.md`, `backend/start-aws.sh` and `docs/github-actions-aws-backend-deploy.md` (navix AWS account IDs);
+     - replace the committed default `navix.auth.secret` in `ProductionConfigGuard` with a non-usable dev value; the guard keeps refusing it in prod;
+     - test fixtures with bcrypt hashes are kept only if they are test-only values.
+
+     Run `gitleaks detect` (plus a grep for 12-digit AWS IDs and bcrypt `$2a$` strings) over the tree; the push is blocked until it is clean. CI runs the same scan on every PR.
    - Record the navix commit hash (`67d8f675`) in `docs/UPSTREAM.md` so later navix fixes can be cherry-picked.
 2. Pull the wireframe boards into `docs/wireframes/` (Artifact read of every `project/*.dc.html` + `canvas.json`). Move the difference doc and the DhanNow `.docx` sources into `docs/product/`.
 3. Delete the `backend/.env` trap:

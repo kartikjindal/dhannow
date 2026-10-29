@@ -44,7 +44,7 @@ All money is integer paise. All numbers come from versioned config (`pricing_con
 
 | Topic | Decision |
 |---|---|
-| Repo | Monorepo |
+| Repo | Monorepo, **public** on GitHub. Navix-derived code is scrubbed of seeded hashes, AWS IDs and default secrets before the first push; CI runs gitleaks |
 | Namespace | Java `com.navix.*` / `navix-*` modules and `NAVIX_*` env vars stay; only the user-visible brand changes |
 | Web | Static site `dhannow.com` (`site/`) + Android app for borrowers (no borrower web login in v1) + forked staff console at `staff.dhannow.com` |
 | Infra | New separate AWS stack (staging + prod) |
