@@ -76,9 +76,9 @@ const _paths = [
 
 void main() {
   setUp(() async {
-    api.latency = Duration.zero;
-    api.offline = false;
-    api.setScenario(Scenario.newUser);
+    demo.latency = Duration.zero;
+    demo.offline = false;
+    demo.setScenario(Scenario.newUser);
     await api.sendOtp('9876543210'); // resets the demo's wrong-code counter
     savedSteps.clear();
   });
@@ -98,7 +98,7 @@ void main() {
       });
     }
     testWidgets('view mode (E2) lays out at ${width.toInt()}dp × $scale', (t) async {
-      api.setScenario(Scenario.onboarding);
+      demo.setScenario(Scenario.onboarding);
       await pumpAt(t, '/signup/employer', width: width, scale: scale);
       expect(find.text('You’ve already done this step'), findsOneWidget);
       await scrollAll(t);
@@ -191,7 +191,7 @@ void main() {
   testWidgets('an offline save opens E3 and keeps the step', (t) async {
     await pumpAt(t, '/signup/employment');
     await t.tap(find.text('Salaried'));
-    api.offline = true;
+    demo.offline = true;
     await tapText(t, 'Continue');
     expect(find.text('route:/offline'), findsOneWidget);
     expect(api.onboardingDone, isNot(contains('employment')));
@@ -240,11 +240,11 @@ void main() {
     await settle(t);
     await tapText(t, 'Confirm & submit');
     expect(find.text('Your application is with our credit team'), findsOneWidget);
-    expect(api.scenario, Scenario.inReview);
+    expect(demo.scenario, Scenario.inReview);
   });
 
   testWidgets('E2: a finished step opens read-only and Edit makes it a form', (t) async {
-    api.setScenario(Scenario.onboarding);
+    demo.setScenario(Scenario.onboarding);
     await pumpAt(t, '/signup/employer');
     expect(find.text('Acme Logistics Pvt Ltd'), findsOneWidget);
     await tapText(t, 'Edit');
@@ -253,7 +253,7 @@ void main() {
   });
 
   testWidgets('E2: a locked step shows Verified and no Edit', (t) async {
-    api.setScenario(Scenario.onboarding);
+    demo.setScenario(Scenario.onboarding);
     await pumpAt(t, '/signup/start');
     expect(find.text('VERIFIED'), findsOneWidget); // DnPill upper-cases
     expect(find.text('Edit'), findsNothing);
@@ -262,7 +262,7 @@ void main() {
   });
 
   testWidgets('A13: answering returns the application to the credit team', (t) async {
-    api.setScenario(Scenario.question);
+    demo.setScenario(Scenario.question);
     await pumpAt(t, '/credit-question');
     await tapText(t, 'Get my question');
     await t.tap(find.text('ICICI Bank'));

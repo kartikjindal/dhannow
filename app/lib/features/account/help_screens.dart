@@ -38,16 +38,16 @@ class SupportScreen extends StatelessWidget {
               first: true,
               icon: Icons.call_rounded,
               title: 'Call or WhatsApp',
-              detail: '${Brand.supportPhone} · ${Brand.supportHours}',
+              detail: '${api.config.support.phone} · ${Brand.supportHours}',
               trailing: const Icon(Icons.copy_rounded, size: 18, color: DnTokens.slate),
-              onTap: () => copyText(context, 'Phone number', Brand.supportPhone),
+              onTap: () => copyText(context, 'Phone number', api.config.support.phone),
             ),
             DnListRow(
               icon: Icons.mail_rounded,
               title: 'Email us',
-              detail: '${Brand.supportEmail} · We reply within one business day.',
+              detail: '${api.config.support.email} · We reply within one business day.',
               trailing: const Icon(Icons.copy_rounded, size: 18, color: DnTokens.slate),
-              onTap: () => copyText(context, 'Email', Brand.supportEmail),
+              onTap: () => copyText(context, 'Email', api.config.support.email),
             ),
           ]),
           const Padding(padding: EdgeInsets.only(bottom: 8, left: 4), child: DnCaps('Raise a grievance')),
@@ -55,11 +55,11 @@ class SupportScreen extends StatelessWidget {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               const Text('Acknowledged within 2 working days, reviewed within 5, resolved within 15 calendar days where practicable.', style: DnText.body),
               const SizedBox(height: 12),
-              const Text('Grievance officer: ${Brand.grievanceName}', style: DnText.strong),
+              Text('Grievance officer: ${api.config.grievance.name}', style: DnText.strong),
               const SizedBox(height: 8),
-              const DnCopyRow(label: 'Phone', value: Brand.grievancePhone),
+              DnCopyRow(label: 'Phone', value: api.config.grievance.phone),
               const SizedBox(height: 8),
-              const DnCopyRow(label: 'Email', value: Brand.grievanceEmail),
+              DnCopyRow(label: 'Email', value: api.config.grievance.email),
               const SizedBox(height: 12),
               const Text(_escalation, style: DnText.hint),
               if (api.signedIn) ...[
@@ -179,8 +179,8 @@ class _ComplaintsScreenState extends State<ComplaintsScreen> {
                 ),
                 const SizedBox(height: 12),
               ],
-              const Text(
-                'Not happy with the answer? Escalate to the Grievance Officer, ${Brand.grievanceName} (${Brand.grievanceEmail}), then to the lender, then RBI CMS (cms.rbi.org.in).',
+              Text(
+                'Not happy with the answer? Escalate to the Grievance Officer, ${api.config.grievance.name} (${api.config.grievance.email}), then to the lender, then RBI CMS (cms.rbi.org.in).',
                 style: DnText.hint,
               ),
             ]),
@@ -217,9 +217,8 @@ class _NewComplaintScreenState extends State<NewComplaintScreen> {
   Future<void> _submit() async {
     setState(() => _busy = true);
     try {
-      // ponytail: raiseComplaint has no loan field yet, so the picked loan leads the message.
-      final text = _message.text.trim();
-      final c = await api.raiseComplaint(subject: _category!, body: _loan == null ? text : 'Loan ${_loan!.accountNo}\n$text');
+      // One Idempotency-Key per submit inside the api: tapping Submit again after a failure is a retry.
+      final c = await api.raiseComplaint(subject: _category!, body: _message.text.trim(), loan: _loan);
       if (!mounted) return;
       showDnToast(context, 'Complaint raised. Reference ${c.id}');
       context.canPop() ? context.pop() : context.go('/complaints');

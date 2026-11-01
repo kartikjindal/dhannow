@@ -1,12 +1,37 @@
 import 'package:flutter/material.dart';
 
+import 'core/api/api.dart';
+import 'core/api/http_api.dart';
 import 'core/router.dart';
 import 'core/theme/theme.dart';
 
-void main() => runApp(const DhanNowApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final server = api;
+  if (server is HttpApi) {
+    await server.init();
+    // E5: the session could not be renewed.
+    server.onSessionExpired = () => router.go('/session-expired');
+  }
+  runApp(const DhanNowApp());
+}
 
-class DhanNowApp extends StatelessWidget {
+class DhanNowApp extends StatefulWidget {
   const DhanNowApp({super.key});
+
+  @override
+  State<DhanNowApp> createState() => _DhanNowAppState();
+}
+
+class _DhanNowAppState extends State<DhanNowApp> {
+  // Server state is the only truth: refetch whenever the borrower comes back to the app.
+  final _life = AppLifecycleListener(onResume: () => api.refresh());
+
+  @override
+  void dispose() {
+    _life.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => MaterialApp.router(

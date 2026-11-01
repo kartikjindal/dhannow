@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api/api.dart';
 import '../../core/format.dart';
+import '../../core/links.dart';
 import '../../core/theme/theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/widgets.dart';
@@ -34,6 +35,7 @@ class _LoansScreenState extends State<LoansScreen> {
 
   @override
   Widget build(BuildContext context) => DnPage(
+        onRefresh: api.refresh,
         title: 'Your loans',
         subtitle: 'Every loan you’ve applied for, with its current status.',
         children: [
@@ -142,9 +144,20 @@ class _Documents extends StatelessWidget {
       builder: (context) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         DnDocRow(name: doc.name, meta: doc.meta, first: true),
         const SizedBox(height: 14),
-        DnButton('Download', icon: Icons.download_rounded, block: true, onPressed: () => showDnToast(context, 'Demo: ${doc.name} downloaded')),
-        const SizedBox(height: 8),
-        DnButton.outline('Share', icon: Icons.share_rounded, block: true, onPressed: () => showDnToast(context, 'Demo: share sheet opens here')),
+        DnButton('Download', icon: Icons.download_rounded, block: true, onPressed: () async {
+          if (demoControls) return showDnToast(context, 'Demo: ${doc.name} downloaded');
+          try {
+            // A 5-minute link from the server, opened in the browser (it downloads or shares from there).
+            final url = await api.documentUrl(doc);
+            if (url != null && context.mounted) await openUrl(context, url);
+          } on ApiException catch (e) {
+            if (context.mounted) showApiError(context, e);
+          }
+        }),
+        if (demoControls) ...[
+          const SizedBox(height: 8),
+          DnButton.outline('Share', icon: Icons.share_rounded, block: true, onPressed: () => showDnToast(context, 'Demo: share sheet opens here')),
+        ],
       ]),
     );
   }

@@ -119,12 +119,13 @@ Future<void> _loadFonts() async {
 }
 
 void main() {
+  api = DemoApi();
   testWidgets('render every screen', (t) async {
     await t.runAsync(_loadFonts);
     t.view.physicalSize = const Size(412 * 2, 915 * 2);
     t.view.devicePixelRatio = 2;
     addTearDown(t.view.reset);
-    api.latency = Duration.zero;
+    demo.latency = Duration.zero;
     Directory(_out).createSync(recursive: true);
     final frame = GlobalKey();
     await t.pumpWidget(RepaintBoundary(
@@ -133,7 +134,7 @@ void main() {
     ));
 
     for (final (scenario, route, name) in _shots) {
-      api.setScenario(scenario);
+      demo.setScenario(scenario);
       api.firstLaunch = scenario == Scenario.newUser;
       rootNav.currentState!.popUntil((r) => r is! PopupRoute);
       if (route == 'sheet:details') {

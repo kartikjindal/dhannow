@@ -7,16 +7,9 @@ import '../../core/theme/tokens.dart';
 import '../../core/widgets/widgets.dart';
 
 
-/// Offer-journey calls the demo [Api] lacks: DigiLocker, Aadhaar and bank-proof uploads and the
-/// eNACH hand-off are simulated with the api's latency and offline switch.
 extension OfferApi on Api {
   /// The amount picked on B1, or the level maximum when a step is opened directly.
   Future<Quote> chosenQuote() async => quote(chosenPaise ?? (await creditLevel()).maxPaise);
-
-  Future<void> simulate() async {
-    if (latency > Duration.zero) await Future<void>.delayed(latency);
-    if (offline) throw const ApiException('OFFLINE');
-  }
 }
 
 /// Primary-button state for one API call: locks while in flight, sends OFFLINE to E3 and shows
@@ -31,7 +24,13 @@ mixin Busy<T extends StatefulWidget> on State<T> {
       return true;
     } on ApiException catch (e) {
       if (mounted) {
-        e.code == 'OFFLINE' ? context.push('/offline') : showDnToast(context, e.message, error: true);
+        if (e.code == 'OFFLINE') {
+        context.push('/offline');
+      } else if (e.code == 'SERVER_ERROR') {
+        context.push('/error', extra: e.requestId);
+      } else {
+        showDnToast(context, e.message, error: true);
+      }
       }
       return false;
     } finally {

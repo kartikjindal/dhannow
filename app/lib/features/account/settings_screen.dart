@@ -90,7 +90,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     setState(() => _busy = all ? '*' : devices.first.name);
     try {
       for (final d in devices) {
-        await api.signOutDevice(d.name);
+        await api.signOutDevice(d);
         if (mounted) setState(() => _signedOut.add(d.name));
       }
       if (mounted) showDnToast(context, all ? 'Other devices logged out' : 'Device logged out');

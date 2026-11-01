@@ -352,7 +352,7 @@ class _KfsScreenState extends State<KfsScreen> with Busy {
                       KvRow('Repay to', data.$2.upiId),
                     ]),
                     _section('Grievance', [
-                      const KvRow('DhanNow officer', '${Brand.grievanceName}, ${Brand.grievancePhone}, ${Brand.grievanceEmail}', first: true),
+                      KvRow('DhanNow officer', '${api.config.grievance.name}, ${api.config.grievance.phone}, ${api.config.grievance.email}', first: true),
                       const KvRow('Lender officer', 'From config'),
                     ]),
                     DnPanel(

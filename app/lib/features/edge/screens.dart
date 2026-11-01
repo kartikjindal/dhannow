@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api/api.dart';
 import '../../core/brand.dart';
 import '../../core/format.dart';
+import '../../core/links.dart';
 import '../../core/theme/theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/widgets.dart';
@@ -86,6 +87,23 @@ class _EdgeView extends StatelessWidget {
 
 void _support(BuildContext context) => context.push('/support');
 
+/// EXT-24: this build is below the server's `minVersion` (`GET /api/app/config`), so the app
+/// stops here until it is updated. Support stays one tap away.
+class UpdateRequiredScreen extends StatelessWidget {
+  const UpdateRequiredScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) => _EdgeView(
+    icon: Icons.system_update_rounded,
+    title: 'Update ${Brand.name} to continue',
+    body: 'This version of the app is no longer supported. Update it from Google Play; your loan and details are safe.',
+    primary: 'Open Google Play',
+    onPrimary: () => openUrl(context, 'https://play.google.com/store/apps/details?id=com.dhannow.app'),
+    secondary: 'Contact support',
+    onSecondary: () => _support(context),
+  );
+}
+
 /// Board E3, full-screen variant: nothing was sent, so retrying is safe.
 class OfflineScreen extends StatefulWidget {
   const OfflineScreen({super.key});
@@ -98,7 +116,8 @@ class _OfflineScreenState extends State<OfflineScreen> {
   bool _busy = false;
 
   Future<void> _retry() async {
-    if (api.offline) return showDnToast(context, 'Still no internet. Check mobile data or Wi-Fi.', error: true);
+    // The demo's switch says so at once; the real check is the journey call below.
+    if (demoControls && api.offline) return showDnToast(context, 'Still no internet. Check mobile data or Wi-Fi.', error: true);
     setState(() => _busy = true);
     await openJourney(context);
     if (mounted) setState(() => _busy = false);
@@ -518,7 +537,7 @@ class PaymentRejectedScreen extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        const Text('Call ${Brand.supportPhone} (${Brand.supportHours}) or write to ${Brand.supportEmail}.', style: DnText.hint),
+        Text('Call ${api.config.support.phone} (${Brand.supportHours}) or write to ${api.config.support.email}.', style: DnText.hint),
       ],
     );
   }
@@ -550,11 +569,11 @@ class WalkthroughScreen extends StatefulWidget {
 }
 
 class _WalkthroughScreenState extends State<WalkthroughScreen> {
-  static const _slides = [
+  static final _slides = [
     (icon: Icons.home_rounded, title: 'Your loan at a glance', body: 'Home shows the amount, the due date and one Repay button. Everything else sits behind View more.'),
     (icon: Icons.currency_rupee_rounded, title: 'Repay by UPI or bank transfer', body: 'Pay, then enter the UTR. We check it and tell you once it’s verified, then send your closure receipt.'),
     (icon: Icons.trending_up_rounded, title: 'Repay on time, borrow more', body: 'Each full on-time repayment unlocks the next level for your next loan.'),
-    (icon: Icons.support_agent_rounded, title: 'A person is always one tap away', body: 'Every screen has a way to reach us. Call ${Brand.supportPhone}, ${Brand.supportHours}.'),
+    (icon: Icons.support_agent_rounded, title: 'A person is always one tap away', body: 'Every screen has a way to reach us. Call ${api.config.support.phone}, ${Brand.supportHours}.'),
   ];
 
   final _pages = PageController();

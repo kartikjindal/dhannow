@@ -39,10 +39,10 @@ Future<void> scrollAll(WidgetTester t) async {
 
 void main() {
   setUp(() {
-    api.latency = Duration.zero;
-    api.offline = false;
+    demo.latency = Duration.zero;
+    demo.offline = false;
     api.firstLaunch = true;
-    api.setScenario(Scenario.newUser);
+    demo.setScenario(Scenario.newUser);
   });
 
   // CC-58: no overflow at 320dp × 2.0 and 412dp × 1.0.
@@ -64,7 +64,7 @@ void main() {
   });
 
   testWidgets('splash goes to the server journey route when signed in', (t) async {
-    api.setScenario(Scenario.onboarding);
+    demo.setScenario(Scenario.onboarding);
     await pumpAt(t, '/');
     await t.pump(const Duration(seconds: 1));
     await t.pumpAndSettle();
@@ -72,7 +72,7 @@ void main() {
   });
 
   testWidgets('splash offline opens E3', (t) async {
-    api.offline = true;
+    demo.offline = true;
     await pumpAt(t, '/');
     await t.pump(const Duration(seconds: 1));
     await t.pumpAndSettle();

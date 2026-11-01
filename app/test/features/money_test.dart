@@ -70,9 +70,9 @@ String get _path => _router.routerDelegate.currentConfiguration.last.matchedLoca
 
 void main() {
   setUp(() {
-    api.latency = Duration.zero;
-    api.offline = false;
-    api.setScenario(Scenario.active);
+    demo.latency = Duration.zero;
+    demo.offline = false;
+    demo.setScenario(Scenario.active);
   });
 
   // CC-58: every screen and state at 320dp × 2.0 and 412dp × 1.0.
@@ -105,7 +105,7 @@ void main() {
   for (final (path, scenario, extra) in screens) {
     for (final (w, s) in [(320.0, 2.0), (412.0, 1.0)]) {
       testWidgets('$path (${scenario.name}${extra == null ? '' : ', preview'}) lays out at ${w.toInt()}dp × $s', (t) async {
-        api.setScenario(scenario);
+        demo.setScenario(scenario);
         await _pump(t, path, width: w, scale: s, extra: extra);
         await _scroll(t);
       });
@@ -113,7 +113,7 @@ void main() {
   }
 
   testWidgets('C6: no open loan shows Nothing to repay with Borrow', (t) async {
-    api.setScenario(Scenario.closed);
+    demo.setScenario(Scenario.closed);
     await _pump(t, '/repay');
     expect(find.text('Nothing to repay'), findsOneWidget);
     await _tap(t, find.widgetWithText(DnButton, 'Borrow'));
@@ -121,7 +121,7 @@ void main() {
   });
 
   testWidgets('C6: payment being verified replaces the form', (t) async {
-    api.setScenario(Scenario.pendingVerification);
+    demo.setScenario(Scenario.pendingVerification);
     await _pump(t, '/repay');
     expect(find.text('Your payment is being verified'), findsOneWidget);
     expect(find.text('UPI reference / UTR'), findsNothing);
@@ -164,7 +164,7 @@ void main() {
   });
 
   testWidgets('C12 → C12b → C12c: OTP, pay, extended', (t) async {
-    api.setScenario(Scenario.extensionOffered);
+    demo.setScenario(Scenario.extensionOffered);
     await _pump(t, '/extension/confirm');
     expect(find.text('EXTENSION 1 OF 3'), findsOneWidget);
     final confirm = find.byWidgetPredicate((w) => w is DnButton && w.label.startsWith('Confirm and pay'));
@@ -182,7 +182,7 @@ void main() {
   });
 
   testWidgets('C12: a wrong code shows the error and stays', (t) async {
-    api.setScenario(Scenario.extensionOffered);
+    demo.setScenario(Scenario.extensionOffered);
     await _pump(t, '/extension/confirm');
     await _tap(t, find.byType(DnCheck));
     await t.enterText(await _show(t, find.descendant(of: find.byType(DnOtpField), matching: find.byType(TextField))), '000000');
@@ -203,22 +203,22 @@ void main() {
   });
 
   testWidgets('C12d: offered state opens the confirm screen; extended shows history', (t) async {
-    api.setScenario(Scenario.extensionOffered);
+    demo.setScenario(Scenario.extensionOffered);
     await _pump(t, '/card');
     await _tap(t, find.text('Review'));
     expect(_path, '/extension/confirm');
 
-    api.setScenario(Scenario.extended);
+    demo.setScenario(Scenario.extended);
     await _pump(t, '/card');
     expect(find.text('Extended 1 of 3'), findsOneWidget);
     expect(find.text('Extension 1'), findsOneWidget);
   });
 
   testWidgets('C9: offline shows a retry that recovers', (t) async {
-    api.offline = true;
+    demo.offline = true;
     await _pump(t, '/transactions');
     expect(find.text('Try again'), findsOneWidget);
-    api.offline = false;
+    demo.offline = false;
     await t.pumpAndSettle();
     expect(find.text('Loan money received'), findsWidgets);
   });
@@ -239,14 +239,14 @@ void main() {
   });
 
   testWidgets('C10: borrow again goes to choose amount', (t) async {
-    api.setScenario(Scenario.closed);
+    demo.setScenario(Scenario.closed);
     await _pump(t, '/reloan');
     await _tap(t, find.widgetWithText(DnButton, 'Borrow again'));
     expect(_path, '/loan/amount');
   });
 
   testWidgets('C13: flag off shows the empty state', (t) async {
-    api.setScenario(Scenario.overdue);
+    demo.setScenario(Scenario.overdue);
     await _pump(t, '/emi');
     expect(find.text('No repayment plan offered'), findsOneWidget);
   });

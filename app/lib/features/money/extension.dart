@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/api.dart';
-import '../../core/brand.dart';
 import '../../core/format.dart';
 import '../../core/theme/theme.dart';
 import '../../core/widgets/widgets.dart';
 import 'common.dart';
+import 'extension_status_card.dart';
 
 /// The charge lines exactly as the server quoted them (no sums in the app).
 DnBreakdown extensionBreakdown(ExtensionOffer o) => DnBreakdown(
@@ -38,7 +38,7 @@ Widget _noOffer(BuildContext context, {bool expired = false}) {
     icon: expired ? Icons.event_busy_rounded : Icons.event_repeat_rounded,
     title: expired ? 'This offer has expired' : 'No extension to confirm',
     body: expired ? 'Nothing changed on your loan. Call us for a new offer.' : 'There’s no extension offer waiting. If you need more time, call our collections team.',
-    primary: 'Call ${Brand.supportPhone}',
+    primary: 'Call ${api.config.support.phone}',
     onPrimary: () => context.push('/support'),
     secondary: 'Back to dashboard',
     onSecondary: () => context.go('/dashboard'),
@@ -59,6 +59,13 @@ class _ExtensionConfirmScreenState extends State<ExtensionConfirmScreen> {
   bool _busy = false;
   DnOtpState _otpState = DnOtpState.idle;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // The code goes out when the borrower opens the offer; errors show on Resend.
+    api.sendExtensionOtp().catchError((_) {});
+  }
 
   @override
   void dispose() {
@@ -92,7 +99,7 @@ class _ExtensionConfirmScreenState extends State<ExtensionConfirmScreen> {
 
   Future<void> _resend() async {
     try {
-      await api.sendOtp('');
+      await api.sendExtensionOtp();
       if (!mounted) return;
       _otp.clear();
       setState(() {
@@ -117,7 +124,9 @@ class _ExtensionConfirmScreenState extends State<ExtensionConfirmScreen> {
           load: api.extensionOffer,
           builder: (context, o) {
             if (o == null || loan == null) return _noOffer(context);
-            if (DateTime.now().isAfter(o.expiresAt)) return _noOffer(context, expired: true);
+            if (DateTime.now().isAfter(o.expiresAt) || o.status == ExtensionStatus.expired) return _noOffer(context, expired: true);
+            // Already confirmed, paid or ended: the status card says what is next (server state only).
+            if (o.status != ExtensionStatus.offered) return ExtensionStatusCard(loan: loan);
             return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               DnPanel(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -128,7 +137,7 @@ class _ExtensionConfirmScreenState extends State<ExtensionConfirmScreen> {
                   const SizedBox(height: 14),
                   DnFigure(paise: o.totalPaise, label: 'Pay now to extend'),
                   const SizedBox(height: 4),
-                  Text('Offered by ${o.officer}', style: DnText.hint),
+                  Text('Offered by ${o.officer ?? 'our collections team'}', style: DnText.hint),
                   const SizedBox(height: 14),
                   extensionBreakdown(o),
                 ]),
@@ -163,7 +172,16 @@ class _ExtensionConfirmScreenState extends State<ExtensionConfirmScreen> {
               const SizedBox(height: 4),
               DnButton.ghost('Not now', block: true, onPressed: () => context.go('/dashboard')),
               const SizedBox(height: 4),
-              Center(child: DnButton.text('Didn’t ask for this? Tell us', onPressed: () => context.push('/complaints/new'))),
+              Center(
+                child: DnButton.text('Didn’t ask for this? Tell us', onPressed: () async {
+                  try {
+                    await api.declineExtension('DID_NOT_ASK');
+                  } on ApiException catch (e) {
+                    if (context.mounted) return showApiError(context, e);
+                  }
+                  if (context.mounted) context.push('/complaints/new');
+                }),
+              ),
             ]);
           },
         ),
@@ -233,8 +251,10 @@ class ExtensionDoneScreen extends StatelessWidget {
         listenable: api,
         builder: (context, _) {
           final loan = api.loan;
-          final e = loan?.extensions.lastOrNull;
-          final verified = e?.status == ExtensionStatus.verified;
+          final p = loan?.pendingExtension;
+          final last = loan?.extensions.lastOrNull;
+          final verified = p == null && last?.status == ExtensionStatus.verified;
+          final e = p == null ? last : Extension(n: p.n, chargePaise: p.totalPaise, oldDue: p.oldDue, newDue: p.newDue, status: p.status);
           return DnPage(
             title: verified ? 'Extended' : 'Payment received',
             children: [
@@ -247,7 +267,7 @@ class ExtensionDoneScreen extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(
                   verified
-                      ? 'We verified your ${inr(e.chargePaise)} payment. Your loan of ${inr(loan.quote.repayPaise)} is now due on ${_due(e.newDue)}.'
+                      ? 'We verified your ${e.chargePaise == null ? '' : '${inr(e.chargePaise!)} '}payment. Your loan of ${inr(loan.quote.repayPaise)} is now due on ${_due(e.newDue)}.'
                       : 'Your due date stays ${dayMonth(e.oldDue)} until it’s verified, usually the same day.',
                   style: DnText.body,
                 ),
@@ -268,8 +288,8 @@ class ExtensionDoneScreen extends StatelessWidget {
                 const SizedBox(height: 12),
                 DnPanel(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                    Kv('Paid for extension ${e.n}', inr(e.chargePaise), first: true),
-                    Kv('Still to repay', '${inr(loan.outstandingPaise)} by ${dayMonth(loan.dueAt)}'),
+                    if (e.chargePaise != null) Kv('Paid for extension ${e.n}', inr(e.chargePaise!), first: true),
+                    Kv('Still to repay', '${inr(loan.outstandingPaise)} by ${dayMonth(loan.dueAt)}', first: e.chargePaise == null),
                     const SizedBox(height: 4),
                     if (verified) DnDocRow(name: 'Extension letter (addendum)', meta: 'New due date, charges and APR', onTap: () => showDnToast(context, 'Demo: extension letter downloaded')),
                   ]),

@@ -62,9 +62,9 @@ Future<void> _firstFrameWith<W extends Widget>(WidgetTester t) async {
 void main() {
   setUp(() {
     LevelUpCard.played.clear();
-    api.latency = Duration.zero;
-    api.offline = false;
-    api.setScenario(Scenario.active);
+    demo.latency = Duration.zero;
+    demo.offline = false;
+    demo.setScenario(Scenario.active);
   });
 
   // CC-58: every dashboard state at 320dp × 2.0 and 412dp × 1.0, scrolled through.
@@ -75,7 +75,7 @@ void main() {
     ]) {
       testWidgets('dashboard ${s.name} lays out at ${width.toInt()}dp, text ×$scale', (t) async {
         _size(t, width);
-        api.setScenario(s);
+        demo.setScenario(s);
         await t.pumpWidget(_app(scale: scale));
         await t.pumpAndSettle();
         expect(find.text('Hi, Aarav'), findsOneWidget);
@@ -86,7 +86,7 @@ void main() {
 
     testWidgets('loan details sheet lays out at ${width.toInt()}dp, text ×$scale', (t) async {
       _size(t, width);
-      api.setScenario(Scenario.extended);
+      demo.setScenario(Scenario.extended);
       await t.pumpWidget(_app(scale: scale));
       await t.pumpAndSettle();
       await _tap(t, 'View full breakdown');
@@ -129,7 +129,7 @@ void main() {
 
   testWidgets('C2: overdue shows the late charge and pays the outstanding', (t) async {
     _size(t, 412);
-    api.setScenario(Scenario.overdue);
+    demo.setScenario(Scenario.overdue);
     await t.pumpWidget(_app());
     await t.pumpAndSettle();
     expect(find.text('Your repayment is late'), findsOneWidget);
@@ -142,7 +142,7 @@ void main() {
 
   testWidgets('C1b: extended loan shows the chip and the new due date', (t) async {
     _size(t, 412);
-    api.setScenario(Scenario.extended);
+    demo.setScenario(Scenario.extended);
     await t.pumpWidget(_app());
     await t.pumpAndSettle();
     expect(find.text('Extended 1 of 3'), findsWidgets);
@@ -152,7 +152,7 @@ void main() {
 
   testWidgets('payment being verified shows the banner', (t) async {
     _size(t, 412);
-    api.setScenario(Scenario.pendingVerification);
+    demo.setScenario(Scenario.pendingVerification);
     await t.pumpWidget(_app());
     await t.pumpAndSettle();
     expect(find.text('We’re checking your payment'), findsOneWidget);
@@ -167,7 +167,7 @@ void main() {
   ]) {
     testWidgets('${s.name}: "$button" opens $route', (t) async {
     _size(t, 412);
-      api.setScenario(s);
+      demo.setScenario(s);
       await t.pumpWidget(_app());
       await t.pumpAndSettle();
       await _tap(t, button);
@@ -177,21 +177,21 @@ void main() {
 
   testWidgets('load error shows retry, and retry recovers', (t) async {
     _size(t, 412);
-    api.offline = true;
+    demo.offline = true;
     await t.pumpWidget(_app());
     await t.pumpAndSettle();
     expect(find.text('Couldn’t load your dashboard'), findsOneWidget);
     expect(find.text('Get help'), findsOneWidget);
     await _tap(t, 'Try again');
     expect(find.text('Couldn’t load your dashboard'), findsOneWidget);
-    api.offline = false;
+    demo.offline = false;
     await t.pumpAndSettle();
     expect(find.text('Hi, Aarav'), findsOneWidget);
   });
 
   testWidgets('C11: bell opens notifications and a notice opens its screen', (t) async {
     _size(t, 412);
-    api.setScenario(Scenario.overdue);
+    demo.setScenario(Scenario.overdue);
     await t.pumpWidget(_app());
     await t.pumpAndSettle();
     await t.tap(find.byTooltip('Notifications'));
@@ -222,7 +222,7 @@ void main() {
 
     testWidgets('level-up fills the next segment once', (t) async {
     _size(t, 412);
-      api.setScenario(Scenario.closed);
+      demo.setScenario(Scenario.closed);
       await t.pumpWidget(_app());
       await _firstFrameWith<DnLevelBar>(t);
       expect(t.widget<DnLevelBar>(find.byType(DnLevelBar)).level, 1);
@@ -234,11 +234,11 @@ void main() {
 
     testWidgets('reduced motion: final state on the first frame', (t) async {
     _size(t, 412);
-      api.setScenario(Scenario.closed);
+      demo.setScenario(Scenario.closed);
       await t.pumpWidget(_app(reduceMotion: true));
       await _firstFrameWith<DnLevelBar>(t);
       expect(t.widget<DnLevelBar>(find.byType(DnLevelBar)).level, 2);
-      api.setScenario(Scenario.active);
+      demo.setScenario(Scenario.active);
       await _firstFrameWith<DnCountdownRing>(t);
       expect(t.widget<DnCountdownRing>(find.byType(DnCountdownRing)).tenureDays, 14);
     });

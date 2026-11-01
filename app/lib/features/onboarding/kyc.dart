@@ -180,6 +180,13 @@ class _ConsentScreenState extends State<ConsentScreen> with Busy {
   late final _resend = ResendTimer(() => mounted ? setState(() {}) : null)..start();
 
   @override
+  void initState() {
+    super.initState();
+    // The bureau-consent code goes to the mobile on file as the step opens; Resend covers a failure.
+    api.sendOtp(_mobile, consent: true).catchError((_) {});
+  }
+
+  @override
   void dispose() {
     _code.dispose();
     _resend.cancel();
@@ -195,7 +202,8 @@ class _ConsentScreenState extends State<ConsentScreen> with Busy {
     setState(() => _submitting = true);
     await run(() async {
       try {
-        await api.verifyOtp(_code.text);
+        await api.verifyOtp(_code.text, consent: true);
+        await api.submitApplication(dob: _dob);
       } on ApiException catch (e) {
         if (!mounted) return;
         if (e.code == 'OTP_LOCKED') {
@@ -210,7 +218,6 @@ class _ConsentScreenState extends State<ConsentScreen> with Busy {
         });
         return;
       }
-      await api.submitApplication();
       savedSteps['consent'] = {'dob': isoDate(_dob!)};
       // The server answers PAN mismatch with A14 and a bureau challenge with A13 via `GET /journey`.
       if (!mounted) return;
@@ -265,7 +272,7 @@ class _ConsentScreenState extends State<ConsentScreen> with Busy {
             _resend.view(
               sent: '',
               onResend: () => run(() async {
-                await api.sendOtp(_mobile);
+                await api.sendOtp(_mobile, consent: true);
                 _resend.used();
               }),
             ),

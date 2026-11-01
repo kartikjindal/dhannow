@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/api.dart';
-import '../../core/brand.dart';
 import '../../core/format.dart';
 import '../../core/theme/theme.dart';
 import '../../core/theme/tokens.dart';
@@ -56,9 +55,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _home = _fetch()..ignore();
       });
 
-  Future<void> _refresh() {
-    _reload();
-    return _home.then((_) {}, onError: (_) {});
+  /// Pull-to-refresh: the server state first (it notifies, which reloads this page), then wait.
+  Future<void> _refresh() async {
+    await api.refresh();
+    await _home.then((_) {}, onError: (_) {});
   }
 
   @override
@@ -254,7 +254,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               '(up to ${loan.extensionCap} times). You confirm in the app before paying.',
               style: DnText.hint,
             ),
-            DnButton.text('Call ${Brand.supportPhone}', icon: Icons.call_rounded, onPressed: () => context.push('/support')),
+            DnButton.text('Call ${api.config.support.phone}', icon: Icons.call_rounded, onPressed: () => context.push('/support')),
           ]),
         ),
         DnPanel(
@@ -345,7 +345,7 @@ class _LoanCard extends StatelessWidget {
           if (late)
             ('Late charge', inr(l.latePaise))
           else if (lastExt != null)
-            ('Extension ${lastExt.n} paid', inr(lastExt.chargePaise))
+            ('Extension ${lastExt.n} paid', lastExt.chargePaise == null ? 'Done' : inr(lastExt.chargePaise!))
           else
             ('Repaid', '${q.repayPaise == 0 ? 0 : (l.repaidPaise * 100 ~/ q.repayPaise)}%'),
         ]),

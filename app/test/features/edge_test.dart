@@ -52,9 +52,9 @@ Future<void> scrollAll(WidgetTester t) async {
 
 void main() {
   setUp(() {
-    api.latency = Duration.zero;
-    api.offline = false;
-    api.setScenario(Scenario.onboarding);
+    demo.latency = Duration.zero;
+    demo.offline = false;
+    demo.setScenario(Scenario.onboarding);
   });
 
   const paths = ['/offline', '/error', '/session-expired', '/resume', '/otp-locked', '/upload-error', '/camera-denied', '/not-eligible', '/payment-rejected', '/walkthrough', '/review'];
@@ -63,7 +63,7 @@ void main() {
   for (final (width, scale) in [(320.0, 2.0), (412.0, 1.0)]) {
     for (final path in paths) {
       testWidgets('$path lays out at ${width.toInt()}dp × $scale', (t) async {
-        if (path == '/payment-rejected') api.setScenario(Scenario.overdue);
+        if (path == '/payment-rejected') demo.setScenario(Scenario.overdue);
         await pumpAt(t, path, extra: path == '/error' ? 'ERR-7F3A-1029' : null, width: width, scale: scale);
         await t.pump();
         await scrollAll(t);
@@ -72,13 +72,13 @@ void main() {
   }
 
   testWidgets('offline: retry waits for the connection, then opens the journey', (t) async {
-    api.setScenario(Scenario.active);
-    api.offline = true;
+    demo.setScenario(Scenario.active);
+    demo.offline = true;
     await pumpAt(t, '/offline');
     await t.tap(find.text('Try again'));
     await t.pump();
     expect(find.textContaining('Still no internet'), findsOneWidget);
-    api.offline = false;
+    demo.offline = false;
     await t.tap(find.text('Try again'));
     await t.pumpAndSettle();
     expect(find.text('route:/dashboard'), findsOneWidget);
@@ -121,7 +121,7 @@ void main() {
   });
 
   testWidgets('payment rejected: submit correct details goes to Repay', (t) async {
-    api.setScenario(Scenario.overdue);
+    demo.setScenario(Scenario.overdue);
     await pumpAt(t, '/payment-rejected', extra: (paise: 100000, utr: '429011238867', reason: 'UTR not found'));
     expect(find.text('4290 1123 8867'), findsOneWidget);
     expect(find.text('₹1,000'), findsOneWidget);

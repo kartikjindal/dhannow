@@ -1,12 +1,12 @@
 import 'dart:async';
 
 import 'package:dhannow/core/api/api.dart';
+import 'package:dhannow/core/links.dart';
 import 'package:dhannow/core/brand.dart';
 import 'package:dhannow/core/theme/theme.dart';
 import 'package:dhannow/core/theme/tokens.dart';
 import 'package:dhannow/core/widgets/widgets.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import 'common.dart';
@@ -124,7 +124,7 @@ class _TermsSheet extends StatefulWidget {
 
 class _TermsSheetState extends State<_TermsSheet> {
   // ponytail: demo stand-in for loading the terms document; the real app fetches the page text.
-  late final Future<String> _text = Future.delayed(api.latency, () => _demoTerms);
+  late final Future<String> _text = Future.delayed(demoControls ? demo.latency : Duration.zero, () => _demoTerms);
 
   @override
   Widget build(BuildContext context) => ConstrainedBox(
@@ -190,10 +190,7 @@ class WebLinks extends StatelessWidget {
             title: title,
             detail: url,
             trailing: const Icon(Icons.open_in_new_rounded, size: 18, color: DnTokens.slate),
-            onTap: () async {
-              await Clipboard.setData(ClipboardData(text: 'https://$url'));
-              if (context.mounted) showDnToast(context, 'Link copied');
-            },
+            onTap: () => openUrl(context, 'https://$url'),
           ),
         if (note != null)
           Padding(
@@ -325,7 +322,7 @@ class ResendTimer {
   void cancel() => _t?.cancel();
 
   Widget view({required VoidCallback onResend, String sent = 'Code sent.'}) {
-    if (left <= 0) return const Text('No resends left. Please contact support on ${Brand.supportPhone}.', style: DnText.body);
+    if (left <= 0) return Text('No resends left. Please contact support on ${api.config.support.phone}.', style: DnText.body);
     if (wait > 0) return Text('$sent Resend in 0:${wait.toString().padLeft(2, '0')}', style: DnText.body);
     return Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,

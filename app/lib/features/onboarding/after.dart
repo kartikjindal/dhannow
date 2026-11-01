@@ -106,10 +106,10 @@ class _SubmittedScreenState extends State<SubmittedScreen> with Busy {
         ),
       ),
       const SizedBox(height: 14),
-      const Text.rich(
+      Text.rich(
         TextSpan(
           text: 'Questions? Call us at ',
-          children: [TextSpan(text: Brand.supportPhone, style: DnText.strong)],
+          children: [TextSpan(text: api.config.support.phone, style: DnText.strong)],
         ),
         textAlign: TextAlign.center,
         style: DnText.body,
@@ -160,7 +160,7 @@ class _CreditQuestionScreenState extends State<CreditQuestionScreen> with Busy {
               block: true,
               loading: busy,
               onPressed: () => run(() async {
-                await Future<void>.delayed(api.latency);
+                await api.simulate(); // TODO(phase-11): the question from verify/bureau `derived.bureauChallenge`
                 if (mounted) setState(() => _loaded = true);
               }),
             )

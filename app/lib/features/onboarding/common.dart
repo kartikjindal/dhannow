@@ -45,7 +45,13 @@ mixin Busy<T extends StatefulWidget> on State<T> {
       await body();
     } on ApiException catch (e) {
       if (!mounted) return;
-      e.code == 'OFFLINE' ? context.push('/offline') : showDnToast(context, e.message, error: true);
+      if (e.code == 'OFFLINE') {
+        context.push('/offline');
+      } else if (e.code == 'SERVER_ERROR') {
+        context.push('/error', extra: e.requestId);
+      } else {
+        showDnToast(context, e.message, error: true);
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }

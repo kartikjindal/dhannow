@@ -10,6 +10,7 @@ import '../features/money/routes.dart';
 import '../features/offer/routes.dart';
 import '../features/onboarding/routes.dart';
 import '../features/start/routes.dart';
+import 'api/api.dart';
 import 'widgets/widgets.dart';
 
 /// Full-screen routes set `parentNavigatorKey: rootNav` so they cover the bottom bar.
@@ -37,8 +38,9 @@ final router = GoRouter(
     ...dashboardRoutes,
     ...moneyRoutes,
     ...accountRoutes,
-    GoRoute(path: '/demo', builder: (_, _) => const DemoControls()),
-    GoRoute(path: '/kit', builder: (_, _) => const KitGallery()),
+    // Demo server only (`--dart-define=DEMO=true`): a deep link in a real build lands on the journey.
+    GoRoute(path: '/demo', redirect: (_, _) => demoControls ? null : '/', builder: (_, _) => const DemoControls()),
+    GoRoute(path: '/kit', redirect: (_, _) => demoControls ? null : '/', builder: (_, _) => const KitGallery()),
   ],
 );
 

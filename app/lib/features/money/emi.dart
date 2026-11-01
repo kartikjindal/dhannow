@@ -52,6 +52,36 @@ class _Offer extends StatefulWidget {
 
 class _OfferState extends State<_Offer> {
   bool _agree = false;
+  bool _sent = false;
+  bool _busy = false;
+  final _otp = TextEditingController();
+
+  @override
+  void dispose() {
+    _otp.dispose();
+    super.dispose();
+  }
+
+  /// Accept is OTP-confirmed like the extension: send the code, then accept with it and the
+  /// offer's version (a stale screen gets STALE_STATE).
+  Future<void> _accept() async {
+    setState(() => _busy = true);
+    try {
+      if (!_sent) {
+        await api.sendEmiOtp(widget.offer);
+        if (mounted) setState(() => _sent = true);
+      } else {
+        await api.acceptEmi(widget.offer, _otp.text);
+        if (!mounted) return;
+        showDnToast(context, 'Repayment plan accepted');
+        context.go('/dashboard');
+      }
+    } on ApiException catch (e) {
+      if (mounted) showApiError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -75,7 +105,13 @@ class _OfferState extends State<_Offer> {
       const SizedBox(height: 8),
       const Text('Offered only after our team approves it for an overdue loan. You can’t request it from the app; talk to us if you need help paying.', style: DnText.hint),
       const SizedBox(height: 18),
-      DnButton('Accept plan', block: true, onPressed: _agree ? () => showDnToast(context, 'Demo: plan accepted') : null),
+      if (_sent) ...[
+        const Text('Code sent to your mobile', style: DnText.label),
+        const SizedBox(height: 8),
+        DnOtpField(controller: _otp, enabled: !_busy, onCompleted: (_) {}),
+        const SizedBox(height: 12),
+      ],
+      DnButton(_sent ? 'Confirm plan' : 'Accept plan', block: true, loading: _busy, onPressed: _agree ? _accept : null),
       const SizedBox(height: 4),
       DnButton.ghost('Talk to us first', block: true, onPressed: () => context.push('/support')),
     ]);

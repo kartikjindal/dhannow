@@ -35,9 +35,9 @@ Finder _inDialog(String text) => find.descendant(of: find.byType(Dialog), matchi
 
 void main() {
   setUp(() {
-    api.latency = Duration.zero;
-    api.offline = false;
-    api.setScenario(Scenario.active);
+    demo.latency = Duration.zero;
+    demo.offline = false;
+    demo.setScenario(Scenario.active);
   });
 
   // CC-58: every screen lays out at 320dp × 2.0 and 412dp × 1.0; scrolling builds every row.
@@ -74,17 +74,17 @@ void main() {
   });
 
   testWidgets('a failed load shows the error with a retry that recovers', (t) async {
-    api.offline = true;
+    demo.offline = true;
     await _pump(t, '/profile');
     expect(find.text('No internet connection.'), findsOneWidget);
-    api.offline = false;
+    demo.offline = false;
     await t.tap(find.text('Try again'));
     await t.pumpAndSettle();
     expect(find.text('Customer ID DN000123'), findsOneWidget);
   });
 
   testWidgets('support renders logged out with contacts from Brand and no NBFC claim', (t) async {
-    api.setScenario(Scenario.newUser);
+    demo.setScenario(Scenario.newUser);
     await _pump(t, '/support');
     expect(find.textContaining(Brand.supportPhone), findsOneWidget);
     expect(find.text('Grievance officer: ${Brand.grievanceName}'), findsOneWidget);
@@ -103,7 +103,7 @@ void main() {
   });
 
   testWidgets('delete with no open loan sends the request and logs out', (t) async {
-    api.setScenario(Scenario.closed);
+    demo.setScenario(Scenario.closed);
     await _pump(t, '/delete-account');
     await t.tap(find.text('Delete my account'));
     await t.pumpAndSettle();

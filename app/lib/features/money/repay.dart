@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api/api.dart';
 import '../../core/brand.dart';
 import '../../core/format.dart';
+import '../../core/links.dart';
 import '../../core/theme/theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/widgets.dart';
@@ -20,6 +21,7 @@ class RepayScreen extends StatelessWidget {
         builder: (context, _) {
           final loan = api.loan;
           return DnPage(
+            onRefresh: api.refresh,
             title: 'Repay your loan',
             subtitle: 'One repayment of the loan amount on day 14. Pay any day before that; the amount stays the same.',
             children: [
@@ -40,7 +42,7 @@ class RepayScreen extends StatelessWidget {
                   onPrimary: () => context.go('/dashboard'),
                 )
               else ...[
-                if (api.scenario == Scenario.extensionOffered) ...[ExtensionStatusCard(loan: loan), const SizedBox(height: 12)],
+                if (loan.pendingExtension != null) ...[ExtensionStatusCard(loan: loan), const SizedBox(height: 12)],
                 _Owe(loan: loan),
                 const SizedBox(height: 12),
                 if (loan.repayment == Repayment.pendingVerification)
@@ -143,7 +145,7 @@ class PolicyLinks extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    void open(String page) => showDnToast(context, 'Opens ${Brand.site}/$page');
+    void open(String page) => openSitePage(context, page);
     return DnPanel(
       padding: EdgeInsets.zero,
       child: Column(children: [

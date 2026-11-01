@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The real API (Phase 11). Debug builds get it from the debug manifest; release needs it here. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="DhanNow"
         android:name="${applicationName}"
@@ -41,5 +43,9 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- url_launcher: call and mail support, open legal pages (Android 11+ package visibility). -->
+        <intent><action android:name="android.intent.action.DIAL"/><data android:scheme="tel"/></intent>
+        <intent><action android:name="android.intent.action.SENDTO"/><data android:scheme="mailto"/></intent>
+        <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="https"/></intent>
     </queries>
 </manifest>

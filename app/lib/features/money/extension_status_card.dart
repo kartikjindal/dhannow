@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/api.dart';
-import '../../core/brand.dart';
 import '../../core/format.dart';
 import '../../core/theme/theme.dart';
 import '../../core/theme/tokens.dart';
@@ -18,34 +17,31 @@ class ExtensionStatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final last = loan.extensions.lastOrNull;
     final done = [for (final e in loan.extensions) if (e.status == ExtensionStatus.verified) e];
+    final p = loan.pendingExtension;
 
-    // S1: approved by the Collection Head, waiting for the borrower's OTP.
-    if (api.scenario == Scenario.extensionOffered && (last == null || last.status == ExtensionStatus.verified)) {
-      return ActionBanner(
-        tone: DnBannerTone.info,
-        icon: Icons.event_repeat_rounded,
-        title: 'Extension offered by our team',
-        body: 'Our collections team set up a 14-day extension for this loan. Check the charge and confirm with a code.',
-        action: 'Review',
-        onAction: () => context.push('/extension/confirm'),
-      );
-    }
-    if (last == null) return const SizedBox.shrink();
-
-    final Widget top = switch (last.status) {
-      ExtensionStatus.offered || ExtensionStatus.confirmed => ActionBanner(
+    final Widget top = switch (p?.status) {
+      null || ExtensionStatus.verified || ExtensionStatus.ended => const SizedBox.shrink(),
+      // S1: approved by the Collection Head, waiting for the borrower's OTP.
+      ExtensionStatus.offered => ActionBanner(
           tone: DnBannerTone.info,
-          title: 'Extension ${last.n} confirmed, payment due',
-          body: 'Pay ${inr(last.chargePaise)} to move your due date to ${dayMonth(last.newDue)}.',
+          icon: Icons.event_repeat_rounded,
+          title: 'Extension offered by our team',
+          body: 'Our collections team set up a 14-day extension for this loan. Check the charge and confirm with a code.',
+          action: 'Review',
+          onAction: () => context.push('/extension/confirm'),
+        ),
+      ExtensionStatus.confirmed => ActionBanner(
+          tone: DnBannerTone.info,
+          title: 'Extension ${p!.n} confirmed, payment due',
+          body: 'Pay ${inr(p.totalPaise)} to move your due date to ${dayMonth(p.newDue)}.',
           action: 'Pay',
           onAction: () => context.push('/extension/pay'),
         ),
       ExtensionStatus.paymentPending => ActionBanner(
           tone: DnBannerTone.warn,
           title: 'Payment received, checking with the bank',
-          body: '${inr(last.chargePaise)}${last.utr == null ? '' : ' · UTR ${_mask(last.utr!)}'}. Your due date stays ${dayMonth(last.oldDue)} until it’s verified, usually the same day. On-time is judged by the date your bank sent the money.',
+          body: '${inr(p!.totalPaise)}. Your due date stays ${dayMonth(p.oldDue)} until it’s verified, usually the same day. On-time is judged by the date your bank sent the money.',
         ),
       ExtensionStatus.rejected => ActionBanner(
           tone: DnBannerTone.err,
@@ -56,17 +52,23 @@ class ExtensionStatusCard extends StatelessWidget {
         ),
       ExtensionStatus.expired => ActionBanner(
           title: 'This offer has expired',
-          body: 'Nothing changed on your loan. Call ${Brand.supportPhone} for a new offer.',
+          body: 'Nothing changed on your loan. Call ${api.config.support.phone} for a new offer.',
           action: 'Call us',
           onAction: () => context.push('/support'),
         ),
-      ExtensionStatus.verified => const SizedBox.shrink(),
+      // A state this build doesn't know: say so safely, never guess.
+      ExtensionStatus.unknown => ActionBanner(
+          title: 'Your extension is being updated',
+          body: 'Pull down to refresh, or call ${api.config.support.phone} if it doesn’t change.',
+          action: 'Call us',
+          onAction: () => context.push('/support'),
+        ),
     };
 
     if (done.isEmpty) return top;
     final capped = loan.extensionsUsed >= loan.extensionCap;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      if (last.status != ExtensionStatus.verified) ...[top, const SizedBox(height: 12)],
+      if (p != null) ...[top, const SizedBox(height: 12)],
       DnPanel(
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           DnPanelHeader(
@@ -85,7 +87,7 @@ class ExtensionStatusCard extends StatelessWidget {
                   ]),
                 ),
                 const SizedBox(width: 8),
-                Text(inr(done[i].chargePaise), style: DnText.money),
+                if (done[i].chargePaise != null) Text(inr(done[i].chargePaise!), style: DnText.money),
               ]),
             ),
           const SizedBox(height: 6),
@@ -99,6 +101,4 @@ class ExtensionStatusCard extends StatelessWidget {
       ),
     ]);
   }
-
-  static String _mask(String utr) => utr.length <= 8 ? utr : '${utr.substring(0, 4)}…${utr.substring(utr.length - 4)}';
 }

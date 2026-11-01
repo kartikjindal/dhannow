@@ -25,9 +25,9 @@ class DemoControls extends StatelessWidget {
                   DnListRow(
                     first: s.index == 0,
                     title: s.label,
-                    trailing: s == api.scenario ? const DnPill('Now', tone: DnTone.cobalt) : null,
+                    trailing: s == demo.scenario ? const DnPill('Now', tone: DnTone.cobalt) : null,
                     onTap: () {
-                      api.setScenario(s);
+                      demo.setScenario(s);
                       context.go('/');
                     },
                   ),
@@ -36,12 +36,12 @@ class DemoControls extends StatelessWidget {
             const SizedBox(height: 16),
             Row(children: [
               const Expanded(child: Text('Simulate no internet', style: DnText.strong)),
-              DnSwitch(value: api.offline, label: 'Simulate no internet', onChanged: (v) => api.offline = v),
+              DnSwitch(value: demo.offline, label: 'Simulate no internet', onChanged: (v) => demo.offline = v),
             ]),
             if (api.loan?.repayment == Repayment.pendingVerification) ...[
               const SizedBox(height: 12),
               DnButton.dark('Accountant verifies the payment', block: true, onPressed: () {
-                api.demoVerifyPayment();
+                demo.demoVerifyPayment();
                 context.go('/dashboard');
               }),
             ],

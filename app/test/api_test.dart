@@ -2,7 +2,7 @@ import 'package:dhannow/core/api/api.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  setUp(() => api
+  setUp(() => demo
     ..latency = Duration.zero
     ..setScenario(Scenario.offer));
 
@@ -23,10 +23,10 @@ void main() {
   });
 
   test('payment then accountant verification closes the loan and steps up the level', () async {
-    api.setScenario(Scenario.active);
+    demo.setScenario(Scenario.active);
     await api.submitPayment(utr: '429012345678', paidOn: DateTime.now(), paise: 100000);
     expect(api.loan!.repayment, Repayment.pendingVerification);
-    api.demoVerifyPayment();
+    demo.demoVerifyPayment();
     expect(api.loan, isNull);
     expect((await api.creditLevel()).level, 2);
   });

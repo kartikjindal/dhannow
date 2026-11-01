@@ -272,7 +272,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 DnButton.outline('Log in', block: true, onPressed: () => context.push('/login')),
                 const SizedBox(height: 4),
                 DnButton.text('How we keep your money and data safe', icon: Icons.verified_user_rounded, onPressed: () => context.push('/trust')),
-                DnButton.text('Need help? Call ${Brand.supportPhone}', onPressed: () => context.push('/support')),
+                DnButton.text('Need help? Call ${api.config.support.phone}', onPressed: () => context.push('/support')),
               ],
             ),
           ),

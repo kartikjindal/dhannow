@@ -18,6 +18,7 @@ final edgeRoutes = <RouteBase>[
       },
     ),
   ),
+  GoRoute(path: '/update', parentNavigatorKey: rootNav, builder: (_, _) => const UpdateRequiredScreen()),
   GoRoute(path: '/session-expired', parentNavigatorKey: rootNav, builder: (_, _) => const SessionExpiredScreen()),
   GoRoute(path: '/resume', parentNavigatorKey: rootNav, builder: (_, _) => const ResumeScreen()),
   GoRoute(

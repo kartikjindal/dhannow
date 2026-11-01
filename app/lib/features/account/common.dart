@@ -1,5 +1,6 @@
 import 'package:dhannow/core/api/api.dart';
 import 'package:dhannow/core/brand.dart';
+import 'package:dhannow/core/links.dart';
 import 'package:dhannow/core/theme/theme.dart';
 import 'package:dhannow/core/theme/tokens.dart';
 import 'package:dhannow/core/widgets/widgets.dart';
@@ -106,8 +107,7 @@ class InfoRow extends StatelessWidget {
 /// Rows from (label, value) pairs.
 List<Widget> infoRows(List<(String, String)> rows) => [for (final (i, (l, v)) in rows.indexed) InfoRow(l, v, first: i == 0)];
 
-/// ponytail: a toast until url_launcher opens dhannow.com in an in-app browser tab.
-void openSite(BuildContext context, String path) => showDnToast(context, 'Opens ${Brand.site}/$path');
+void openSite(BuildContext context, String path) => openSitePage(context, path);
 
 Future<void> copyText(BuildContext context, String label, String value) async {
   await Clipboard.setData(ClipboardData(text: value));

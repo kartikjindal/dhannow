@@ -66,9 +66,9 @@ Future<void> _tap(WidgetTester t, Finder f) async {
 
 void main() {
   setUp(() {
-    api.latency = Duration.zero;
-    api.offline = false;
-    api.setScenario(Scenario.offer);
+    demo.latency = Duration.zero;
+    demo.offline = false;
+    demo.setScenario(Scenario.offer);
   });
 
   // CC-58: every screen at 320dp × 2.0 and 412dp × 1.0, scrolled through so overflows fail.
@@ -86,7 +86,7 @@ void main() {
     }
     for (final s in [Scenario.disbursal, Scenario.active]) {
       testWidgets('status in ${s.name} lays out at ${width.toInt()}dp, text ×$scale', (t) async {
-        api.setScenario(s);
+        demo.setScenario(s);
         await _pump(t, '/loan/status', width: width, scale: scale);
         expect(find.textContaining(s == Scenario.disbursal ? 'on the way' : 'Money received'), findsOneWidget);
       });
@@ -94,7 +94,7 @@ void main() {
   }
 
   testWidgets('B9 and B12 settle under reduced motion', (t) async {
-    api.setScenario(Scenario.disbursal);
+    demo.setScenario(Scenario.disbursal);
     await _pump(t, '/loan/status', reduceMotion: true);
     await t.pumpAndSettle();
     expect(find.text('Confirming with the bank'), findsWidgets);
@@ -115,10 +115,10 @@ void main() {
   });
 
   testWidgets('a failed load shows the error with a retry', (t) async {
-    api.offline = true;
+    demo.offline = true;
     await _pump(t, '/loan/amount');
     expect(find.text('Couldn’t load this step'), findsOneWidget);
-    api.offline = false;
+    demo.offline = false;
     await _tap(t, find.text('Try again'));
     expect(find.text('Continue with ₹1,000'), findsOneWidget);
   });
@@ -164,7 +164,7 @@ void main() {
 
   testWidgets('signing offline goes to the offline screen', (t) async {
     final r = await _pump(t, '/loan/sanction-letter');
-    api.offline = true;
+    demo.offline = true;
     await _tap(t, find.text('Sign with Aadhaar'));
     expect(_path(r), '/offline');
   });
@@ -182,7 +182,7 @@ void main() {
     final r = await _pump(t, '/loan/disbursal-account');
     expect(find.text('HDFC Bank'), findsOneWidget);
     await _tap(t, find.text('Confirm this account'));
-    expect(api.scenario, Scenario.disbursal);
+    expect(demo.scenario, Scenario.disbursal);
     expect(_path(r), '/loan/status');
     expect(find.text('DISBURSAL CONFIRMING'), findsOneWidget);
     expect(find.text('₹742 on the way to HDFC Bank ••5678'), findsOneWidget);

@@ -8,11 +8,13 @@ import '../../core/theme/theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/widgets.dart';
 
-/// OFFLINE goes to board E3; anything else is a toast. The button that called stays tappable,
+/// OFFLINE goes to board E3, a server failure to E4; anything else is a toast. The button that called stays tappable,
 /// so the retry is one tap away.
 void showApiError(BuildContext context, ApiException e) {
   if (e.code == 'OFFLINE') {
     context.push('/offline');
+  } else if (e.code == 'SERVER_ERROR') {
+    context.push('/error', extra: e.requestId); // E4 with the reference
   } else {
     showDnToast(context, e.message, error: true);
   }
