@@ -1,0 +1,233 @@
+package com.navix.loan.service;
+
+import com.navix.common.pii.PiiView;
+import com.navix.common.exception.BusinessException;
+import com.navix.common.featureflag.FeatureFlag;
+import com.navix.common.featureflag.FeatureFlagRepository;
+import com.navix.common.featureflag.FeatureFlagService;
+import com.navix.common.notification.event.WaitlistSubmittedEvent;
+import com.navix.common.security.ActorContext;
+import com.navix.common.security.CurrentActor;
+import com.navix.common.util.Aadhaar;
+import com.navix.loan.entity.OnboardingWaitlist;
+import com.navix.loan.repository.CustomerProfileRepository;
+import com.navix.loan.repository.LoanRepository;
+import com.navix.loan.repository.OnboardingWaitlistRepository;
+import java.time.Instant;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.regex.Pattern;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * "Waitlist mode" (V76): while {@value #FLAG} is on, a borrower who has never held a loan is not
+ * onboarded. They get one plain form instead, stored here untouched by any vendor, and the product
+ * tells them it is under review. Everything with a loan behind it — repaid or live — is unaffected,
+ * reborrow included; the frozen set is new mobiles, DRAFTs and files mid-pipeline with no loan yet.
+ *
+ * <p>Validation is local only (shape of the email, PAN regex): the whole point is to spend nothing on
+ * Signzy / Digitap / Fintrix for people we are not going to lend to right now. A PAN already held by
+ * another customer, or by another waitlist row, is refused with a message — the business chose being
+ * told over being quiet, the same trade-off as {@code DUPLICATE_PAN} on intake.
+ *
+ * <p>Aadhaar: only the <b>last four digits</b> are asked for and kept (PLAN Phase 11, board A1b) — a waitlist
+ * has no use for the full number. A full 12-digit number sent by an older client is cut to its last four
+ * before it is stored. Four digits identify no one, so there is no Aadhaar duplicate check here.
+ */
+@Service
+@RequiredArgsConstructor
+public class OnboardingWaitlistService {
+
+    public static final String FLAG = "onboarding-paused";
+
+    private static final Pattern EMAIL = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]{2,}$");
+    private static final Pattern MOBILE = Pattern.compile("^[6-9]\\d{9}$");
+    private static final Pattern PAN = Pattern.compile("^[A-Z]{5}\\d{4}[A-Z]$");
+
+    private final FeatureFlagService featureFlags;
+    private final FeatureFlagRepository featureFlagRepository;
+    private final OnboardingWaitlistRepository waitlistRepository;
+    private final LoanRepository loanRepository;
+    private final CustomerProfileRepository profileRepository;
+    private final ApplicationEventPublisher eventPublisher;
+
+    /** Where the signed-in borrower stands: {@code OPEN} (normal app), {@code FORM} or {@code SUBMITTED}. */
+    public record GateView(boolean paused, String gate, SubmissionView submission) {
+    }
+
+    /** What the borrower sees back — Aadhaar reduced to its last four. */
+    public record SubmissionView(String fullName, String email, String mobile, String pan,
+                                 String aadhaarLast4, Instant createdAt) {
+        static SubmissionView of(OnboardingWaitlist w) {
+            return new SubmissionView(w.getFullName(), w.getEmail(), w.getMobile(), w.getPan(),
+                    Aadhaar.lastFour(w.getAadhaar()), w.getCreatedAt());
+        }
+    }
+
+    /** The ADMIN list row — identifiers in full for PII_VIEW (audited), masked otherwise (PLAN Phase 9). */
+    public record WaitlistRow(Long id, Long customerId, String fullName, String email, String mobile,
+                              String pan, String aadhaar, Instant createdAt) {
+        static WaitlistRow of(OnboardingWaitlist w) {
+            return new WaitlistRow(w.getId(), w.getCustomerId(), w.getFullName(), w.getEmail(),
+                    w.getMobile(), PiiView.pan(w.getPan()), PiiView.aadhaar(w.getAadhaar()), w.getCreatedAt());
+        }
+    }
+
+    /** The admin switch: whether onboarding is paused, and who last flipped it (null if never touched). */
+    public record PausedStatus(boolean paused, String updatedBy, Instant updatedAt) {
+    }
+
+    /** {@code aadhaar}: the last four digits ({@code aadhaarLast4} is accepted as the same field). */
+    public record SubmitRequest(String fullName, String email, String mobile, String pan,
+                                @com.fasterxml.jackson.annotation.JsonAlias("aadhaarLast4") String aadhaar) {
+    }
+
+    /** The one flag read the logged-out signup screen needs — nothing else leaks out anonymously. */
+    @Transactional(readOnly = true)
+    public boolean paused() {
+        return featureFlags.isEnabled(FLAG, false);
+    }
+
+    /** ADMIN: current switch state + last change. */
+    @Transactional(readOnly = true)
+    public PausedStatus status() {
+        requireAdmin();
+        return featureFlagRepository.findByFlagKey(FLAG).map(OnboardingWaitlistService::statusOf)
+                .orElseGet(() -> new PausedStatus(false, null, null));
+    }
+
+    /** ADMIN: flip the switch — the one feature flag with a write path (Settings page). */
+    @Transactional
+    public PausedStatus setPaused(boolean paused) {
+        requireAdmin();
+        FeatureFlag flag = featureFlagRepository.findByFlagKey(FLAG).orElseGet(() -> {
+            FeatureFlag f = new FeatureFlag();
+            f.setFlagKey(FLAG);
+            f.setDescription("Pause new-customer onboarding. ON: borrowers without a loan get the waitlist form "
+                    + "instead of intake, POST /api/applications refuses ONBOARDING_PAUSED, Admin sees the waitlist.");
+            return f;
+        });
+        flag.setEnabled(paused);
+        return statusOf(featureFlagRepository.save(flag));
+    }
+
+    private static PausedStatus statusOf(FeatureFlag f) {
+        return new PausedStatus(f.isEnabled(), f.getUpdatedBy(), f.getUpdatedAt());
+    }
+
+    @Transactional(readOnly = true)
+    public GateView gate() {
+        Long customerId = requireBorrower();
+        return gateFor(customerId);
+    }
+
+    @Transactional
+    public SubmissionView submit(SubmitRequest req) {
+        Long customerId = requireBorrower();
+        GateView gate = gateFor(customerId);
+        if ("OPEN".equals(gate.gate())) {
+            throw new BusinessException("ONBOARDING_OPEN", "Onboarding is open — continue your application instead");
+        }
+        if (gate.submission() != null) {
+            return gate.submission(); // one submission per mobile; a repeat just echoes it
+        }
+
+        String fullName = req.fullName() == null ? "" : req.fullName().trim();
+        if (fullName.isEmpty()) {
+            throw new BusinessException("INVALID_NAME", "Enter your full name");
+        }
+        String email = req.email() == null ? "" : req.email().trim();
+        if (!EMAIL.matcher(email).matches()) {
+            throw new BusinessException("INVALID_EMAIL", "Enter a valid email address");
+        }
+        String mobile = req.mobile() == null ? "" : req.mobile().replaceAll("\\D", "");
+        if (mobile.length() == 12 && mobile.startsWith("91")) {
+            mobile = mobile.substring(2);
+        }
+        if (!MOBILE.matcher(mobile).matches()) {
+            throw new BusinessException("INVALID_MOBILE", "Enter a valid 10-digit mobile number");
+        }
+        String pan = req.pan() == null ? "" : req.pan().trim().toUpperCase(Locale.ROOT);
+        if (!PAN.matcher(pan).matches()) {
+            throw new BusinessException("INVALID_PAN", "Enter a valid PAN");
+        }
+        String typed = Aadhaar.normalize(req.aadhaar());
+        String aadhaarLast4 = typed != null && (typed.matches("\\d{4}") || Aadhaar.isValid(typed))
+                ? Aadhaar.lastFour(typed) : null;
+        if (aadhaarLast4 == null) {
+            throw new BusinessException("INVALID_AADHAAR", "Enter the last 4 digits of your Aadhaar");
+        }
+        if (profileRepository.existsPanForOtherCustomer(pan, customerId)
+                || waitlistRepository.existsByPanAndCustomerIdNot(pan, customerId)) {
+            throw new BusinessException("DUPLICATE_PAN", "This PAN is already registered with another customer.");
+        }
+
+        OnboardingWaitlist row = new OnboardingWaitlist();
+        row.setCustomerId(customerId);
+        row.setFullName(fullName);
+        row.setEmail(email);
+        row.setMobile(mobile);
+        row.setPan(pan);
+        row.setAadhaar(aadhaarLast4);
+        if (row.getCreatedAt() == null) {
+            row.setCreatedAt(Instant.now());
+        }
+        OnboardingWaitlist saved = waitlistRepository.save(row);
+        eventPublisher.publishEvent(new WaitlistSubmittedEvent(customerId, saved.getCreatedAt()));
+        return SubmissionView.of(saved);
+    }
+
+    /** The waitlist, newest first; ADMIN only — it is raw PII typed by strangers. */
+    @Transactional(readOnly = true)
+    public List<WaitlistRow> list(String q) {
+        requireAdmin();
+        String needle = q == null ? "" : q.trim().toLowerCase(Locale.ROOT);
+        return waitlistRepository.findAllByOrderByCreatedAtDesc().stream()
+                .filter(w -> needle.isEmpty() || matches(w, needle))
+                .map(WaitlistRow::of)
+                .toList();
+    }
+
+    /** Contact details for the notification engine when a waitlist customer has no KYC profile. */
+    @Transactional(readOnly = true)
+    public Optional<OnboardingWaitlist> find(Long customerId) {
+        return waitlistRepository.findByCustomerId(customerId);
+    }
+
+    private GateView gateFor(Long customerId) {
+        if (!paused() || !loanRepository.findByCustomerId(customerId).isEmpty()) {
+            return new GateView(false, "OPEN", null);
+        }
+        return waitlistRepository.findByCustomerId(customerId)
+                .map(w -> new GateView(true, "SUBMITTED", SubmissionView.of(w)))
+                .orElseGet(() -> new GateView(true, "FORM", null));
+    }
+
+    private static boolean matches(OnboardingWaitlist w, String needle) {
+        return contains(w.getFullName(), needle) || contains(w.getMobile(), needle)
+                || contains(w.getEmail(), needle) || contains(w.getPan(), needle);
+    }
+
+    private static boolean contains(String value, String needle) {
+        return value != null && value.toLowerCase(Locale.ROOT).contains(needle);
+    }
+
+    private static Long requireBorrower() {
+        CurrentActor actor = ActorContext.get();
+        if (actor == null || !"BORROWER".equals(actor.role())) {
+            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role BORROWER");
+        }
+        return Long.valueOf(actor.id());
+    }
+
+    private static void requireAdmin() {
+        CurrentActor actor = ActorContext.get();
+        if (actor == null || !"ADMIN".equals(actor.role())) {
+            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role ADMIN");
+        }
+    }
+}

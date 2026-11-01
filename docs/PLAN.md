@@ -1,6 +1,8 @@
 # DhanNow: fork navix_final + DhanNow loan engine + Flutter Android app
 
-## ▶ Step 1 (done, awaiting your approval): reskin the wireframe to the app_navix UI
+## ✔ Step 1 (approved 2026-11-01): reskin the wireframe to the app_navix UI
+
+Approved together with the component catalogue `docs/wireframes/ui-kit.html` (https://claude.ai/artifact/LWXE56nRw25JLy4SVxbGQ6), which is now the reference for every app widget.
 
 **Scope:** only the wireframe canvas (`docs/wireframes/*.dc.html`), published to https://claude.ai/artifact/9mpCW1pqqzADmTcoVXNCqJ. No backend, web or app code is touched until you approve the wireframe.
 
@@ -135,7 +137,7 @@ What the wireframe got wrong (only colours were taken) and is now carried over e
 **Accessibility exception, noted:** white on `#FF5B37` is about 3:1. It is kept for primary buttons only because app_navix uses it, with 16px semibold labels. Every other ember text uses `#C73A18`.
 
 **Flutter mapping:**
-- `ThemeExtension<DnTokens>` carries every token above.
+- `DnTokens` (static constants in `app/lib/core/theme/tokens.dart`) carries every token above. Not a `ThemeExtension`: the app is light-only in v1 (CC-58), so there is nothing to interpolate.
 - Widgets mirror the kit:
   - `DnPanel` (card + shadow + top edge);
   - `DnFigure` (Bebas amount + Inter label);
@@ -201,9 +203,11 @@ The wireframe is the app's spec, so it is fixed first and re-published to https:
    - The SSM import uses `/dhannow/${NAVIX_ENV}/`.
    - The local profile disables the SSM import entirely.
 4. Baseline green: `./mvnw verify -Pit` and `web` `npm run typecheck && npm run lint && npm test` pass **before any change** (snapshot the test counts).
-5. Add JaCoCo (fails under 80% line coverage on `navix-loan` and `navix-collections` engine packages) and ArchUnit (module dependency rules). Both are new; nothing else is added to tooling.
+5. Add JaCoCo (fails under 80% line coverage on `navix-loan` and `navix-collections` engine packages) and ArchUnit (module dependency rules). Both are new; nothing else is added to tooling. **Moved to the first step of Phase 1:** the gated engine packages (`LoanMath`, `PricingService`, then `CreditLevelService`) are created there, so a Phase 0 gate would have nothing to measure.
 
 **Acceptance:** fork builds and all existing navix tests pass unchanged.
+
+**Status (2026-11-01): done.** Fork point, merge resolution, scrub list and baseline counts are in `docs/UPSTREAM.md`. Backend `mvn verify` (1,802 unit) and `mvn verify -Pit` (60 integration) are green; web typecheck, lint and 907 vitest tests are green; `gitleaks` is clean, and `.github/workflows/secrets.yml` runs it on every push and PR. Three navix tests were date-dependent and failed on the 1st of the month; they are fixed and listed in UPSTREAM.md.
 
 ## Phase 1: Versioned config + DhanNow money math (weeks 1–2)
 
@@ -237,6 +241,14 @@ The wireframe is the app's spec, so it is fixed first and re-published to https:
 - Property tests with jqwik (test scope only): `pf + gst + interest + net == principal` for every allowed amount; all values are integer paise.
 - Snapshot-immutability test: changing the active pricing does not alter an existing offer or loan.
 
+**Status (2026-11-01): done.** `mvn verify` is green (1,848 unit) and `mvn verify -Pit` is green (63 integration, up from 60; V92–V96 applied to Testcontainers Postgres). Gates: JaCoCo report on every module plus an 80% line check on the engine classes in `navix-loan` (`LoanMath`, `PricingService`, `CreditLevelService`, the snapshot records); ArchUnit (`ArchitectureRulesTest`, test scope) with three rules: rate constants read only by `LoanMath`, `LoanMath` used only in `com.navix.loan`, no package cycles between modules. Migrations V92–V95 as listed. Tests: `LoanMathDhanNowTest`, `LoanMathDhanNowPropertiesTest` (jqwik), `PricingServiceTest` (CC-03), CC-01 in `LoanServiceTest` and the flow IT. Deviations:
+- Rows without a frozen version (pre-V92) keep the navix terms: `new LoanMath()` is `LoanMath.NAVIX_PRICING`.
+- A DB trigger freezes a version's terms once it leaves DRAFT; a partial unique index allows one ACTIVE version.
+- `play-integrity` and `push-fcm` are seeded OFF until Phase 8 builds them.
+- `LimitCalculator` is unchanged: in navix it only feeds reporting. The sanctionable limit is set from the credit level (Phase 2).
+- `prepay_rebate` and `late_blocks_upgrade_days` are stored but not read (no rebate in v1; on-time is `closed ≤ due_at`). The `penal-charges` flag is seeded; the frozen `penal_enabled` decides the charge.
+- The offer and KFS show an indicative due date (expected disbursal + 14, CC-01); the final date is set at disbursal.
+
 ## Phase 2: Credit ladder (week 2)
 
 - **V96 `credit_level`:** `customer_id PK`, `level smallint` (1–7), `max_paise`, `updated_at`.
@@ -254,6 +266,12 @@ The wireframe is the app's spec, so it is fixed first and re-published to https:
   - partial then full on time → up;
   - L7 stays at L7;
   - manual exception needs ADMIN plus a reason.
+
+**Status (2026-11-01): done** (see Phase 1). V96 (`credit_level`, `credit_level_history`), `CreditLevelService`, `GET /api/me/credit-level`, `POST /api/customers/{id}/credit-level` (manual exception). Tests: `CreditLevelServiceTest`, `RepaymentServiceTest.partialThenFullOnTimeRepaymentMovesUpOneLevel`, flow IT. Deviations:
+- The sanction itself is capped (a ladder amount ≤ the level max, `requireSanctionable`); `chooseAmount` and `acceptOffer` then accept only the frozen ladder amounts ≤ the sanctioned ceiling (CC-04).
+- `customer_limit_override` (V69) is not read on the DhanNow path. The manual exception is `CreditLevelService.manualException` (ADMIN + reason code, history row with the approver).
+- `paid_on` is a date, so on-time compares the start of the `paid_on` IST day with `due_at`.
+- "Extended loans don't raise the level" waits for the extension itself (Phase 6).
 
 ## Phase 3: Loan lifecycle and status machine (weeks 3–4)
 
@@ -296,6 +314,39 @@ Status is split into separate dimensions on `loan`, as the deck requires.
 - Fraud block.
 - Two schedulers running at once → single transition.
 
+**Status (2026-11-01): done.** `mvn verify` is green (1,863 unit) and `mvn verify -Pit` is green (69 integration, up from 63; V97–V98 applied to Testcontainers Postgres). Migrations:
+- **V97:** `lifecycle_status`, `hold_status` and `repayment_status` on `loan`, backfilled from `status` and the payments on file; one recreated `loan_status_check` covers all four columns. Also widens `loan_document.type` to the Phase 5–6 types and adds `product_config.overdue_review_dpd` (default 7, frozen with the other terms by the existing trigger).
+- **V98:** `scheduler_lock`.
+
+Code:
+- `LoanLifecycle` (allowed-transition map, `forTime` clock rule, and the navix `status` it writes alongside), plus `LoanHold` and `RepaymentStatus`.
+- `Loan.moveTo` is the only lifecycle writer; an illegal move is 422 `ILLEGAL_TRANSITION`.
+- `LoanLifecycleService` + `LoanLifecycleScheduler` (every 5 min, IST `Clock`) move a loan with a row lock.
+- `SchedulerLock` is a ShedLock-style lease. It also wraps `PaymentReminderScheduler` and `MandateDebitScheduler`, which fixes the single-instance issue.
+- The reminder sweep reads `lifecycle_status` and skips DISPUTED loans. The NACH sweep skips loans with `Loan.presentmentPaused`.
+- DISPUTED loans are left off the collections worklist (`listCollectible` and the worklist SQL). FRAUD_REVIEW blocks `createDraft`/`reborrow` (`FRAUD_REVIEW`).
+- `RepaymentService` closes through the lifecycle (the ladder hook still runs once, on the first close) and keeps `repayment_status` current.
+- `LoanView` (`/api/loan/{id}`, customer 360) and `LoanRegisterRow` gain `lifecycleStatus`, `holdStatus` and `repaymentStatus`. These fields are additive.
+
+Tests:
+- `LoanLifecycleTest` (map, clock boundaries, CC-13).
+- `LoanLifecycleServiceTest` (CC-13, review day from config).
+- `RepaymentServiceTest.cc09_partPaymentLeavesTheLoanOpenAndPartial`.
+- `MandateDebitSchedulerTest.cc11_presentmentSkippedWhilePendingVerificationDisputedOrRestructurePending`.
+- Dispute and fraud unit tests.
+- `LoanLifecycleIntegrationTest`: day 13 → 14 00:00 → 23:59:59 → +1 s (D1) → D7 (REVIEW); `cc13_…`; `cc14_twoSchedulersAtOnceMakeASingleTransition`; dispute pause; fraud block; V97 checks.
+
+JaCoCo's 80% gate now also covers `LoanLifecycle` and `LoanLifecycleService`.
+
+Deviations:
+- **Collection case.** OVERDUE_REVIEW is reached through navix `markInCollections`, which sets IN_COLLECTIONS but does not create a `collection_case` row; an officer opens the case, as in navix. An officer opening a case on a past-due loan also moves it to OVERDUE_REVIEW, so `status` and `lifecycle_status` never disagree.
+- **Reminder sweep and overdue reminders.** The reminder sweep no longer calls `markInCollections` (that flipped loans to IN_COLLECTIONS at D1). The lifecycle job owns it at the review day. Overdue reminders now run D1–D7 as navix documented, rather than stopping at D1.
+- **`Loan.effectiveStatus`.** It is kept for the navix `status` fields shown to staff and the borrower, and for its SQL twins. The schedulers and the new fields read the persisted state.
+- **CC-14 locking.** CC-14 uses the job lease plus a `SELECT … FOR UPDATE` per loan, instead of `@Version` on `loan`. `@Version` (409 `STALE_STATE`) lands with CC-21.
+- **CC-11.** Only the skip half is built; the "both clear → refund case" half is Phase 6.
+- **Who sets holds.** Nothing sets a hold yet: the dispute endpoint is Phase 7. The hold does not stop the lifecycle clock.
+- **Loan start state.** The loan row is still minted ACTIVE at disbursal. `DISBURSEMENT_PENDING → ACTIVE` arrives with the accountant confirmation (Phase 4).
+
 ## Phase 4: Disbursal confirmation + maker-checker (week 4)
 
 - **New `ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING`** between the Disbursement Head's UTR entry and ACTIVE (V99 updates the application status check).
@@ -308,6 +359,52 @@ Status is split into separate dimensions on `loan`, as the deck requires.
   - extension proposer ≠ approver (Collection Head) ≠ payment verifier (Accountant).
   - ADMIN no longer bypasses SoD (it still bypasses role checks).
 - **Tests:** an IT for every pair, rejected with 422 `SOD_VIOLATION`.
+
+**Status (2026-11-01): done.** `mvn verify` is green (1,871 unit) and `mvn verify -Pit` is green (75 integration, up from 69; V99 applied to Testcontainers Postgres). Migration:
+- **V99:** `DISBURSAL_CONFIRMATION_PENDING` added to `loan_application_status_check`; new `payment.recorded_by` (the staff member who recorded a payment; null for the borrower and for payments validated upstream).
+
+Code:
+- **Status machine.** `DISBURSEMENT_PENDING → DISBURSAL_CONFIRMATION_PENDING → DISBURSED → ACTIVE`, plus `DISBURSAL_CONFIRMATION_PENDING → DISBURSEMENT_PENDING` for a return. `DISBURSEMENT_PENDING → DISBURSED` is gone.
+- **UTR entry.** `disbursementDecision` (Disbursement Head) still requires the UTR. It now mints the loan `DISBURSEMENT_PENDING` (navix `status` DISBURSING) with the UTR on `loan.disbursal_txn_ref` and an indicative schedule, and parks the file. The action stays `VALIDATE_SUCCESS`, so the actor directory and decision history still name the Head as the disburser.
+- **Confirm.** `POST /api/applications/{id}/disbursal/confirm` (ACCOUNTANT) runs `finalizeDisbursal`. `LoanService.confirmDisbursal` sets day 0 = today in IST (the confirmed date), recomputes the due date, `due_at` (23:59:59 IST, from the frozen product snapshot) and tenure, then calls `moveTo(ACTIVE)`. The ladder, referral and DSA hooks run then, and the application moves DISBURSED → ACTIVE. The borrower's `LOAN_DISBURSED` notification still fires on `ACTIVATE`.
+- **Return.** `POST /api/applications/{id}/disbursal/return` (ACCOUNTANT, reason required) handles a wrong UTR or money not credited. The file goes back to DISBURSEMENT_PENDING, the unconfirmed loan row is deleted (`LoanService.discardPending`), and the event keeps the returned UTR. The Head re-enters the UTR and a new pending loan is minted.
+- **`SeparationOfDutiesGuard`.** Moved from `navix-iam` to `navix-common` (`com.navix.common.security`) so loan and collections can call it. It is now static, and there is one rule per checker step: `disburser`, `disbursalConfirmer`, `paymentVerifier`, `emiApprover`, `extensionApprover`, `extensionPaymentVerifier`. The last three are ready for Phase 6. The guard ignores roles, so ADMIN is bound by it, while ADMIN still passes every role check.
+- **Enforced today:**
+  - sanctioner ≠ disburser (at UTR entry);
+  - confirmer or returner ≠ sanctioner and ≠ disburser;
+  - payment recorder ≠ verifier (`RepaymentService.verifyPayment`, recorder from `payment.recorded_by`);
+  - collections payment raiser ≠ validator (`CollectionPaymentService.validate`).
+
+  Violations return 422 `SOD_VIOLATION`.
+- **Borrower view (additive).** `GET /api/applications/{id}` shows `DISBURSAL_CONFIRMATION_PENDING` with the `loanId`. `GET /api/loan/{id}` shows `lifecycleStatus` DISBURSEMENT_PENDING, `status` DISBURSING and the UTR. This is the app's "money sent, confirming" stage (Stage.disbursal, loan `Lifecycle.disbursementPending` + `disbursalUtr`). A repayment on an unconfirmed loan returns 422 `LOAN_NOT_ACTIVE`.
+- **New status in existing lists.** Added to the staff "reached sanction" set, the mandate-setup set and the DSA lead mapping (IN_PROGRESS). The Accountant's queue is `GET /api/applications?status=DISBURSAL_CONFIRMATION_PENDING`.
+
+Tests:
+- `SeparationOfDutiesGuardTest` (moved; every Phase 4 and Phase 6 rule pair).
+- `ApplicationFlowServiceTest`: UTR waits for the Accountant, the sanctioner cannot enter the UTR even as ADMIN, the confirmer differs from the sanctioner and the disburser, ACCOUNTANT-only, return, `cc23_applyAgainWhileAwaitingDisbursalConfirmationIsBlocked`.
+- `LoanServiceTest`: `cc01_confirmationOnALaterDayMovesDayZeroToTheConfirmedDate` (UTR on 1 Nov, confirmed 3 Nov at 00:30 IST → due 17 Nov 23:59:59 IST), discard only while pending.
+- `RepaymentServiceTest`: recorder ≠ verifier as ADMIN, borrower payments have no staff recorder, no payment while pending.
+- `CollectionPaymentServiceTest`: raiser ≠ validator as ADMIN.
+- `ApplicationFlowIntegrationTest`:
+  - happy path UTR → borrower sees pending + UTR → Accountant queue → confirm → ACTIVE;
+  - `sod_adminNoLongerWalksAnApplicationToActiveSolo` (sanctioner→disburser, sanctioner→confirmer, disburser→confirmer, disburser→return);
+  - `sod_paymentRecorderCannotVerify`;
+  - `sod_collectionsPaymentRecorderCannotValidate`;
+  - `cc01_dueDateIsFixedFromTheConfirmedDateNotTheUtrEntry`;
+  - the return path, `cc23_…` and the V99 check.
+
+Deviations:
+- **Path.** The backend endpoint is `/api/applications/{id}/disbursal/confirm`. The staff console reaches it as `/api/staff/applications/{id}/disbursal/confirm` through the existing BFF proxy, like every other staff application action.
+- **Confirmed date.** It is the server's IST date at confirmation. The Accountant does not type a date, which is borrower-favourable when confirmation is late (CC-01).
+- **Return path added.** Without it, a mistyped UTR would strand the file.
+- **ADMIN `admin-record`.** It no longer verifies in the same call. The payment now waits for an Accountant, because recorder ≠ verifier binds ADMIN too.
+- **No recorder on upstream-validated credits.** Collections and NACH credits (`LoanDirectory.creditCollectionPayment`) carry no recorder: their maker-checker runs upstream, and raiser ≠ validator is now enforced there.
+- **CC-23 error codes.** CC-23 keeps the navix codes `ACTIVE_APPLICATION` / `ACTIVE_LOAN` (the web routes on them) instead of `LOAN_IN_PROGRESS`.
+- **CC-01 partly done.** Schedule v1, the `SCHEDULE` document and the SMS/push of the final due date wait for Phase 5 (documents) and the notification work.
+- **No Accountant alert.** The Accountant is not notified when a file enters the confirmation queue; the retired `DISBURSEMENT_PENDING_ACCOUNTANT` type is not revived.
+- **Staff console.** It has no confirm/return buttons yet, and the segment "Awaiting disbursal confirmation" is not built (Phase 10b, R6). A pending loan reads as "active" in the customer segments, where DISBURSING was already counted.
+- **EMI and extension SoD.** These are rule definitions only; the code they guard is Phase 6.
+- **CC-21.** `@Version` is still not on `loan_application`.
 
 ## Phase 5: Documents (weeks 5–6)
 
@@ -334,6 +431,39 @@ Status is split into separate dimensions on `loan`, as the deck requires.
   - Each PDF has a golden text extraction (PDFBox, test scope) asserting every required field.
   - No "DhanBoost" string in any output.
   - Cross-customer access → 422 `FORBIDDEN_OWNER`.
+
+**Status (2026-11-01): done.** `mvn verify` is green (1,889 unit) and `mvn verify -Pit` is green (78 integration, up from 75; V100 applied to Testcontainers Postgres). Migration:
+- **V100:** `loan_document` gains `application_id`, `version`, `pricing_version_id`, `amount_paise`, `s3_key`, `sha256`, `created_at`, `accepted_at`, `accepted_ip` and `acceptance_evidence jsonb`; `loan_id` becomes nullable with a check that a row belongs to an application or a loan, and `(application_id, type, version)` is unique. Also `loan_application.offer_valid_until`, `product_config.offer_validity_days` (default 3, frozen by the existing trigger) and an append-only `loan_document_access` table.
+
+Code:
+- **One set of facts.** `DocumentFacts` is built by `LoanDocumentService.facts` from the frozen pricing and product snapshots through `LoanMath` and `AprCalculator`; the renderers only format. `KfsPdfRenderer` (KFS + the repayment schedule), `SanctionLetterPdfRenderer` (rewritten on the DhanNow template) and `LoanAgreementPdfRenderer` share their layout and wording through `PdfKit`. Inter is embedded so ₹ renders. The "no auto-debit mandate" line is gone.
+- **APR.** `AprCalculator` (interface) with `Method.IRR` (default: (principal / net)^(365/14) − 1, the IRR of −net at day 0 and +principal at day 14, compounded) and `Method.SIMPLE`, chosen by `navix.apr.method`. ₹1,000 → ₹742 / ₹1,000 / 14 days pins **239,096.78%** (IRR) and 906.53% (simple); every ladder amount has the same APR.
+- **Config.** `navix.brand.*`, `navix.grievance.*` (Dharmendra Rajput / 9211331170 / grievance@dhannow.com) and `navix.lender.*` are `@ConfigurationProperties` records in `navix-common` (`com.navix.common.brand`), with the defaults in `application.yml` only. The lender defaults are `[placeholder]`s; `ProductionConfigGuard` refuses to start with `NAVIX_ENV=prod` while any lender value is blank or a placeholder.
+- **KFS flow.** `POST /api/applications/{id}/offer/kfs` issues or reuses the KFS and returns a 5-minute link; `POST …/offer/kfs/ack` records `accepted_at`, the IP (last `X-Forwarded-For` hop) and evidence. New journey step `OFFER_KFS` (route `/loan/kfs`) after SUMMARY; the journey holds an unsigned borrower there until the KFS is acknowledged. `esign/init` and the drawn-signature fallback refuse with 422 `KFS_NOT_ACKNOWLEDGED` (or `OFFER_EXPIRED`). An acknowledgement binds to the offer it was shown for: same amount, same pricing version, offer still open.
+- **CC-02.** `PricingService.freeze` (sanction and re-apply) opens the validity window. A lapsed offer is re-quoted on the ACTIVE pricing the next time the KFS is opened, which issues a new KFS version to acknowledge; the old one can never be signed.
+- **Signing.** `POST …/offer/sanction-letter` issues the `SANCTION` document and stores the pack the borrower signs (sanction letter + agreement) as the navix `SANCTION_LETTER` application document, so the Signzy flow runs unchanged. On PASS (status poll, webhook or drawn signature) the signed copy is recorded once as `AGREEMENT` (S3 key, SHA-256 of the stored bytes, `accepted_at`, method and provider reference) and the sanction letter is stamped accepted.
+- **CC-01 schedule.** When the Accountant's confirmation commits (`ACTIVATE`), a `SCHEDULE` document with the confirmed due date is issued on the loan, in its own transaction; a storage failure is logged and never undoes the confirmation.
+- **Access.** `GET /api/loans/{id}/documents` (list, the offer's documents plus the loan's) and `GET /api/loans/{id}/documents/{docId}/url` (presigned GET, 5 minutes; `DocumentStoragePort.presignDownload(key, ttl)` added). A borrower reading another customer's loan gets 422 `FORBIDDEN_OWNER`, DSA gets `FORBIDDEN_ROLE`, and each staff link is written to `loan_document_access`.
+- The e-sign document title on the provider page uses `navix.brand.name`.
+
+Tests:
+- `AprCalculatorTest` (APR pinned, every ladder amount, simple method).
+- `LoanDocumentServiceTest`: money parity of the facts with `LoanMath` for all seven amounts; golden text (OpenPDF `PdfTextExtractor`) of the KFS, sanction letter, agreement pack, signed pack and schedule with every required field and the ₹ figures; no "DhanBoost", "NBFC", auto-debit, salary or pay-early wording in any output; KFS acknowledgement gate; acknowledgement bound to the amount; `cc02_aLapsedOfferIsRequotedAndItsOldKfsCanNeverBeSigned`; the signed agreement recorded once; `cc01_theScheduleIsIssuedOnceWithTheConfirmedDueDate`; schedule failure does not undo confirmation; cross-customer `FORBIDDEN_OWNER`; 5-minute link and staff audit.
+- `OfferServiceTest` (e-sign refused without acknowledgement, drawn signature records the agreement, ack advances the journey), `JourneyServiceTest` (KFS step and hold), `ProductionConfigGuardTest` (placeholder and blank lender fail prod, dev boots).
+- `ApplicationFlowIntegrationTest`: `documents_kfsAckGatesESignAndEveryDocumentIsOnTheLoan` (KFS → ack → e-sign → AGREEMENT → confirm → SCHEDULE → list for the owner, 5-minute link, `FORBIDDEN_OWNER` for another borrower, staff read audited), `cc02_aLapsedOfferIsReQuotedAndItsOldKfsCanNeverBeSigned`, and the V100 checks.
+
+JaCoCo's 80% gate now also covers `LoanDocumentService`, `AprCalculator` and the document renderers.
+
+Deviations:
+- **Documents on the offer.** The KFS, sanction letter and agreement are issued before any loan exists, so `loan_document` rows carry `application_id`; the loan's list joins them through the application. `amount_paise` was added to tell which offer a KFS describes.
+- **One e-sign for two documents.** The borrower signs one pack (sanction letter + agreement); its acceptance stamps both. The navix `SANCTION_LETTER` / `SIGNED_AGREEMENT` application documents are still written, because the e-sign flow, the staff console and the signed-letter email read them.
+- **PDFBox not added.** OpenPDF (already a dependency) extracts the text, ₹ included, so no new test dependency.
+- **Indian digit grouping.** Java's `NumberFormat` groups in threes even for `en-IN`, so the APR reads 239,096.78%. Ladder amounts (≤ ₹10,000) are unaffected.
+- **Prod switch.** The lender check runs on `NAVIX_ENV=prod`, the switch the existing guard uses, rather than a Spring `prod` profile.
+- **Step-up OTP (`X-Step-Up`).** Not built: it needs the Phase 8 auth work. Documents are owner-checked and links live 5 minutes.
+- **Copy.** The grievance line uses the RBI 30-day escalation (cms.rbi.org.in); the 15-day SLA waits for the Phase 7 complaint ticket. Cooling-off reads "Not applicable to this loan" (none in v1). Lender wording is a draft pending Legal.
+- **CC-01 partly done.** The `SCHEDULE` document is issued; the SMS/push of the final due date waits for the notification work. Other "DhanBoost" strings in notification templates and internal provider labels are not part of the documents and are left for the brand sweep.
+- **Navix (ACCRUED) offers.** Pre-V92 offers render on the navix terms with the sanctioned tenure; they are not shown to DhanNow borrowers.
 
 ## Phase 6: Payments, closure, loan extension, EMI (weeks 6–8)
 
@@ -506,7 +636,7 @@ Also:
 | EXT-29 | Day boundary | All dates are IST via `Clock`; pay-by ends at 23:59:59 IST; the sweep runs at 00:05 so no request races the boundary |
 | EXT-30 | Reports and dashboards | The guard test fails if any `payment` query lacks purpose handling; extension income has its own series and ledger type |
 
-**EMI** (flag `emi-conversion`; V103 `emi_conversion`):
+**EMI** (flag `emi-conversion`; V104 `emi_conversion`):
 - COLLECTION_EXECUTIVE / COLLECTION_HEAD *requests*; **ADMIN only approves** (RBAC server-side).
 - The customer accepts in the app.
 - Instalments: ≤₹5k → days 10/20; ₹7k/₹10k → days 10/20/30. Day 0 is the conversion date.
@@ -521,6 +651,108 @@ Also:
 - ₹7,000/3 sums exactly.
 - An EMI approved by a non-ADMIN → 422.
 - Webhook replay is idempotent.
+
+**Status (2026-11-01): 6a done.** Phase 6 runs in three parts: 6a (payments, closure, schedules, the breakdown money model), 6b (loan extension), 6c (EMI and the report purpose guard). `mvn verify` is green (1,904 unit) and `mvn verify -Pit` is green (82 integration, up from 78; V101–V102 applied to Testcontainers Postgres). Migrations:
+- **V101:** `payment_allocation(payment_id, loan_id, component PENAL|INTEREST|PRINCIPAL|EXCESS, amount_paise)`, unique per payment and component; `idempotency_key(key, scope, request_hash, result_id, created_at)`; `refund_case(loan_id, customer_id, payment_id | mandate_debit_id, amount_paise, reason OVERPAYMENT|NACH_AFTER_CLOSE, status OPEN|REFUNDED|CANCELLED)`, one per source; `payment.txn_ref` normalised (no spaces, upper case) with a unique index across all non-rejected payments (CC-07).
+- **V102:** `repayment_schedule` and `schedule_instalment` as listed above, one ACTIVE schedule per loan. Triggers refuse any edit of a schedule's terms or an instalment's dates and money, and any delete; only `status` (→ SUPERSEDED) and `paid_paise`/`status` on an instalment may change.
+
+Code:
+- **`PaymentAllocator`.** On verification, each payment is split over what was owed on its bank date (`paid_on`): late charge to that date, interest (0 on DhanNow terms), principal, less what earlier payments already covered, in the order of `navix.payments.waterfall` (`PENAL,INTEREST,PRINCIPAL`; INTEREST is listed only for loans on the navix terms). The rest is EXCESS and opens an OVERPAYMENT refund case (CC-08); money verified onto an already closed loan is all excess. Principal paid is spread over the active schedule's instalments.
+- **Idempotency.** `IdempotencyService.execute(scope, key, request, action)` in `navix-common` inserts the key in the caller's transaction, so the action and its key commit together; a concurrent duplicate waits on the key and gets the first result. Same key with a different request → 422 `IDEMPOTENCY_KEY_REUSED`. `POST /api/loan/{id}/repayments` requires `Idempotency-Key` from a BORROWER (422 `IDEMPOTENCY_KEY_REQUIRED`, CC-22); `admin-record` honours it when sent. 6b/6c call the same helper for extension and EMI activation.
+- **UTRs (CC-07).** A UTR already on file is 422 `DUPLICATE_UTR` on the borrower/ADMIN path, on any loan. The upstream-validated paths (collections, NACH, gateway) still get the existing payment back when the UTR is already on the same loan, so one transfer is never counted twice; on another loan they are refused too. A rejected payment frees its UTR for a resubmission.
+- **Gateway.** `PaymentGatewayPort` (no implementation) and `POST /api/webhooks/payments/{provider}`: 422 `FEATURE_DISABLED` while `payment-gateway` is OFF, `UNKNOWN_PROVIDER` without an adapter; with both, a callback is recorded once per provider event id (key `provider:eventId`) as a payment awaiting the Accountant.
+- **Closure.** Every closing path takes the application's `REPAID` transition; after it commits, `LoanDocumentService.onLoanClosed` issues a `CLOSURE_RECEIPT` once (payments, the penal/principal split, any refund; "Closed by an approved settlement" when principal was not paid in full), in its own transaction like the schedule. The borrower notification is the existing navix `LOAN_CLOSED` on that transition. The ladder hook is unchanged.
+- **Refunds.** `RefundCaseService` writes the register; `GET /api/refund-cases[?status=OPEN]` (ACCOUNTANT, ADMIN). The navix NACH register (`mandate_debit.overpayment`, `GET /collections/debits/overpayments`) is kept, and a debit landing on a settled loan now also opens a `NACH_AFTER_CLOSE` case (the CC-11 "both clear → refund" half).
+- **Schedule v1.** `LoanService.confirmDisbursal` writes the v1 BULLET schedule in the confirmation transaction: one instalment of the principal on the confirmed due date and `due_at` (fee, GST and interest were deducted at disbursal; on navix terms the scheduled interest is on the instalment).
+- **Money model (item 5, Phase 10b R4).** `OutstandingBreakdown` and `OutstandingView` (`/api/loan/{id}/outstanding`, customer 360) gain `interestPrepaidPaise` (the frozen `loan.upfront_interest_paise`), shown and never owed. Owed = principal + late charge (penal rate × principal per day past due, from the frozen snapshot, stopping at the cap) − verified paid.
+- `verifyPayment` refuses a REJECTED payment (422 `PAYMENT_REJECTED`) instead of reviving it (the bug noted in item 5).
+
+Tests:
+- `PaymentAllocatorTest` (`cc09_…` penal before principal, `cc08_…` excess, closed loan, configured order).
+- `RepaymentServiceTest`: `cc07_aUtrAlreadyOnFileIsRefused`, upstream same-loan UTR returns the payment, UTR normalising, `cc22_aBorrowerSubmitNeedsAnIdempotencyKeyAndGoesThroughTheGuard`, rejected payment cannot be verified, `cc19_breakdownExcludesPrepaidInterestAndCapsTheLateChargeAtThirtyDays`, `cc09_verifyAllocatesAgainstTheLateChargeToThePaymentDate`, `cc08_aPaymentVerifiedAfterClosureIsAllExcess`.
+- `LoanDocumentServiceTest`: closure receipt golden text and wording, `cc08_theClosureReceiptStatesTheRefund`, issued once on `REPAID`.
+- `DebitServiceTest`: NACH-after-close opens a refund case, `cc11_bothClearOpensARefundCaseOnlyForTheDebitNoLongerOwed`.
+- `ApplicationFlowIntegrationTest`: `payments_recordVerifyAllocateCloseReceiptAndLadderUp` (v1 BULLET schedule and its triggers, key required, replay returns the same payment, reused key refused, `DUPLICATE_UTR`, part → PARTIAL → full → CLOSED, allocation rows, instalment PAID, one `CLOSURE_RECEIPT`, level 2); `cc08_overpaymentOnALateLoanOpensARefundCaseAndTheLateChargeIsCapped` (40 days late owes ₹1,600, prepaid ₹140 shown, ₹1,700 paid → PENAL 600 / PRINCIPAL 1,000 / EXCESS 100, OPEN refund case listed for the Accountant, another customer's reuse of the UTR refused, level unchanged); `paymentWebhookIsRefusedWhileTheFlagIsOff`; `paymentWebhookReplayIsIdempotent` (flag ON, test adapter).
+
+Deviations:
+- **`idempotency_key` columns.** `request_hash` + `result_id` instead of `response_hash`: a replay returns the stored result's id (the caller re-reads it), and the hash binds the key to the actor, target and body, so one borrower's key can never return another's payment.
+- **Lifetime 30-day cap.** The cap counts days past the current due date. Counting penal days across extension cycles needs `loan_due_history` (6b, EXT-26).
+- **Gateway payments wait for the Accountant.** The stub records them PENDING_VERIFICATION; auto-verification is left to the real adapter's phase.
+- **Same-loan UTR on the upstream paths.** Kept as a return of the existing payment (navix behaviour that NACH reconcile and collections rely on), not a 422.
+- **Not built here.** `loan.closure_type` (CC-18), `POST /payments/{id}/reverse` (CC-10), the `balance_adjustment` reversal of CC-05, and refund case actions (mark refunded) and a staff screen (Phase 10b "Refunds owed"). The `LOAN_CLOSED` email still says "DhanBoost" (brand sweep, as noted in Phase 5). The app still talks to the demo server; when it moves to the real API it must send one `Idempotency-Key` per repayment submit.
+- **For 6b/6c.** `payment` has no `purpose` yet; the sums in `RepaymentService`, the allocator's prior-allocation sums and `latestVerifiedPaidOn` will need the `purpose='REPAYMENT'` filter, and `findFirstByTxnRefAndStatusNot` the purpose-aware dedupe (`UTR_USED_FOR_OTHER_PURPOSE`). Extension money gets its own allocation components (`EXT_FEE`/`EXT_GST`/`EXT_INTEREST`); widen the V101 check. A new schedule version supersedes v1 (insert the new ACTIVE row after setting the old one SUPERSEDED; the partial unique index allows one ACTIVE). Schedule instalment `status` has no OVERDUE yet (CC-17, 6c).
+
+**Status (2026-11-01): 6b done.** `mvn verify` is green (1,942 unit, up from 1,904) and `mvn verify -Pit` is green (86 integration, up from 82; V103 applied to Testcontainers Postgres). Migration:
+- **V103 `loan_extension`:** the table (status, `version`, fee/GST/interest frozen at offer, `pay_by`, `expires_at` = 23:59:59 IST on pay-by, old/new due date, call note + recording id, override reason, proposer/approver/rejecter/canceller, `accepted_at` + `consent_version`, `declined_reason`, `seen_by_borrower_at`, `payment_id`, resend counter), `unique (loan_id, seq)` and the partial unique index `uq_loan_extension_open` (one OFFERED/APPROVED/ACCEPTED/PAYMENT_PENDING per loan). `product_config.extension_max` (3, frozen by the trigger). `collection_payment` kind `EXTENSION`, `extension_id`, `version`. `payment.purpose` (`REPAYMENT`/`EXTENSION`) + `extension_id` with a check, and one live payment per extension. `payment_allocation` widened for `EXT_FEE`/`EXT_GST`/`EXT_INTEREST`. `loan.extension_count`, `original_due_date`, `penal_days_used`, `penal_carried_paise`. `loan_due_history`. `credit_level_history` reason `EXTENDED_NO_CHANGE`. A minimal `balance_adjustment`.
+
+Code:
+- **Loan side (`LoanExtensionLedger`, navix-loan).** The quote (`quote(loan, math, paidOn, repaymentPenalPaid)`, pure): fee + GST + one tenure of interest from the frozen snapshot, plus the late charge of the current cycle to `paid_on` within the lifetime cap, plus earlier-cycle late charge not yet paid, less what repayments paid of it. ₹1,000 3 days late = ₹318. Eligibility facts with reason codes (`NOT_DUE_YET`, `LOAN_CLOSED`, `RESTRUCTURED`, `ON_HOLD`, `REPAYMENT_PENDING`, `DEBIT_IN_FLIGHT`, `EXTENSION_CAP_REACHED`; the state is the clock's when the lifecycle job has not run yet). `activate` is the only code that moves a due date: under the NACH loan advisory lock, with the extension PAYMENT_PENDING and the payment equal to the quote for its `paid_on`, it writes the allocation rows, closes the due cycle and opens the next in `loan_due_history`, sets due += tenure and `due_at`, `extension_count`++, `penal_days_used` += the days charged, lifecycle → ACTIVE (which also clears IN_COLLECTIONS), a new EXTENSION schedule version (v1 superseded first), a `balance_adjustment` row, the extension ACTIVE, and `ExtensionActivatedEvent`. A debit in flight blocks activation. SoD `extensionPaymentVerifier` (and `paymentVerifier`) on every path.
+- **Money model.** `breakdown` counts late days through `LoanMath.chargeablePenalDays` (lifetime cap, EXT-26) and adds `penal_carried_paise`; the verified sums (`PaymentRepository`), `latestVerifiedPaidOn`, `repayment_status`, the allocator's prior allocations and the closure receipt read REPAYMENT money only. Extension money never reduces principal.
+- **`RepaymentService`.** `submitPayment(... purpose, extensionId)`; an EXTENSION payment must be the exact quote (422 `EXTENSION_AMOUNT_MISMATCH`), is never partial, and moves the extension to PAYMENT_PENDING. A UTR on file for the other purpose is 422 `UTR_USED_FOR_OTHER_PURPOSE`. Verify activates (or, if the extension was cancelled because the loan closed, refunds all of it as EXCESS, CC-69); reject returns the extension to ACCEPTED (EXT-19). Closing a loan cancels any open extension (EXT-06).
+- **Collections side (`LoanExtensionService`, navix-collections).** Offer (COLLECTION_EXECUTIVE on an assigned case or COLLECTION_HEAD; flag `loan-extension`; refused while a settlement is open; pay-by from today to before the new due date), approve (COLLECTION_HEAD, SoD `extensionApprover`, refused after pay-by, eligibility re-checked), reject (picklist + note), cancel (not while a payment is pending), resend (3 a day). Every transition takes the loan lock, goes through `ExtensionStatus` and `@Version`; an illegal or stale move is 409 `STALE_STATE` with the current state (`ConflictException`, new 409 handler, which also maps optimistic-lock failures). `SettlementService.propose` refuses while an extension is open (`EXTENSION_OPEN`). `CollectionPaymentService`: kind `EXTENSION` needs the case's ACCEPTED extension and the exact quote; validation takes the loan lock and calls `LoanDirectory.applyExtension` instead of `creditCollectionPayment`; a rejection returns the extension to ACCEPTED. `ExtensionDirectory` (navix-common port, `ExtensionDirectoryAdapter`) lets the loan module move extensions without a bean cycle.
+- **Expiry.** `ExtensionExpirySweep` (navix-app, 00:05 IST, `scheduler_lock`, idempotent) expires OFFERED/APPROVED/ACCEPTED past pay-by, never PAYMENT_PENDING. Reads treat a lapsed offer as EXPIRED before the sweep.
+- **Notifications.** Category `EXTENSION`; types `EXTENSION_TO_APPROVE` (Heads), `EXTENSION_OFFERED` (borrower IN_APP + EMAIL, on the Head's approval), `EXTENSION_ACTIVATED` (borrower IN_APP + EMAIL + SMS), `EXTENSION_EXPIRED` / `EXTENSION_DECLINED` (assigned officer, else the proposer); events `ExtensionOffered/Approved/Activated/Expired/DeclinedEvent`. The `EXTENSION_ADDENDUM` PDF (`KfsPdfRenderer.renderExtensionAddendum`) is issued once per activation after commit, like the 6a closure receipt.
+- **Worklist.** `findCollectible` and the worklist SQL keep every loan with `extension_count > 0`; rows carry `extState` (latest extension status, sortable and faceted) and `extensionCount`.
+- Ladder: a closed loan with any activated extension records `EXTENDED_NO_CHANGE`.
+
+API (staff, under `/api/collections`): `GET|POST /cases/{caseId}/extensions`, `POST /loans/{loanId}/extensions` (opens the case first), `POST /extensions/{id}/approve|reject|cancel|resend`; `POST /cases/{caseId}/payments` takes `kind=EXTENSION` + `extensionId`. Borrower: `GET /api/loan/{id}` gains `originalDueDate`, `extensionCount`, `pendingExtension{id, status, version, seq, cap, quoteForToday{feePaise, gstPaise, interestPaise, lateChargePaise, lateDays, paidOn, totalPaise}, payBy, expiresAt, newDueDate, seen}` and `extensions[]{id, seq, status, oldDueDate, newDueDate, activatedAt, paymentId}`; `POST /api/loans/{id}/extensions/{extId}/seen|otp|accept {otp, consentVersion, version}|decline {reason NOT_NOW|DID_NOT_ASK, version}`; payment is `POST /api/loan/{id}/repayments` with `purpose=EXTENSION, extensionId`. `PaymentView` gains `purpose` and `extensionId`.
+
+Tests:
+- `LoanExtensionLedgerTest`: `cc15_quoteForOneThousandPaidThreeDaysLateIs318`, `cc15_lateChargeAlreadyPaidByARepaymentIsNotChargedAgain`, `cc16_newDueDateIsThePreviousDuePlusFourteen`, `ext26_theLateChargeCapIsALifetimeCapAcrossCycles`, `ext02_anIneligibleLoanGetsASpecificReasonCode`, `ext16_aPaymentThatIsNotTheQuoteNeverExtends`, `ext09_aPaymentForAnExtensionNotWaitingForOneIs409`, `cc69_verifyingAPaymentForACancelledExtensionDoesNotActivate`.
+- `RepaymentServiceTest`: `ext15_aUtrAlreadyUsedForARepaymentCannotPayAnExtension`, extension payment recorded against its extension, `ext19_…`, verify activates and leaves principal alone, `cc69_…` refund, `ext26_theBreakdownCountsLateDaysUsedInEarlierCycles`. `CreditLevelServiceTest.ext28_anExtendedLoanClosesWithoutALevelChange`.
+- `LoanExtensionServiceTest`: the state machine, offer, `ext01_…` (409 and the index race), `ext02_…`, `ext03_…`, `ext04_theHeadCannotApproveTheirOwnOffer`, `ext05_…`, `ext25_theCapNeedsAnAdminOverrideWithAReason`, `cc29_…`, `ext11_…`, `ext12_acceptIsIdempotent`, `ext09_aStaleVersionIs409`, cross-borrower `FORBIDDEN_OWNER`, `cc71_didNotAskDeclinesAndTellsTheOfficer`, `cc67_anAcceptedOfferNeverPaidExpires`, `ext21_theSweepSkipsAPendingPayment`, `ext07_resendIsLimitedToThreeADay`, no cancel while paid. `CollectionExtensionPaymentTest`: `ext16_…` (mismatch refused), validation applies the extension (never `creditCollectionPayment`), approver cannot validate (SOD), `ext19_…`. `SettlementServiceTest.proposeIsRefusedWhileAnExtensionIsOpen`.
+- `ApplicationFlowIntegrationTest`: `extension_offerApproveAcceptPayVerifyMovesTheDueDateAndClosesWithNoLevelUp` (offer → 409 + DB index → panel ₹318 → own-offer SOD → approve → borrower sees it → seen → OTP (wrong code refused) → accept, replay idempotent → short payment refused → ₹318 recorded, due unchanged → Accountant verifies → due + 14, `Extended 1 of 3`, allocations EXT_FEE 100 / EXT_GST 18 / EXT_INTEREST 140 / PENAL 60 and no PRINCIPAL, outstanding ₹1,000, schedule v1 SUPERSEDED + v2 EXTENSION, two due-history rows, one `balance_adjustment`, one addendum, still on the worklist with `extState=ACTIVE` → ₹1,000 repaid → CLOSED, level 1, `EXTENDED_NO_CHANGE`); `ext20_twoAccountantsValidatingAtOnceMoveTheDueDateOnce` (two threads, one 200, one extension payment, then the UTR is refused for a repayment); `ext25_aFourthExtensionNeedsAnAdminOverride`; `cc67_anAcceptedOfferThatIsNeverPaidExpires` (the sweep).
+
+Deviations:
+- **Migration numbers.** The extension is V103; 6c takes V104 for `emi_conversion`, so Phase 7's V104–V106 become V105–V107. `balance_adjustment` is created (minimal) in V103; Phase 7 extends it (reason-code lookup, reconciliation) instead of creating it.
+- **Loan columns beyond the plan.** `penal_days_used` and `penal_carried_paise` carry the lifetime cap and earlier-cycle late charge paid by repayments, so the batched outstanding stays one query per page. `loan_due_history` is written from the first extension on (seq 1 is the original cycle); an unextended loan's only cycle is the loan row itself.
+- **No outbox.** There is no outbox table in the codebase. Notifications use the existing after-commit async listeners and the addendum is issued after commit in its own transaction (as 6a did for the closure receipt); a failure is logged and never undoes the activation. Retries with backoff and the alert after 3 failures (EXT-22) wait for an outbox (Phase 9).
+- **Events.** `ExtensionAcceptedEvent` and `ExtensionPaymentRecordedEvent` are not created: no notification type consumes them (the Accountant hears the existing `REPAYMENT_RECORDED` / `COLLECTION_PAYMENT_TO_VALIDATE`). The borrower gets `EXTENSION_OFFERED` when the Head approves (an unapproved offer is never shown). PUSH is Phase 8; `EXTENSION_ACTIVATED` SMS delivers once its DLT template is approved, and `EXTENSION_OFFERED` SMS waits for `DN_EXT_OFFER`.
+- **Declining.** Allowed from APPROVED as well as ACCEPTED (the borrower can say "Not now" on C12 before confirming). OFFERED also expires at pay-by, which frees the loan's one open slot for a fresh offer (EXT-05).
+- **Accept idempotency** is by state (once accepted, a retry returns ACCEPTED without a code); `IdempotencyService` stores bigint results and still guards the payment submit (`Idempotency-Key`), which is what the app retries.
+- **Exact amount only.** An extension payment that is not the quote for its `paid_on` is refused when recorded (borrower, ADMIN and collections paths), so EXT-16's short/long cases never reach the Accountant as extension payments. Not built: the Accountant's "Treat as extension payment" on a repayment (EXT-14) and "Re-open for this payment" (EXT-18); the officer re-offers instead. Both are Phase 10b backend + G4 work.
+- **CC-70.** One live payment per extension (`uq_payment_live_extension`) plus the state machine refuses a second payment at record time; money already sent is recorded as a part payment or refunded by the Accountant.
+- **CC-71 / EXT-27.** "I didn't ask" is stored as `declined_reason=DID_NOT_ASK` and tells the officer; opening the complaint ticket waits for Phase 7, as does cancelling an open offer when a dispute is raised (no dispute endpoint yet; a hold already blocks offers and approvals).
+- **Override permission.** The server checks role ADMIN + a reason; `collections:extension-override` is the web RBAC name (Phase 10, `rbac.ts`).
+- **NACH (flag off).** `shouldPresent`/`DebitService.prepare` still count attempts over the loan's life, not per cycle; activation is refused while a debit is in flight. Per-cycle counting is left until eNACH is switched on.
+- **Upcoming watchlist.** Its case filter is unchanged: extended loans are on the worklist whatever their due date, so they are not hidden.
+- **Not here (6c).** Item 10 (report queries' `purpose` handling and the grep guard test) and EMI.
+
+For 6c / Phase 10 / Phase 11:
+- 6c: every report query reading verified `payment` must handle `purpose` (extension income has its own series; `TransactionLedgerQuery` row type `EXTENSION`). `payment_allocation` PENAL rows from extension payments belong to the extension; the closure receipt already filters them.
+- Phase 10 (G1–G5): worklist rows have `extState`/`extensionCount`; `GET /cases/{id}/extensions` returns `{eligible, reasonCode, cap, used, quoteForToday, dueDate, originalDueDate, newDueDate, current, history}`; `RecordPaymentCard` sends `kind=EXTENSION` + `extensionId` with the amount locked to `quoteForToday.totalPaise`; the Accountant queues can badge `purpose=EXTENSION` (repayments) or `kind=EXTENSION` (collections); 409 bodies carry the current state in `error.details[0]`.
+- Phase 11 (C12–C12d): render from `pendingExtension.status` (APPROVED → confirm with OTP; ACCEPTED → pay; PAYMENT_PENDING → waiting; null + last `extensions[]` entry for ACTIVE/EXPIRED/DECLINED/CANCELLED); send `version` on accept/decline and one `Idempotency-Key` per payment submit; `quoteForToday` is for paying today (the late charge follows the bank date).
+
+**Status (2026-11-01): 6c done; Phase 6 done.** `mvn verify` is green (1,957 unit, up from 1,942) and `mvn verify -Pit` is green (91 integration, up from 86; V104 applied to Testcontainers Postgres). Migration:
+- **V104 `emi_conversion`:** the table (status REQUESTED/APPROVED/ACTIVE/REJECTED/CANCELLED/DECLINED/EXPIRED, `version`, `instalment_count` + `gap_days` frozen at request, `accept_by`/`expires_at`, requester/approver/rejecter/canceller, `accepted_at` + `consent_version`, and at activation `conversion_date`, `principal_paise`, `charges_paise`, `interest_mode`, `schedule_version`), one open (REQUESTED/APPROVED) per loan (`uq_emi_conversion_open`). `product_config.emi_gap_days` (10) and `emi_three_from_paise` (₹7,000), frozen by the trigger. `schedule_instalment.penal_paise` (late charge converted into an EMI, frozen) and status `OVERDUE`. `loan.closure_type` (REPAID/SETTLED, backfilled) and `loan.restructured_at`. `payment` status `REVERSED` + `reversed_by/at`, `reversal_reason`. `refund_case.refund_utr`, `refunded_on`, `decided_by`, `cancel_reason`. `credit_level_history` reason `CLOSURE_REVERSED` + `reversed_at` (the one-closure-per-loan index skips reversed rows).
+
+Code:
+- **EMI (`EmiConversionService`, navix-loan; flag `emi-conversion`, OFF).** COLLECTION_EXECUTIVE / COLLECTION_HEAD request on an overdue loan (reason codes `NOT_OVERDUE`, `LOAN_CLOSED`, `RESTRUCTURED`, `ON_HOLD`, `REPAYMENT_PENDING`, `DEBIT_IN_FLIGHT`, `EXTENSION_OPEN`, `SETTLEMENT_OPEN`, `FEATURE_DISABLED`; a second open request is 409 `EMI_ALREADY_OPEN`); accept-by from today to `offer_validity_days` ahead. Only an ADMIN approves or rejects (anyone else 422 `FORBIDDEN_ROLE`), never the requester (`SeparationOfDutiesGuard.emiApprover`); approval puts the loan in RESTRUCTURE_PENDING. The borrower accepts with an OTP (purpose `EMI_CONVERSION`, mobile resolved server-side), which activates it once through `IdempotencyService` (key `emi:<id>`) under the loan advisory lock: what is owed that day (principal still open + late charge to date) is split into two instalments, or three from `emi_three_from_paise`, every `emi_gap_days` days from the conversion date, remainder paise on the last (principal and charges each); the loan goes RESTRUCTURED with its late charge frozen (`penal_carried_paise`, `restructured_at`: the breakdown charges no late days after it); the active schedule is superseded by an EMI version; a `balance_adjustment` row (`EMI`) records before/after and the consent. Decline (`NOT_NOW`/`DID_NOT_ASK`), cancel (collections or ADMIN) and expiry (the 00:05 sweep, which now also expires EMI offers) put the loan back to the overdue state its dates give. Closing the loan cancels an open offer. An extension is refused while a conversion is open (`EMI_OPEN`) and a conversion while an extension is open. Every move takes the loan lock, `EmiStatus` and `@Version` (409 `STALE_STATE`). EMI interest = `navix.emi.interest-mode` (`NONE`, the only mode defined).
+- **Schedules.** Payments fill EMI instalments with principal and late charge (an EMI instalment carries both); CC-17: the sweep marks open instalments past `due_at` OVERDUE (`RepaymentScheduleService.markOverdue`), and a payment still fills them.
+- **Report purpose guard (item 10, EXT-30).** Every query reading `payment` says which purpose: recovery figures read `purpose='REPAYMENT'` (`CollectionQueries`, `MetricSql`, `BusinessQueries`, `TeamQueries` sanctioner book, `ReportService` summary, monthly, customers, repeat customers, closures, on-time, officer collections, income, repayments report), extension income is its own series (summary row "Extension charges verified", a monthly column, an income column, transactions-report type `Extension`), `TransactionLedgerQuery` rows are typed `EXTENSION` (and drop REVERSED), and the accountant workload / pending queue count both purposes (and say so). `PaymentPurposeGuardTest.ext30_everyQueryReadingPaymentsSaysWhichPurpose` scans every `src/main/java` file for `from payment` / `join payment` (SQL and JPQL) and fails when a statement has fewer `purpose`/`extension_id` mentions than payment reads. The navix reborrow late check ignores extension charges.
+- **Closure type (CC-18).** Set on closing: SETTLED with an approved settlement, else REPAID.
+- **CC-05.** A loan closed by a payment whose `paid_on` is on or before the due date, verified while OVERDUE_*, gets a `LATE_REVERSED` `balance_adjustment` (the waterfall already charged no late fee, and the ladder judges it on time).
+- **Reversal (CC-10).** `POST /api/loan/{loanId}/repayments/{paymentId}/reverse {reason}`: ACCOUNTANT or ADMIN, never the payment's recorder or verifier. The payment becomes REVERSED; its allocation rows are removed (kept in the audit row), its instalment payment undone, its open refund case cancelled (a refund already paid is 422 `REFUND_ALREADY_PAID`). A closed loan reopens (RESTRUCTURED if it was, else to the state its dates give), its application goes back to ACTIVE (`PAYMENT_REVERSED` event), and any level the closure gave is taken back (`CLOSURE_REVERSED`). Audited as a `PAYMENT_REVERSAL` `balance_adjustment`.
+- **Refund cases.** `POST /api/refund-cases/{id}/refunded {utr, refundedOn}` and `/cancel {reason}`, ACCOUNTANT or ADMIN, OPEN only (else 409 `STALE_STATE`).
+
+API (staff, under `/api/collections`): `GET|POST /loans/{loanId}/emi` (panel `{loanId, eligible, reasonCode, owedTodayPaise, previewForToday[], current, history[]}` / request `{acceptBy, note}`), `GET /emi?status=REQUESTED` (ADMIN queue), `POST /emi/{id}/approve`, `/reject {reason NOT_ELIGIBLE|SETTLE_INSTEAD|PAYMENT_HISTORY|OTHER, note}`, `/cancel {reason}`. Borrower: `GET /api/loans/{loanId}/emi` → `{id, loanId, status, version, acceptBy, expiresAt, instalmentCount, totalPaise, instalments[{seq, dueDate, dueAt, principalPaise, chargesPaise, totalPaise, paidPaise, status}], interestMode, acceptedAt, declinedAt, activatedAt}` or null (the plan for accepting today while APPROVED, the schedule once ACTIVE); `POST /api/loans/{loanId}/emi/{id}/otp`, `/accept {otp, consentVersion, version}` (idempotent once ACTIVE), `/decline {reason NOT_NOW|DID_NOT_ASK, version}`. EMI instalments are paid through the normal `POST /api/loan/{id}/repayments`.
+
+Tests:
+- `EmiConversionServiceTest`: `cc20_sevenThousandInThreeInstalmentsSumsExactly`, `cc20_everyLadderAmountAndChargeSumsExactly` (property over the ladder × late charges), instalment count from config, `anEmiApprovedByANonAdminIs422`, `theRequesterCannotApprove`, `aRequestIsRefusedWhileTheFlagIsOff`, only collections requests, eligibility (`NOT_OVERDUE`, `EXTENSION_OPEN`, `RESTRUCTURED`). `LoanExtensionLedgerTest.ext02_…` gains `EMI_OPEN`. `RepaymentServiceTest`: `cc18_aFullRepaymentClosesWithClosureTypeRepaid` (and SETTLED on the settlement test), `cc05_paidOnTheDueDateButVerifiedWhileOverdueWritesALateReversedAdjustment`, `cc05_aLatePaymentWritesNoReversal`, `cc10_theVerifierCannotReverseThePayment`, `cc10_onlyAVerifiedRepaymentCanBeReversed`. `PaymentPurposeGuardTest`: `ext30_…` and a self-check that it catches a missing filter.
+- `ApplicationFlowIntegrationTest`: `emi_requestApproveAcceptSplitsWhatIsOwedAndCloses` (₹7,000 loan 3 days late: flag OFF refused → request → 409 → extension `EMI_OPEN` → Head approve 422 → requester SOD → ADMIN approves, RESTRUCTURE_PENDING → borrower sees 3 instalments, ₹7,420 → wrong OTP refused → accept, replay idempotent → RESTRUCTURED, BULLET superseded + EMI active, instalments 233333+14000 / 233333+14000 / 233334+14000, one `balance_adjustment`, one idempotency key, no late charge after → instalment 1 paid → rest paid, CLOSED, REPAID, level 1); `emi_aDeclinedOfferPutsTheLoanBackToOverdue` (decline, then expiry by the sweep); `cc10_reversingTheClosingPaymentReopensTheLoanAndTakesBackTheLevel`; `cc05_paidOnTheDueDateVerifiedLateIsOnTime`; `cc17_overdueInstalmentAndRefundCaseActions`.
+
+Deviations:
+- **What an EMI converts.** Everything owed on the conversion date (open principal + late charge to date), split into principal and charges per instalment; nothing is waived. `emi.penal` is off and not configurable yet: no late charge accrues on a RESTRUCTURED loan (CC-17's penal and the collection-case reopen wait for a decision). Only `NONE` interest mode exists; another mode needs the breakdown to carry EMI interest.
+- **Request scope.** Collections requests on any overdue loan (no case-assignment check, which lives in navix-collections); the ADMIN approval is the gate. No EMI notifications or `EMI_ADDENDUM` PDF yet (the borrower sees the offer through `GET /api/loans/{id}/emi`); both are Phase 10/11 work with the screens.
+- **Reversal endpoint path.** Under the existing `/api/loan/{loanId}/repayments/{paymentId}/reverse` (not `/payments/{id}/reverse`). Roles ACCOUNTANT/ADMIN (FINANCE arrives in Phase 7); maker-checker is "not the recorder or verifier", not a second approval step. Extension payments are not reversible here (they moved a due date), nor a closed loan whose customer has another loan open (`ANOTHER_LOAN_OPEN`). The reversed payment's allocation rows are deleted (copied into the adjustment) so every allocation sum stays VERIFIED-only. A re-closure issues no second closure receipt.
+- **Refund case SoD.** None: the case is opened by the system, so there is no maker to separate from.
+- **Application reopen.** `ApplicationStatus.CLOSED` stays terminal in the transition map (other checks rely on it); `reopenForLoan` is the one writer that leaves it.
+- **Customer purge.** `CustomerService.deleteCustomer` does not yet clear the Phase 6 tables (allocations, extensions, schedules, EMI, adjustments); account deletion is designed later (records retained, then purged).
+
+For Phase 7 / 10 / 11:
+- Phase 7 migrations start at **V105** (complaint V105, `balance_adjustment` extension V106, roles V107; Phase 8's `refresh_token` V108). `balance_adjustment` kinds written so far: `EXTENSION`, `EMI`, `LATE_REVERSED`, `PAYMENT_REVERSAL`.
+- Phase 10: Restructure queue = `GET /api/collections/emi` (ADMIN) + the loan panel; "Refunds owed" can use `/api/refund-cases` actions; the Accountant gets a Reverse action on verified repayments.
+- Phase 11 (EMI screens): render from `status` (APPROVED → plan + OTP accept/decline; ACTIVE → instalments with `status` DUE/OVERDUE/PAID); unknown values → S9; send `version` on accept/decline.
 
 ## Phase 7: Grievance, disputes, audit (week 8)
 
@@ -538,6 +770,39 @@ Also:
   - SUPPORT cannot touch balance or due date.
   - Mirrored in `web/src/lib/auth/rbac.ts`.
 - **MFA for staff:** TOTP (`staff_totp_secret`, encrypted). Required for ADMIN, FINANCE, CREDIT_HEAD and DISBURSEMENT_HEAD.
+
+**Status (2026-11-01): done.** `mvn verify` is green (1,975 unit, up from 1,957) and `mvn verify -Pit` is green (96 integration, up from 91; V105–V107 applied to Testcontainers Postgres). Migrations (renumbered: 6b/6c took V103/V104):
+- **V105 `complaint`:** `holiday_calendar(day, name)` (ADMIN-maintained, CC-64); `complaint` (ticket `DN-GRV-00001…` from a sequence default, `customer_id`, `loan_id`, category `PAYMENT|CHARGES|COLLECTIONS_CONDUCT|LOAN_DISPUTE|EXTENSION_NOT_REQUESTED|DATA_PRIVACY|APP_OR_SERVICE|OTHER`, `body`, `attachment_key`, `source BORROWER|STAFF|SYSTEM`, status `OPEN|ACKNOWLEDGED|IN_REVIEW|RESOLVED|ESCALATED`, `ack_due_at`/`review_due_at`/`resolve_due_at`, the milestone timestamps, `resolution_note` (required to resolve), `assigned_to`, one `*_breached_at` per milestone, `version`); append-only `complaint_event` and `loan_hold_event` (a shared `append_only()` trigger).
+- **V106 `balance_adjustment`:** extended, not recreated: `balance_adjustment_reason(code, label)` lookup (EXTENSION, EMI, PAID_ON_TIME, PAYMENT_REVERSED, SETTLEMENT_APPROVED, REFUND_PAID, REFUND_CANCELLED, MANUAL_CORRECTION, WRITE_OFF) with a foreign key and `reason_code not null`, a `note` column (6c's free-text reversal reasons moved there), a check on `kind`, and the append-only trigger.
+- **V107:** `RECOVERY`, `SUPPORT`, `FINANCE`, `COMPLIANCE` in the `staff_user`/`staff_invite` role checks; `staff_totp_secret(staff_id, secret_enc, confirmed_at, last_step)`.
+
+Code:
+- **Complaints (`ComplaintService`, navix-loan).** SLA dates from `ComplaintSla` (pure): end of the 2nd and 5th working day after the IST filing date (weekends and `holiday_calendar` skipped), end of the 15th calendar day. Borrower: `POST /api/complaints {category, body, loanId?, attachmentKey?}` (required `Idempotency-Key`, CC-22; the loan must be theirs), `GET /api/complaints`, `GET /api/complaints/{id}` (another customer's ticket is 422 `FORBIDDEN_OWNER`); the view is `{id, ticketNo, loanId, category, body, status, createdAt, ackDueAt, resolveDueAt, acknowledgedAt, resolvedAt, resolutionNote, grievanceOfficer{name, phone, email}}` with the officer from `navix.grievance.*`. Staff (under `/api/staff`, SUPPORT and ADMIN act, COMPLIANCE reads): `GET /complaints?status=&category=&assignedTo=&customerId=&breached=true`, `GET /complaints/{id}` (ticket + events), `POST /complaints` (file for a caller), `/{id}/acknowledge {note?, version?}`, `/{id}/assign {staffId}`, `/{id}/status {status, note?, version?}`, `/{id}/resolve {note, version?}`, `/{id}/escalate {note, version?}`. Moves follow a transition map; a stale version or a move the status does not allow is 409 `STALE_STATE`; resolve and escalate need a note (`NOTE_REQUIRED`). Holidays: `GET|PUT|DELETE /api/admin/holidays/{yyyy-mm-dd}` (ADMIN writes).
+- **SLA sweep.** `ComplaintSlaSweep` (navix-app, every 15 min, `scheduler_lock`, `navix.complaints.sla-cron`) flags each missed milestone once (`update … returning`) and raises `ComplaintSlaBreachedEvent`.
+- **Notifications.** `COMPLAINT_RECEIVED` (borrower IN_APP + EMAIL: ticket, reply-by date, grievance officer), `COMPLAINT_RESOLVED` (borrower), `COMPLAINT_SLA_BREACHED` (assignee + ADMINs). Every template can use `{brand}`, `{brandWebsite}`, `{supportPhone}`, `{supportEmail}`, `{grievanceName}`, `{grievancePhone}`, `{grievanceEmail}`, filled by `TemplateRenderer` from config.
+- **Disputes (`LoanDisputeService`).** `POST /api/loans/{id}/dispute {reason, complaintId?}` and `POST /api/loans/{id}/dispute/release {note}` (ADMIN, SUPPORT, COLLECTION_HEAD; maker-checker: whoever raised a dispute cannot release it, 422 `SOD_VIOLATION`), `GET /api/loans/{id}/holds` (also COMPLIANCE). A `LOAN_DISPUTE` ticket on an open loan raises one in the ticket's transaction (`ComplaintFiledEvent`). Raising cancels an extension still on offer (OFFERED/APPROVED/ACCEPTED, reason `DISPUTED`, `ExtensionDirectory.cancelOffer`) and an open EMI offer (an approved one puts the loan back to its overdue state); offers are refused while disputed (`ON_HOLD`, already in the eligibility checks) (EXT-27). A closed loan is 422 `LOAN_CLOSED`, a loan already on hold 409.
+- **CC-71.** A borrower declining an extension with `DID_NOT_ASK` opens an `EXTENSION_NOT_REQUESTED` ticket (`ComplaintService` hears `ExtensionDeclinedEvent` in the same transaction); EMI decline with `DID_NOT_ASK` does the same.
+- **balance_adjustment writers.** Extension (6b), EMI (6c), late reversal (6c), payment reversal (now `PAYMENT_REVERSED` + note), and new: settlement approval (`SETTLEMENT`, through `LoanDirectory.recordAdjustment`), refund paid / cancelled (`REFUND`).
+- **Roles.** `StaffRole` gains `RECOVERY`, `SUPPORT`, `FINANCE`, `COMPLIANCE`. COMPLIANCE is read-only at one place, `JwtAuthFilter`: any request but GET/HEAD/OPTIONS outside `/api/auth/` is 403 `READ_ONLY_ROLE`. SUPPORT gets no money or due-date right (every such endpoint is role-allowlisted; tested). FINANCE joins ACCOUNTANT on payment reversal, refund-case list and actions, and the transactions / pending-repayments reads (COMPLIANCE may read those and refund cases). `web/src/lib/auth/rbac.ts` mirrors the names (labels, purpose, `customer:view` only).
+- **Staff MFA (`StaffMfaService`).** RFC 6238 TOTP (SHA-1, 30 s, 6 digits, ±1 step), secret AES-256-GCM encrypted with `navix.mfa.encryption-key` (`NAVIX_MFA_ENCRYPTION_KEY`, base64 of 32 bytes), a used step cannot be replayed. `POST /api/auth/staff/login` takes `totpCode`; with `navix.mfa.enforce` on (default), ADMIN, FINANCE, CREDIT_HEAD and DISBURSEMENT_HEAD get `MFA_ENROLMENT_REQUIRED` until enrolled, then `MFA_REQUIRED` / `INVALID_MFA_CODE`; anyone enrolled is asked for a code. A missing or wrong code counts against the three sign-in attempts. Enrolment before the first MFA sign-in: `POST /api/auth/staff/mfa/enrol {email, password}` → `{secret, otpauthUri}`, `POST /api/auth/staff/mfa/confirm {email, password, code}`; ADMIN reset: `POST /api/admin/staff/{id}/mfa/reset` (never their own). `ProductionConfigGuard` refuses `NAVIX_ENV=prod` with enforcement off or without a valid key.
+- **Brand sweep.** No "DhanBoost" left in backend `src/main` outside migrations: notification templates use `{brand}`/`{brandWebsite}`, the HTML email shell, OTP SMS (`navix.sms.otp-template` default now `{brand}`), email OTP, password reset, credit brief PDF, referral and DSA copy take `navix.brand.*`; OpenAPI title from config; internal verification rows record provider `INTERNAL`; NACH narration "Loan repayment"; comments and POM descriptions say DhanNow. `BrandGuardTest` fails on any new occurrence. The JWT carries no issuer claim, so nothing changed for tokens.
+- **Customer purge.** `CustomerService.deleteCustomer` (ADMIN) is refused while a loan is open (`LOAN_OPEN`) and for anyone with a loan or complaint on file (`RECORDS_RETAINED`); otherwise it also clears the V100 offer documents and the credit level.
+
+Tests:
+- `ComplaintSlaTest`: `cc64_aMidweekComplaintIsAcknowledgedInTwoWorkingDaysAndReviewedInFive`, `cc64_aFridayComplaintSkipsTheWeekend`, `cc64_aWeekendComplaintStartsCountingOnMonday`, `cc64_holidaysFromTheCalendarAreNotWorkingDays`, `cc64_theDayIsTheIstDateNotTheUtcDate`.
+- `StaffMfaServiceTest` (RFC 6238 vectors, ±1 step accepted and ±2 refused, replay, encryption at rest and wrong key, required roles, enforcement switch, enrolment and confirm), `AuthControllerTest` (password-only sign-in blocked for a required role and the attempts are spent; the code reaches the check), `ProductionConfigGuardTest.prod_refusesStaffMfaOffOrWithoutAValidKey`, `CustomerServiceTest.deleteCustomerIsRefusedWhileALoanIsOpenAndWhenRecordsMustBeKept`, `BrandGuardTest`.
+- `ApplicationFlowIntegrationTest`: `complaint_fileAcknowledgeReviewResolveAndTheSlaSweep` (ticket number, replay, key required, cross-customer `FORBIDDEN_OWNER`, borrower kept off the staff queue, COMPLIANCE reads and is 403 on write, collections 422, acknowledge → review → resolve with a note, 409 on an illegal move, events append-only, breach flagged once); `dispute_aLoanDisputeComplaintHoldsTheLoanAndCancelsTheOpenOfferThenRelease` (EXT-27: approved offer cancelled, `ON_HOLD` on a new offer, 409 on a second dispute, borrower 422, release, SoD on a staff-raised dispute, four hold events, offers work again); `cc64_theSlaSkipsHolidaysFromTheAdminCalendar`; `cc71_didNotAskOnAnExtensionOpensAComplaint`; `roles_supportIsMoneyBlockedComplianceIsReadOnlyAndAdjustmentsAreAudited` (SUPPORT 422 on admin-record, reverse, refund and extension offer; COMPLIANCE 403 on write, reads refunds; FINANCE pays a refund → `REFUND`/`REFUND_PAID` adjustment; unknown reason code refused; adjustments append-only).
+
+Deviations:
+- **Migration numbers.** V105–V107 instead of V104–V106. Phase 8 starts at **V108** (`refresh_token`).
+- **Holiday calendar.** Built here (small table, ADMIN endpoints) because CC-64 is a Phase 7 test; there was no calendar before.
+- **Dispute from a complaint.** Automatic for a borrower's (or SUPPORT's) `LOAN_DISPUTE` ticket on an open loan, as the plan says; resolving the ticket does not lift the hold, staff release it. A dispute leaves an extension with a payment already on file (PAYMENT_PENDING) for the Accountant, and never touches an ACTIVE one.
+- **Attachments.** `attachment_key` is stored as given (length and `..` checked); a borrower upload category and the staff presigned view arrive with the app screen (Phase 11) and console (Phase 10).
+- **No manual correction endpoint yet.** The reason codes `MANUAL_CORRECTION` and `WRITE_OFF` are seeded; the endpoints are Phase 10b / CC-66. The CC-06 `paid_on` correction is not built.
+- **COMPLIANCE reads.** Writes are blocked everywhere; reads are only what existing role lists allow plus the complaint queue, holds, refunds and the transaction ledger. Console-wide read access comes with the Phase 10 screens. RECOVERY has no rights of its own yet.
+- **Web.** The new roles are mirrored in `rbac.ts` with `customer:view` only; their dashboard view and screens are Phase 10. Web vitest is green (907); `tsc --noEmit` reports one error that predates this phase (`src/lib/staff/performance-page.test.tsx:90`, a Vitest type).
+- **Brand sweep limits.** DLT-registered SMS text changed with the brand, so the SMS templates (and the WhatsApp template name `dhanboost_otp`, sender `DHANBT`) must be re-registered for DhanNow before go-live (Phase 13 checklist). The DSA lead emails still describe the navix salary product apart from the brand (the DSA SMS was reworded); they need a DhanNow rewrite if DSAs are used. Historical rows with provider "DhanBoost" are left as they are.
+- **Customer purge.** Kept as an ADMIN tool for people who never had a loan; retention-aware deletion and the purge job are Phase 9 (CC-45).
 
 ## Phase 8: Mobile-ready auth and platform (weeks 8–9)
 
@@ -576,6 +841,45 @@ Also:
 
 **CORS:** allowlist `dhannow.com` and `staff.dhannow.com`.
 
+**Status (2026-11-01): done.** `mvn verify` is green (2,003 unit, up from 1,975) and `mvn verify -Pit` is green (106 integration, up from 96; V108–V110 applied to Testcontainers Postgres). Migrations (renumbered from V108):
+- **V108 `refresh_token`:** `customer_id`, `device_id`, `family_id` (one per device sign-in), `token_hash` (SHA-256, unique), `expires_at`, `revoked_at`, `revoke_reason` (`ROTATED|REUSED|LOGOUT|DEVICE_SIGNED_OUT|ALL_DEVICES`).
+- **V109 `otp_challenge` + `attempt_counter`:** `otp_challenge(purpose, subject_hash, code_hash, expires_at, attempts)` unique per purpose+subject; `attempt_counter(key, window_start, count, blocked_until)`. Subjects, codes and limiter keys are HMAC-SHA256 under `navix.auth.secret`: no mobile, email or code is readable from either table.
+- **V110 `device_token`:** `(customer_id, device_id)` key, `fcm_token`, `platform`, `app_version`, `device_name`, `last_seen`.
+
+Code:
+- **App sessions (`RefreshTokenService`, `AuthController`).** A borrower sign-in (`/borrower/login`, `/borrower/password-login`) that names a `deviceId` (plus optional `deviceName`, `appVersion`) gets a 15-minute access JWT carrying a `did` claim and a 30-day refresh token bound to that device; the response adds `refreshToken`, `expiresIn` (seconds) and `refreshExpiresAt`. `POST /api/auth/borrower/refresh {refreshToken, deviceId}` rotates (the old token is spent); a spent token sent again revokes the whole family (`REFRESH_REUSED`, CC-39); an unknown, expired, signed-out or other-device token is `REFRESH_INVALID` (another device also revokes the family). `POST /api/auth/borrower/logout {refreshToken?, allDevices?}` ends that device's family and forgets its push token; `allDevices` with a borrower bearer ends them all (CC-38). Every revocation commits in its own transaction before the error is thrown.
+- **Devices (`DeviceService`, `DeviceController`, app board D7).** `PUT /api/devices/me {fcmToken, platform, appVersion, deviceName}` (the device comes from the token's `did`; another device is `DEVICE_MISMATCH`; a token moving to this device is taken off any other row), `GET /api/devices/me` → `[{deviceId, name, platform, appVersion, lastSeen, current}]` (only devices with a live refresh token), `DELETE /api/devices/me/{deviceId}` revokes that device's refresh tokens and deletes its row. Borrower only (`FORBIDDEN_ROLE`).
+- **Play Integrity (`CaptchaVerifier`, `IntegrityVerifier` port, `PlayIntegrityClient`).** A request with `X-Client: android` is judged by its `X-Integrity-Token` while the `play-integrity` flag is ON: Google's `decodeIntegrityToken` with the service account, then our package (`navix.integrity.package-name`, `com.dhannow.app`), `PLAY_RECOGNIZED`, `MEETS_DEVICE_INTEGRITY` and a token at most 5 minutes old; a failure is `INTEGRITY_FAILED`. With the flag OFF the header buys nothing (except on app password sign-in, which is capped per IP and device instead; Phase 11, 2026-11-02): the request goes through Turnstile like the web, and only `navix.integrity.allow-android-without-check=true` (default false, refused in prod) lets it skip. No service account means every token fails (fail closed).
+- **OTP and limiter state in Postgres (`AuthStateStore` → `JdbcAuthStateStore`).** `AttemptLimiter`, `BorrowerOtpService` and `EmailOtpService` keep their logic and interfaces; each read-modify-write is row-locked in its own transaction, so caps hold across instances and survive a restart, and a rejected attempt is never rolled back with its rejection. This covers every OTP purpose (login, bureau consent, extension, EMI). Expired rows are purged on OTP sends. CC-36: `/borrower/otp/request` adds per-IP (30/hour) and per-device (10/hour) caps; an app request whose integrity check failed (CC-42, no Play Services) still gets an OTP under strict caps (10 and 3). Not applied in mock-SMS mode (nothing is sent).
+- **Server caps.** Selfie: 3 captures per application (`SELFIE_ATTEMPTS_EXCEEDED`), counted on the SELFIE row and reset when staff reopen or rule on it. DigiLocker: 3 consent sessions per 24 hours (was 5), then the manual Aadhaar upload (CC-33). Signup penny drop: `POST /verify/penny-drop` goes through `PennyDropGuard` (lock → `PENNY_DROP_LOCKED`, every non-PASS a strike, CC-27).
+- **Push (`FcmSender`, `PushClient` port, `FcmPushClient`).** `NotificationChannel.PUSH`, shown with the in-app title and body, data `{type}` for the app's router (CC-53). Skipped (`PUSH_DISABLED`) while `push-fcm` is OFF, `NO_DEVICE`/`NOT_BORROWER` otherwise; an FCM "unregistered" answer forgets the token (CC-61). FCM HTTP v1 with the service account (`GoogleServiceAccount`: RS256 JWT exchanged for an access token, cached). `EXTENSION_OFFERED` and `EXTENSION_ACTIVATED` now also go to PUSH.
+- **App links.** `navix.app.frontend-base-url` defaults to `https://dhannow.com`. `RedirectAllowlist` (navix-common): DigiLocker init and e-sign init refuse any return URL outside `navix.app.redirect-allowlist` (default `https://dhannow.com/app/cb/`; scheme, host and port exact, path prefix, no user info or `..`) with `REDIRECT_NOT_ALLOWED` (CC-34); outside prod `navix.app.redirect-allowlist-dev` (default `http://localhost:3000/`) is added for the web. `JourneyView` adds `stepKey` (`signup.<step>`, `offer.<step>`, `status`); `route` is kept.
+- **Liveness (`LivenessPort`, `ManualReviewLiveness`).** `POST /api/applications/{id}/verify/selfie/frames {straightKey, rightKey, leftKey}` (three distinct keys from `/presign-upload` with docType `SELFIE`, each checked to be this application's) files the frames as `SELFIE`, `SELFIE_RIGHT`, `SELFIE_LEFT` documents and writes the SELFIE row `REVIEW` (provider `MANUAL_REVIEW`, `derived.frameStraight/Right/Left`, `selfieAttempts`). Staff queue (`SelfieReviewService`, credit team and ADMIN): `GET /api/staff/selfie-reviews` → `[{applicationId, customerId, borrowerName, submittedAt, attempts, frames{straight, right, left}, message}]` (short-lived links), `POST /{applicationId}/approve {note?}` → PASS, `POST /{applicationId}/reject {reason}` (required, `NOTE_REQUIRED`) → FAIL, then the step is reopened and the journey rewound so the borrower retakes it with fresh tries. Both through `manualDecision`, so the override is on the audit trail; a case no longer in REVIEW is `STALE_STATE`.
+- **CORS (`WebConfig`).** A `CorsConfigurationSource` applied by `http.cors()`: `navix.cors.allowed-origins` (default `https://dhannow.com,https://staff.dhannow.com`), plus `navix.cors.dev-origins` (default `http://localhost:3000`) outside prod.
+- **`GET /api/app/config` (public, CC-52).** `{minVersion, latestVersion, maintenance, flags{loan-extension, emi-conversion, payment-gateway, play-integrity, push-fcm, digio-mandate, onboarding-paused}, brand, website, support{name, phone, email}, grievance{name, phone, email}, legal[{key, title, url, version}]}`, contacts from `navix.brand.*`/`navix.grievance.*`, legal pages from `navix.mobile.legal` (defaults: the eleven Phase 10a W1 pages on `https://dhannow.com`, `version` null until W2).
+- **Prod guard.** `ProductionConfigGuard` refuses `allow-android-without-check=true`, and `push-fcm` or `play-integrity` ON without `navix.google.service-account-path`.
+
+Tests:
+- `MobilePlatformIntegrationTest` (new): `cc39_refreshRotatesAndReuseRevokesTheFamily`, `logoutEndsThisDevicesSession`, `cc38_devicesListSignOutADeviceAndLogOutOfAll` (two phones, FCM token registered, `current`, sign out the other, then all), `theWebLoginIsUnchanged`, `cc36_otpStateSurvivesARestartAndLimitsHoldAcrossInstances` (code from one instance verifies on a fresh one, single use, five wrong guesses over three instances lock it, limiter cap shared, nothing stored in clear), `cc34_digilockerRedirectToAnotherHostIsRefused`, `selfieFrames_goToTheStaffQueue_approveAndReject`, `selfieFrames_theFourthSubmissionIsRefused`, `cors_allowsTheDhanNowSitesAndRefusesOthers`, `cc52_appConfigIsPublicAndCarriesVersionsFlagsAndContacts`.
+- Unit: `AuthControllerTest` (app sign-in issues a device-bound short token and a refresh token, the web login is unchanged, refresh, logout and all devices, `cc36_otpRequestsAreCappedPerIpAndPerDevice`, last XFF hop), `CaptchaVerifierTest` (integrity ON pass/fail/missing, OFF falls back to Turnstile unless opted in, web untouched, the verdict rule incl. CC-43 device integrity and freshness), `RedirectAllowlistTest` (`cc34_…`), `WebConfigTest`, `FcmSenderTest` (flag off, every device, dead token forgotten, skips, failure, extension types on PUSH with the in-app wording), `JourneyServiceTest` (`stepKey`), `ApplicationVerificationServiceTest` (frames → REVIEW with three documents, foreign or repeated keys refused, the 3-capture cap and reset on reopen, `cc27_signupPennyDropRespectsTheLockAndCountsAFailure`, `cc33_…fourthSession…`), `ProductionConfigGuardTest` (both new refusals). The OTP and limiter unit tests run over an in-memory `AuthStateStore`.
+
+Deviations:
+- **Migration numbers.** V108–V110 instead of V107–V109. Phase 9 starts at **V111**.
+- **The web keeps its token.** A sign-in without `deviceId` (the web BFF) still gets the one 7-day token and no refresh token; the plan's "BFF uses refresh too" is not built because Phase 10 removes the borrower web. An access token is not revoked server-side: logout and device sign-out end the refresh token, and the access token lapses within 15 minutes.
+- **Table shapes.** `otp_challenge` has no `sent_count_window`/`blocked_until`: the send ration stays in the limiter (`attempt_counter`, as before) and a challenge with 5 misses is dropped. `refresh_token` adds `family_id` and `revoke_reason`; `device_token` adds `device_name` and `created_at`.
+- **Integrity scope.** Checked on the routes that already had a challenge (password sign-ins, forgot-password) and used for the stricter OTP caps. The OTP request itself is not refused without a passing token, because CC-42 (no Play Services) must still get an OTP. CC-43 (failed verdict: view and repay only, no new application) needs a session claim and an application gate and is left to Phase 11. The token's `requestHash` is not bound to the request yet.
+- **Per-IP cap and the web.** The BFF forwards no client address, so web OTP sends share the BFF's IP cap (30/hour) until the borrower web goes in Phase 10.
+- **Selfie reject.** The borrower is not notified; they see the reopened step on their next `/journey`. The reject only reopens while the application is SANCTIONED.
+- **App links on the site.** `/.well-known/assetlinks.json` and `app/cb/*` pages are `site/` work (Phase 10a W3). Links built from `frontend-base-url` (password reset, outreach, mandate) now point at dhannow.com paths that only exist once Phase 10a W8 adds `app/open`.
+- **Not built here.** `customer_id` as `DN` + sequence (CC-24, listed for this phase in the catalogue): the derived id with the `borrower_mobile` collision guard stays; moved to Phase 9 with account deletion. The new-device SMS alert (CC-38). The demo `navix-onboarding` `OtpService` (not used by borrower auth) stays in memory.
+- **Found: `*IT` classes never run.** Surefire only picks up `*Test` classes, so `SecurityMatrixIT`, `LeadImportJobPersistenceIT`, `LeadOutcomeAndNotePersistenceIT`, `MandateDashboardIT` and `MandateDebitRepositoryIT` are not in the 106 (the new test is named `…IntegrationTest` for that reason). Run alone, `SecurityMatrixIT` already fails on the baseline (4 tests: `onboarding-paused` is seeded ON, and a borrower on the staff namespace now gets 403, not 401). Phase 9 should rename them, or add `**/*IT.java` to the `it` profile's includes, and fix those tests.
+- **Deployment must set:** `NAVIX_GOOGLE_SERVICE_ACCOUNT_PATH` (before turning on `push-fcm` or `play-integrity`), `NAVIX_CORS_ORIGINS` if the sites move, `NAVIX_REDIRECT_ALLOWLIST`, `NAVIX_APP_BASE_URL`, `NAVIX_APP_MIN_VERSION`/`NAVIX_APP_LATEST_VERSION`/`NAVIX_APP_MAINTENANCE`; optional `NAVIX_APP_ACCESS_TTL_SECONDS` (900), `NAVIX_APP_REFRESH_TTL_DAYS` (30), `NAVIX_INTEGRITY_PACKAGE`, `NAVIX_SITE_BASE_URL`. `AUTH_SECRET` now also keys the OTP/limiter hashes: rotating it voids live OTPs and counters (harmless).
+
+For Phase 9 / 10 / 11:
+- Phase 9 migrations start at **V111**.
+- Phase 11 (app): send `deviceId` (install UUID), `deviceName`, `appVersion` on sign-in; keep `refreshToken` in encrypted storage and refresh on 401 or before `expiresIn`, one refresh at a time (two parallel refreshes with one token look like theft and end the session); headers `X-Client: android`, `X-Integrity-Token` (on sign-in, forgot-password and OTP request); `PUT /api/devices/me` with the FCM token after sign-in and on token change; route from `stepKey`; selfie via three presigns + `/verify/selfie/frames`; `GET /api/app/config` at launch.
+- Phase 10: Selfie review screen = `/api/staff/selfie-reviews`.
+
 ## Phase 9: Hardening (week 9, parallel with Phase 8)
 
 - **PII encryption:** `PiiCipher` (KMS data key + AES-GCM, JPA `AttributeConverter`) on Aadhaar, PAN and account numbers.
@@ -585,6 +889,41 @@ Also:
 - Remove the "Act as role" switcher in prod.
 - Edge middleware verifies the JWT signature.
 - Foreign keys added on the new tables (existing tables untouched).
+
+**Status (2026-11-01): done.** `mvn verify` is green (2,009 unit, up from 2,003) and `mvn verify -Pit` is green (149 integration, up from 106: the `*IT` classes run now, and V111–V114 apply to Testcontainers Postgres). Web: `tsc --noEmit` is clean (the old `performance-page.test.tsx:90` error is fixed) and 911 vitest tests are green (up from 907). Migrations:
+- **V111 `pii_encryption`:** the Aadhaar, PAN and bank account columns are widened for ciphertext (`customer_profile.pan/aadhaar/salary_account_number`, `loan_application.disbursal_account_number`, `penny_drop_attempt.account_number`, `onboarding_waitlist.pan/aadhaar`, `lead.pan`, `dsa_lead_rejection.pan`). Blind-index columns `customer_profile.pan_hash/aadhaar_hash`, `onboarding_waitlist.pan_hash/aadhaar_hash` and `lead.pan_hash` carry the lookup indexes (`uq_lead_dsa_pan_hash` replaces `uq_lead_dsa_pan`; `chk_lead_pan` is dropped, as the PAN is validated on the way in). Append-only `pii_access_log(staff_id, role, method, path, fields, at)`.
+- **V112:** `customer_id_seq` (CC-24) and `account_deletion_request(customer_id unique, status REQUESTED|PURGED, requested_at, consent_withdrawn_at, purge_after, purged_at)` (CC-45).
+- **V113 `outbox`:** `kind`, `payload jsonb`, `attempts`, `next_attempt_at`, `last_error`, `done_at`.
+- **V114 foreign keys:** `loan_extension.collection_case_id → collection_case`, `complaint.assigned_to → staff_user`, and `refresh_token`/`device_token.customer_id → borrower_mobile` (on delete cascade).
+
+Code:
+- **PII encryption (`PiiCipher`, `PiiConverter`, navix-common).** AES-256-GCM with a fresh IV per write, stored as `pii1:<base64>`. A value without the prefix reads back as it is (the migration window); a tampered value or another key fails. Envelope: `PiiKeyConfig` unwraps the data key once at boot through the `DataKeySource` port, by AWS KMS `Decrypt` (`NAVIX_PII_KMS_KEY_ID` + `NAVIX_PII_WRAPPED_DATA_KEY`, the `CiphertextBlob` of `aws kms generate-data-key --key-spec AES_256`) or, locally, from `NAVIX_PII_DATA_KEY` (any string, SHA-256'd). With neither, a non-prod run derives a development key from `AUTH_SECRET`. Prod boots only with the KMS pair. JPA waits for the key (`EntityManagerFactoryDependsOnPostProcessor`). The converter is on every column above. The blind index is HMAC-SHA256, under a key derived from the data key, over the normalised value (PAN upper-cased, Aadhaar digits only); the entities write it in `@PrePersist`/`@PreUpdate`, and the lead CSV import's batch insert writes it too.
+- **Lookups.** Every equality on these columns goes through the index: PAN dedupe (`DUPLICATE_PAN`, CC-25), the Aadhaar duplicate rule, waitlist dedupe, DSA lead uniqueness and attribution, the lead import's "already a lead / customer" checks, and the dashboards' and lead-conversion report's lead-to-customer match. Repository signatures are unchanged (default methods hash the value). Search: a full PAN matches on its index in the customer book, loan register, collections worklist, admin applications, DSA register and global search. A partial PAN no longer matches, and PAN and account are no longer column filters or sort keys.
+- **Masking (`PiiView`).** Staff responses show PAN, Aadhaar and account numbers masked (`ABXXXXX34F`, `XXXXXXXX0124`, `XXXXXXXXXX5678`) unless the role holds `PII_VIEW` (`navix.pii.view-roles`, default ADMIN, CREDIT_HEAD, CREDIT_EXECUTIVE, DISBURSEMENT_HEAD). It covers the profile view, admin applications and rejections, the application view, the customer summary and collection handover, decision history, the loan directory (collections and settlements), the loan register, the transactions ledger, the waitlist and the DSA views. The borrower reads their own in full; jobs and documents are unaffected. Each staff request that was shown a full value writes one `pii_access_log` row (fields and URL, never values) from `JwtAuthFilter`. Reports stay masked for everyone (now in Java, as the column is ciphertext).
+- **Seeded passwords and the first admin.** V17, V19, V42 and V55 already carry no hash (Phase 0), and no other seeded credential exists. `BootstrapAdminRunner` now refuses to run once any ADMIN can sign in with a password, and warns while the secret is still set.
+- **"Act as role" off in prod.** `JwtAuthFilter` ignores `X-Acting-Role` when `NAVIX_ENV=prod`. Web: the header switcher renders, and `workingRolesFor` offers more than the real role, only when `NEXT_PUBLIC_ROLE_SWITCHER=true`.
+- **Edge JWT check (`web/src/middleware.ts`).** The HS256 signature is verified with Web Crypto under SHA-256(`AUTH_SECRET`), the way `JwtService` signs. `alg` must be HS256, `aud` must include `staff` and `exp` must be in the future. A production build without `AUTH_SECRET` refuses every session; a local one falls back to the expiry check.
+- **CC-24.** `AuthController` keeps a mobile-to-customer-id registry (`borrower_mobile`): the first sign-in of a number takes `nextval('customer_id_seq')`, shown as `DN0000001` (`AuthResponse.customerCode`, `CustomerIds.code`). The derived id and `CUSTOMER_ID_COLLISION` are gone. Password sign-in, forgot-password and the mobile-collision port read the registry. No detail changes: the borrower's `PUT /profile/self` and the ADMIN mobile change answer `PROFILE_LOCKED`.
+- **CC-45 (`AccountDeletionService`).** `POST /api/me/account-deletion` (borrower, idempotent) is refused with `LOAN_OPEN` while a loan is not CLOSED or an application is past DRAFT and not settled. Otherwise it records the request and the consent withdrawal, switches offers off and revokes every refresh token and push token; sign-in then answers `ACCOUNT_CLOSED`. `GET` returns the request. `AccountPurgeJob` (02:30 IST, `scheduler_lock`) blanks the profile identity fields, bank accounts, waitlist form, password and mobile registration once `purge_after` (`navix.account-deletion.retention-years`, default 5) has passed. Loans, payments and adjustments stay.
+- **Outbox (`Outbox`, `OutboxHandler`, `OutboxPoller`; EXT-22).** The schedule PDF, closure receipt and extension addendum (`LoanDocumentService`) and the disbursal, closure and extension-activated notifications (`OutboxNotifications`) are queued in the state change's transaction and tried right after the commit (documents on the request thread as before, notifications on the notification executor). The poller retries due rows every minute under `scheduler_lock`, with backoff of 1, 5 and 30 minutes, then every 2 hours. Each try locks its row (`skip locked`) and runs the handler in its own transaction. The third failure logs `OUTBOX_ALERT` at ERROR, for a CloudWatch metric filter.
+- **Hand-offs.** The `it` profile now includes the `*IT` classes, and what they found is fixed: `SecurityMatrixIT` turns `onboarding-paused` off and expects 403 for a borrower on the staff and DSA namespaces (an authenticated caller with the wrong audience is forbidden, not unauthenticated); `LeadImportJobPersistenceIT` compares the jsonb as JSON; `LeadOutcomeAndNotePersistenceIT` no longer sees another test's leads. `MandateDashboardIT` found a real bug: the `day` alias in `MandateDashboardService.summary` needed `as` (a Postgres syntax error on every call).
+
+Tests:
+- Unit: `PiiCipherTest` (round trip, fresh IV, plaintext tolerated, tampering and the wrong key fail, the blind index is stable, normalised and keyed, staff masking, the full view recorded for PII_VIEW, borrower and jobs unmasked), `PiiKeyConfigTest` (prod takes only KMS), `JwtAuthFilterTest` (acting role ignored in prod, one access-log row naming the fields), `BootstrapAdminRunnerTest.refusesToRunAgainOnceAnAdminCanSignIn`, `AuthControllerTest.cc24_theFirstSignInGetsAServerGeneratedCustomerId` and `cc24_aReturningNumberKeepsItsIdAndALookAlikeNumberIsAnotherCustomer`, `BorrowerIdentityAdapterTest.cc24_aDifferentNumberWithTheSameLastSevenDigitsDoesNotCollide`, `CustomerReviewServiceTest.cc24_theBorrowerCannotEditTheirDetails`, `CustomerServiceTest.cc24_anAdminCannotChangeAMobileNumber`, `NotificationEventListenerTest.disbursalAndClosureAreLeftToTheOutbox`, `LoanDocumentServiceTest.aScheduleFailureIsLeftForTheOutboxToRetry`. Web: `middleware.test.ts` (signed, forged, borrower, expired, `alg: none`, edited claims) and `rbac.test.ts` (switcher off).
+- `HardeningIntegrationTest` (new): `cc25_piiIsEncryptedAtRestLookupsWorkAndFullViewsAreAudited` (ciphertext and indexes in the table, duplicate PAN refused, the borrower sees it in full, COLLECTION_HEAD masked with no log row, ADMIN in full with one log row, a full PAN finds the customer), `cc24_customerIdsAreServerGeneratedAndDetailsCannotBeChanged`, `cc45_accountDeletionWaitsForTheLoanThenClosesSignInAndIsPurgedAfterRetention`, `ext22_theOutboxRetriesWithBackoffAndAlertsAfterThreeFailures`, `theNewForeignKeysAreInPlace`. Query ITs now store PAN and Aadhaar fixtures encrypted with their index.
+
+Deviations:
+- **Migration numbers.** V111–V114. Phase 10 starts at **V115**.
+- **Not encrypted:** `blocklist_entry.value` (the PAN and account values the blocklist mirrors), the navix-onboarding demo tables `borrower.pan` and `co_applicant.pan` (not on the DhanNow path), `payment_settings.account_number` (DhanNow's own receiving account, shown to borrowers), and identifiers inside provider JSON (`application_verification.derived`, bureau payloads). The blocklist needs the same blind index if it stays; the JSON belongs with the Phase 13 data-retention review.
+- **PII_VIEW** is a role list in config (`NAVIX_PII_VIEW_ROLES`), not a per-user permission: the backend has roles and no permission table. The console must not post a masked value back as an edit (Phase 10).
+- **SSM names.** The bootstrap secret is two parameters, `/dhannow/<env>/navix/bootstrap/admin-email` and `admin-password` (they map onto the existing property names), not one `/bootstrap-admin` value.
+- **CC-24 scope.** ADMIN corrections of name, DOB, address and employment (`PUT /api/customers/{id}/profile`, logged in `profile_change_log`) and the intake slice-saves stay; only the borrower's self-edit and mobile changes are locked. The staff console still shows the mobile-change button until Phase 10.
+- **CC-45 scope.** A web session's 7-day token is not revoked server-side (it lapses; the borrower web goes in Phase 10). Uploaded KYC documents in S3 are kept past the purge (they need an S3 lifecycle rule, Phase 13). Leads with the same mobile are not erased.
+- **Foreign keys.** There is no `customer` table, so `customer_id` columns stay unreferenced. Actor columns (`*_by`, `actor_id`) stay unkeyed because they also record system actions.
+- **Outbox scope.** Only the three documents and their three notifications. A row that keeps failing retries every two hours and keeps alerting (there is no dead-letter state). A notification retry re-sends only when the whole dispatch failed; per-channel failures stay in the delivery log (CC-62).
+- **Demo staff rows** (V10, V42, V55, `@navix.example`, no password) remain. They cannot sign in without a password and their reset email cannot be received; deactivate or delete them before go-live (Phase 13 checklist).
+- **Key rotation.** Rotating the PII data key needs a re-encryption job, which is not built; the `pii1:` prefix leaves room for a `pii2:`.
+- **Deployment must set:** `NAVIX_PII_KMS_KEY_ID` and `NAVIX_PII_WRAPPED_DATA_KEY` (prod refuses to boot without them; the KMS key policy must allow the task role `kms:Decrypt`); `NAVIX_BOOTSTRAP_ADMIN_EMAIL` and `NAVIX_BOOTSTRAP_ADMIN_PASSWORD` for the first deploy only, then delete them; web `AUTH_SECRET` equal to the backend `AUTH_SECRET`; and `NEXT_PUBLIC_ROLE_SWITCHER` left unset in prod. Optional: `NAVIX_PII_VIEW_ROLES`, `navix.account-deletion.retention-years` (5), `navix.outbox.cron`, `navix.account-deletion.purge-cron`.
 
 ## Phase 10: Staff console fork (weeks 9–11)
 
@@ -615,6 +954,44 @@ The web side has three parts:
   - Update `staff-nav.ts` and `rbac.ts`.
 - Split `lib/api/applications.ts` (4,906 lines) only where new code touches it. No big refactor.
 
+**Status (2026-11-02): done (with the gaps listed).** Web: `tsc --noEmit` and `next lint` are clean, 885 vitest tests are green (911 before; the deleted borrower and marketing tests went with their code), and `next build` passes. Backend changes for 10/10b: `mvn verify` is green (about 2,015 unit; the bucket tests were rewritten) and `mvn verify -Pit` is green (151 integration, up from 149). No migration was needed (V115 is still free).
+
+Code:
+- **Strip.** Deleted `(borrower)`, `(marketing)`, `sample`, the borrower BFF (`api/borrower/*`, `api/auth/borrower/*`), `api/contact`, `components/borrower`, `components/site`, the borrower parts of `components/app`, the borrower-only `lib` modules (onboarding, offer, journey client, borrower flow, application store, domain types) and the borrower namespaces of `lib/api/applications.ts` (`publicApi`, `borrowerApi`, `journeyApi`, `verificationApi`, `offerApi`, `referralApi`, borrower notifications). Found with an import-reachability pass: only modules reachable from the borrower roots and not from any staff root were removed. `/` redirects to `/staff/dashboard`; every other non-staff path redirects to `/staff` (`next.config.mjs`); robots disallow everything; GA, the Signzy frame and camera/geolocation permissions are gone from the CSP. Three borrower Playwright specs and the borrower fixtures went; `auth.spec.ts` now asserts the borrower routes are gone.
+- **Guards.** eslint `no-restricted-imports` blocks `@/components/borrower|site`, `@/lib/borrower-*`, `@/lib/onboarding*`, the journey client and the application store. `src/lib/copy-guard.test.ts` fails on "per day for the days held", "salary day", "25% of", "pay early", "save interest" or "DhanBoost" anywhere in `web/src` or `web/e2e` (allow-list empty) and if a borrower folder comes back.
+- **Brand.** `lib/brand.ts` is the console's one brand config (DHAN NOW, support and grievance contacts as in CLAUDE.md, no legal name, no lender, no NBFC names). `components/staff/brand.tsx` shows the emblem cut from `docs/brand/dhannow-logo.jpeg` (`public/dhannow-mark.png`, app icons, the PDF-export header). Export file names `dhannow-*`, PDF footer and report header from `BRAND`.
+- **Theme.** `styles/theme.css` keeps the app_navix Monochrome tokens; the accent ("gold" token names kept) is cobalt `#1F5BDB` / pressed `#1A4BB8` / tint `#EEF3FF`; PDF exports and two dashboard series follow.
+- **RBAC and nav.** New permissions in `rbac.ts` for the desks (`complaints:view|work`, `holds:manage`, `refunds:view|manage`, `selfie:review`, `emi:approve`, `extension:offer|approve`, `collections:extension-override`, `config:view|manage`, `adjustments:view`, `holidays:manage`, `finance:view`), added for the navix roles through one `DESK_PERMISSIONS` overlay; SUPPORT, FINANCE, COMPLIANCE and RECOVERY get their desks. `staff-nav.ts` adds Selfie review, Complaints, Extension approvals (worklist filtered on `extState=OFFERED`, flag `loan-extension`), Restructure approvals (flag `emi-conversion`), Disbursal confirmation, Adjustment log, Pricing and product, Holiday calendar; Refunds owed and Transactions open to the finance roles. The four new roles have no dashboard view yet and land on a "your desks are in the menu" notice.
+- **Desks** (`lib/api/staff-desks.ts`, one allowlisted proxy `/api/staff/desk/*`, `components/staff/desk-kit.tsx`):
+  - Disbursal confirmation (`/staff/accounting/disbursals`, Accountant): net amount + UTR per file, Confirm, Return to Head with a reason.
+  - Refund cases on Refunds owed: Mark refunded (UTR + bank date), Cancel with a reason; the NACH register stays below for collections.
+  - Reverse on a verified repayment (Repayment tab; ACCOUNTANT/FINANCE/ADMIN, not for extension charges).
+  - Loan extension in the Collections tab (G1 offer with pay-by, call note, recording id and the ADMIN cap override; G2 approve/reject; cancel; resend; history) and kind "Extension charge" in Record a payment, locked to `quoteForToday` with the UTR required (G4 hand-off); the Accountant's verify queue badges extension payments.
+  - Hold and dispute (raise, release, history) and the recovery EMI request in the Collections tab; Restructure approvals page for the ADMIN.
+  - Complaints (`/staff/support/complaints`) with status/category/SLA-missed filters, the next SLA date, acknowledge, start review, resolve and escalate (notes required).
+  - Selfie review (`/staff/credit/selfie-reviews`) with the three frames, approve, reject with a reason.
+  - Credit level card on the customer page (level, maximum, next step, history; ADMIN exception with a reason code). The navix limit-override, salary-day and mobile-change cards are gone (CC-24).
+  - Pricing and product (`/staff/admin/config`): versions, a DRAFT (blank fields copy the ACTIVE version), approve or discard; maker ≠ checker.
+  - Adjustment log (`/staff/compliance/adjustments`), Holiday calendar (`/staff/admin/holidays`).
+  - Staff MFA on the login page: the code step on `MFA_REQUIRED`/`INVALID_MFA_CODE`, and enrolment (secret + `otpauth` link, confirm with a code) on `MFA_ENROLMENT_REQUIRED`.
+- **Backend for the desks** (`StaffDeskController`, navix-app): `GET /api/staff/customers/{id}/credit-level` (level, history and every ladder amount priced on the ACTIVE terms, `PricingService.quotes`), `GET /api/staff/balance-adjustments?loanId&customerId&kind` (ADMIN, FINANCE, COMPLIANCE, ACCOUNTANT, COLLECTION_HEAD), `GET /api/staff/config`, `POST /api/staff/config/{pricing|product}` (DRAFT; one open draft), `POST …/{id}/approve` (retires the ACTIVE version; the approver is not the maker, `SOD_VIOLATION`), `POST …/{id}/discard`. `SanctionRequest.salaryCreditDay` is optional on DhanNow (UPFRONT) terms. `LoanView` gains `upfrontInterestPaise`.
+
+Tests: `copy-guard.test.ts`, `collection-buckets.test.ts` (parity with `DpdBucket.java`, every edge), `domain/loan.test.ts` (parity with `LoanLifecycle`/`LoanHold`/`RepaymentStatus`), `loan-math.test.ts` (IST days), `loan-ledger.test.ts` (the ₹10,000 DhanNow loan: interest prepaid, penal before principal), `desks.test.tsx` (new roles' permissions and nav; sanction dialog chips ≤ level with net ₹7,420 / repay ₹10,000, no salary day), updated customer-360, disbursal, repayment, loan, segments, views and worklist tests; backend `ApplicationFlowIntegrationTest.staffDesk_creditLevelAdjustmentLogAndPricingMakerChecker`.
+
+Deviations:
+- **Routes stay under `/staff`.** "The staff middleware becomes the root" is met by redirecting `/` and every non-staff path to `/staff`; moving 40 pages to the root was not worth the churn.
+- **One desk proxy.** The new backend paths go through `/api/staff/desk/*` with a path allowlist rather than one BFF route each.
+- **Config endpoints** live in navix-app over JDBC (the tables, triggers and snapshot freezing already existed); the draft copies every column of the ACTIVE version except identity and audit columns.
+- **Brand config** is a TS constant mirroring the backend defaults until Phase 10a W5 generates both from `docs/brand.json`.
+- **MFA enrolment** shows the secret and an `otpauth://` link, not a QR code (no QR library added).
+- **`applications.ts`** was only trimmed (borrower namespaces); the new clients are in `staff-desks.ts`.
+
+Not done (Phase 10):
+- Dashboard role views and scorecards for RECOVERY, SUPPORT, FINANCE, COMPLIANCE (`views.ts`, `DashboardScope`); RECOVERY has no backend rights yet.
+- Complaint assign and staff-filed complaints UI, complaint attachments; ADMIN "reset MFA" button on the staff list (the client call exists).
+- EXT-14 "Treat as extension payment" and EXT-18 "Re-open for this payment" (backend + G4), and the G5 extension block on the Repayment tab (the history is on the Collections tab).
+- The borrower-session helpers in `bff-session.ts` and the marketing CSS in `globals.css` are dead code, left for a later sweep.
+
 ### Phase 10a: Website ↔ app wiring (`site/` = today's `dhannow/website`, weeks 9–10)
 
 The 24 static pages move into the monorepo as `site/`, unchanged except for the items below. Hosting: S3 + CloudFront on `dhannow.com`, HTTPS, deployed by CI.
@@ -634,6 +1011,34 @@ The 24 static pages move into the monorepo as `site/`, unchanged except for the 
 **Wireframe follow-up (done 2026-10-27):** the legal links on A1b, A11, B5b, C6, D2, D3, D4 and D8 are labelled with the dhannow.com page each one opens. New boards E15 (return-to-app page, `app/cb/*`) and E16 (`download.html`) are added.
 
 **Tests:** link checker over `site/` (no 404s, every app-referenced URL exists). Playwright smoke on `site/` (calculator values, download page). App integration test opens each legal link (URL asserted, not content).
+
+**Status (2026-11-02): done.** `python site/check_all.py` is green: `node site/calc.js`, `node site/parity/calc.test.js`, `check_brand.py`, `doc_versions.py`, `check_links.py` (26 pages, 12 app links, 11 legal entries) and `check_theme.py`. `web` `tsc --noEmit` and `app` `flutter analyze` are clean after the regenerated brand files. No Maven run here.
+
+Code (`site/`):
+- **W1.** All eleven app/config pages exist. The backend `navix.mobile.legal` keys are the page names the app looks up (`links.dart`), and every page the app opens is in the map. No mismatch. `privacy.html#retention` (D8) had no anchor; "13. Data retention" now has `id="retention"`.
+- **W2.** The 21 pages `build_pages.py` writes carry `<meta name="dn-doc-version">`, all at version 1. `site/doc-versions.json` holds each page's version and SHA-256, with the tag itself left out of the hash. `doc_versions.py` fails when a page changed without a bump; `--bump <page>` raises the version, rewrites the tag and records the hash; `--add` records new pages.
+- **W3.** `site/.well-known/assetlinks.json` is generated from `docs/brand.json` (`com.dhannow.app`, fingerprint placeholder). `site/app/cb/digilocker.html` and `esign.html` follow board E15. Each page clears the provider's query from the address bar and tries `intent://` once, with an "Open DhanNow app" button and a download link. They set `noindex`, `no-referrer` and load nothing from other sites. Only esign reads `outcome`, for its heading.
+- **W4.** `site/download.html` follows board E16: version, size, Android 7.0+, package, Download APK, SHA-256 and the install steps. A Play badge card sits beside it. `docs/brand.json` `app.distribution` (`apk|play`) shows one or the other, here and on the home page's app section. "Get the app" on every page now goes to `download.html`.
+- **W5.** `docs/brand.json` is the one source: brand, tagline, site, support phone/email/hours, general email, grievance officer, company name, CIN and office, lender placeholders and app distribution. `site/build_brand.py` fills every `data-brand`, `data-brand-href`, `data-dist` and `data-app-intent` marker in `site/`, writes `assetlinks.json`, `web/src/lib/brand.ts` and `app/lib/core/brand.dart` (same names and shape), and updates the `navix.brand.*` / `navix.grievance.*` yml defaults. `check_brand.py` fails if any of those files differs. It also fails on any phone, `@dhannow.com` address, CIN, company name or office on the site that is not in the config; on any other `92113…` number in `app/lib` or `web/src`; on the backend lender and contact-form defaults; on banned copy (NBFC claim, DhanBoost, salary day, pay early); and if the W4 wording ("Android app", "no login") is lost.
+- **W6.** `site/parity/ladder.json` gives all 7 ladder amounts in paise: borrow, fee, GST, interest, deductions, net, repay, extension charge and late charge per day. ₹1,000 → 74,200 net; ₹10,000 → 742,000. Four extension examples are included, among them ₹1,000 three days late → 31,800 and the 30-day cap. `calc.js` gains `extension(p, daysLate)` and `module.exports`; `parity/calc.test.js` checks it against the fixture.
+- **W7.** `kfs.html`, `sanction-letter.html` and `loan-agreement.html` carry an "Illustrative sample" banner. Their lender-name, address and contact blanks are `lender.*` from the config, which still holds placeholders.
+- **W8.** `site/app/open.html?to=repay|loans|support` tries `intent://dhannow.com/app/open?to=…` with `S.browser_fallback_url` set to `download.html`. Any other `to` opens the app's home. Browsers without intent support fall back after 2.5 s.
+- **W9.** `check_theme.py` maps every `:root` colour variable in the site pages and template to a `DnTokens` name and compares the values. It also checks `tokens.dart` against the CLAUDE.md table.
+- **Extending your loan** is on `repayment-policy.html` (before section 14) and `loan-information.html` (before 12): collections-led, officer → Head → OTP → pay → Accountant, ₹258 per ₹1,000 plus the late charge to date (₹318 for ₹1,000 three days late), due = previous due + 14, up to 3, no level rise. The section is marked "Pending Legal and tax sign-off", and its table is built from the parity fixture.
+
+Deviations:
+- **Company details kept.** The site already showed NAVIX Finance Private Limited, its CIN and its office, so `docs/brand.json` holds those values rather than placeholders. `--release` refuses only the lender, the APK and the fingerprint.
+- **No `mandate.html`.** The app's `offer/mandate/init` sends no return URL, and `MandateService` links to `/loan/mandate` (eNACH is OFF).
+- **No Playwright smoke.** The calculator values are covered by the parity test; the download page has no test of its own.
+- `build_pages.py` now writes UTF-8 with LF line endings (it failed on Windows before). Regenerating from the docx reproduces the committed pages.
+
+Before go-live (`python site/check_all.py --release` fails until set): `lender.*`, `app.apk.{url, version, sizeMb, sha256}`, `app.signingCertSha256` (the Play app-signing key, plus the APK's own release key while the APK is served directly). Also confirm the company CIN and office and the Play URL.
+
+Hosting (Phase 13): serve extensionless paths as `.html`. The app returns providers to `/app/cb/digilocker` and `/app/cb/esign?outcome=…`, and SMS will use `/app/open?to=…`. Serve `/.well-known/assetlinks.json` as `application/json` with no redirect.
+
+Follow-ups:
+- **Backend:** add `version` to each `navix.mobile.legal` entry from `site/doc-versions.json` (`check_links.py` then fails on a disagreement) and store `{key, version}` on acceptance. Assert `LoanMath` / `ExtensionQuote` against `site/parity/ladder.json`. Switch the `frontend-base-url` links (`/login?next=…`, `/loan/mandate`, `/credit-question`) to `/app/open?to=…`.
+- **App:** add `/app/open` to the `autoVerify` intent filter and route `to` (repay → C6, loans, support → D3).
 
 ### Phase 10b: Staff dashboards, customer 360, loans, collections, accounting, reports (weeks 9–11)
 
@@ -683,7 +1088,38 @@ The audit found about 120 places where staff screens, queries and exports encode
 **Guard test:** a repo-wide test fails the build if any staff or borrower source contains "per day for the days held", "salary day", "25% of", "pay early", "save interest" or "DhanBoost" outside an allow-listed legacy folder.
 - **Tests:** vitest for new components; Playwright e2e for borrower happy path + staff sanction → disburse → confirm → verify repayment, run in CI against docker-compose.
 
+**Status (2026-11-02): shared roots and revenue recognition done; per-surface work partly done.** Gates as in Phase 10 above.
+
+Code:
+- **R4.** Every staff money figure is the backend's: `LoanBreakdown`, the loan card and the Repayment tab show interest as "prepaid at disbursal" (`upfrontInterestPaise` / `interestPrepaidPaise`) and owed = principal + late charge − paid.
+- **R5.** `web/src/lib/domain/loan.ts` mirrors `LoanLifecycle`, `LoanHold` and `RepaymentStatus` exactly (a test reads the Java files) with labels and badge tones; the loan tab shows the lifecycle badge and the hold.
+- **R6.** Disbursal confirmation queue (Phase 10 above) and the "Awaiting disbursal confirmation" customer segment, front and back (`CustomerSegments`, `CustomerBookQuery`, `CustomerSummaryCounts.awaitingConfirmation`, `segments.ts`): a DISBURSING loan or a DISBURSAL_CONFIRMATION_PENDING file is no longer counted as active.
+- **R7.** `lib/calc/loan-math.ts` has no rates, no `dueDateFromSalary` and no fee/interest maths left: only IST date helpers. The sanction dialog, the projected breakdown and the pre-disbursal amounts read the backend's ladder quotes; the 40-day salary window and its test are gone.
+- **R8.** `loan-ledger.ts`: rows principal, late charge, interest ("prepaid at disbursal", outside the totals); received money settles the late charge, then principal.
+- **R9.** The customer page shows the credit level and history; the limit basis reads "Ladder level" / "Admin exception"; `SalaryDayCard` and `LimitOverrideCard` are deleted from the console.
+- **R10.** One definition: `DpdBucket` (navix-collections) carries UPCOMING, DUE_TODAY, D1, D2_7, REVIEW 8–30, D31_60, D61_90, D90_PLUS with their labels and bounds, `DpdBucket.of` and `DpdBucket.sqlCase`; the RBI SMA/NPA classes are `DpdBucket.RbiClass` (RUNNING, D1_30, D31_60, D61_90, D90_PLUS). `DpdCalculator`, `CollectionsWorklistQuery`, `MetricSql`, `DashboardService` and `ReportService` use it; a loan is bucketed from its due date (UPCOMING before the day, DUE_TODAY on it). `web/lib/collection-buckets.ts` mirrors it and `collection-buckets.test.ts` parses the Java file. The pre-due window is 2 days (`LoanDirectory.PRE_DUE_WINDOW_DAYS`).
+- **R11.** `daysBetween` and `istDate` count Asia/Kolkata calendar days.
+- **Revenue recognition.** `DashboardService.daily` books the processing fee and the upfront interest on the disbursal-confirmation day (`BusinessQueries.feeAndInterestByDay`, unconfirmed loans excluded) and late charges on receipt (`penalReceivedByDay`: PENAL allocations of verified repayments by `paid_on`); interest on navix (ACCRUED) terms is still booked at closure. The "income-realised" report is now "Fee and interest income": per loan confirmed in the period, principal, fee income, GST payable, upfront interest income and net, with late and extension charges received as facts. `ReconciliationCheck` (navix-app, 02:15 IST, `scheduler_lock`) logs `RECONCILIATION_MISMATCH` at ERROR for any loan where principal ≠ net + fee + GST + upfront interest; `ApplicationFlowIntegrationTest.revenue_feeAndInterestAreBookedOnTheConfirmationDayAndTheBookReconciles` checks the ₹1,000 loan (₹742 / ₹100 / ₹18 / ₹140), the daily totals and that a broken row is reported.
+- **Per surface.** Sanction dialog (ladder chips ≤ level, backend breakdown, "due 14 days after confirmed disbursal, 23:59 IST", no salary day); loan breakdown, stage pop-up and loan/repayment/customer/sanction tabs (no "1% per day", "interest accrued", salary day or "pay early"; "Disbursal confirmed", "Extended n of 3"); business snapshot copy (₹100 → ₹74.20 in hand, receivable = principal, interest booked on confirmation), revenue chart labels ("Interest earned upfront", "Late charges received"), the pre-closure gauge removed; report guide and lifecycle text rewritten for DhanNow (ladder, 14 days, extension, new roles, the confirmation step); salary-day columns removed from the all-applications export and the collection hand-over export; the DSA invite SMS no longer promises a salary-linked advance.
+
+Deviations:
+- **Receivable and settlements unchanged in code.** On DhanNow terms `loan.total_repayable` is the principal and the breakdown's accrued interest is 0, so the `total_repayable` sums, `POSITION_RECEIVABLE`, `LoanDues.grossDuePaise` and the collection-efficiency denominator already equal principal (+ penal); they were left as they are.
+- **Pre-due window** is a constant (2 days), not a config value.
+- **Bucket names changed** on the wire (`T0_T7`… → `D2_7`…); nothing persists them (`collection_case.current_bucket` is unused).
+
+Not done (10b, in priority order):
+1. Loans register columns (fee, GST, interest, net, confirmed on/by, lifecycle, hold) and its new filters/segments (Due today, D1, Overdue review, Restructure, On hold); repayment-book columns on the pipeline; "My decisions" column change.
+2. Accounting transactions ledger row types (FEE income, GST payable, INTEREST income at confirmation, PENAL, REFUND) and a confirmation-status column; FINANCE/COMPLIANCE report categories (reports are still ADMIN-only on the backend).
+3. Finance views: GST payable register, net-disbursal reconciliation view, credit-ladder distribution (the income report covers fee, GST and upfront interest).
+4. Staff "View KFS / sanction / agreement" from the stored `loan_document` PDFs (the proxy path is allowlisted; no screen yet) and the screen/PDF/ledger equality test.
+5. Exports: ladder level in `customer-export.ts` and the `ExportMenu` columns; collections settlements copy.
+6. Playwright: the ₹10,000 assertions per surface and the staff sanction → disburse → confirm → verify path (CI, Phase 12).
+
 ## Phase 11: Flutter app (`app/`, weeks 5–12, parallel from Phase 5)
+
+**Started early (2026-11-01), design-system layer only:** `app/` scaffold (`com.dhannow.app`, minSdk 24, R8 + resource shrinking), bundled Inter + Bebas Neue subset to Latin + ₹, `core/theme`, and the `Dn*` widget kit in `core/widgets` matching `docs/wireframes/ui-kit.html`, plus a dev-only kit gallery. It needs no API, so it does not wait for Phase 5. Widget tests cover the kit at 320/412dp × 1.0/1.3/2.0 text scale (CC-58). Journey screens still follow the build order below, once their APIs exist.
+
+**Journeys built against a demo server (2026-11-01, owner asked to see the whole app):** every board S–E is a screen now, under `lib/features/`, routed by `go_router` (`core/router.dart`). Data comes from `core/api/api.dart`, an in-memory demo server with one method per planned endpoint and a scenario picker (`/demo`, from Settings or a long press on the Welcome logo) to show every journey state. Its quotes mirror `LoanMath` (₹1,000 → ₹742). When each phase's endpoints land, the method bodies become `dio` calls (and riverpod comes in then if still needed); screens do not change. Contacts come from `core/brand.dart`.
 
 **Packages** (kept to these, each justified):
 
@@ -747,6 +1183,230 @@ app/lib/
 - Upload key in GitHub secrets, Play App Signing, internal → closed → production tracks.
 - Crash reporting via Firebase Crashlytics (only on top of `firebase_core`).
 - `assetlinks.json` SHA-256 from the Play signing key.
+
+**Status (2026-11-02): API layer switched to the real backend; uploads, provider hand-offs and push not done.** `flutter analyze` is clean. `flutter test` is green with 316 tests, up from 302: the 14 new ones are `test/client_test.dart`. `tool/screens_test.dart` still renders all 82 screens on the demo server. The APK was not built here.
+
+Packages added:
+- `dio`
+- `flutter_secure_storage`
+- `url_launcher`
+- `package_info_plus`, which is not in the list above. It supplies the installed version for the `minVersion` force update and for the device record. A `--dart-define` would drift from `pubspec.yaml`.
+
+Builds talk to the backend by default. They take two defines:
+- `--dart-define=API_BASE=<url>`, default `https://api.dhannow.com`.
+- `--dart-define=DEMO=true`, which runs the in-memory server.
+
+Demo controls (`/demo`, `/kit`, the Settings row, the Welcome long-press) exist only on the demo server. A deep link to them in a real build lands on the journey.
+
+Code:
+- **`core/api/`**
+  - `api.dart`: the abstract `Api` that screens call, with the same method signatures as before plus a few new methods. It also holds the `api` global, set by `DEMO`.
+  - `http_api.dart`: `HttpApi`, the real client, plus hand-written decoders for `LoanView`, `pendingExtension`, `OfferSummaryView`, `BorrowerEmiView` and `ProfileView`.
+  - `client.dart`: `ApiClient`, built on `dio`.
+  - `demo_api.dart`: `DemoApi`, the old demo server. Its extension offer now rides on `loan.pendingExtension`, as on the server.
+  - `test/flutter_test_config.dart` puts every widget test on `DemoApi`.
+- **`ApiClient`**
+  - Unwraps the `ApiResponse` envelope and maps `error.code` into `ApiException`, keeping the server message for logs only.
+  - Errors: no connection → OFFLINE (E3); 5xx → SERVER_ERROR with `X-Request-Id`, which the shared action handlers open as E4.
+  - Headers: `X-Client: android` on every call; `X-Integrity-Token` is left out while `play-integrity` is OFF.
+  - Tokens: the access token stays in memory, and the refresh token and a once-generated `deviceId` go to `flutter_secure_storage`.
+  - A 401 triggers one single-flight refresh (`POST /api/auth/borrower/refresh {refreshToken, deviceId}`), then a retry.
+  - A refused refresh (`REFRESH_INVALID` or `REFRESH_REUSED`) ends the session: the app opens E5 and an OTP is sent to the stored mobile. A network blip during refresh is OFFLINE, not a sign-out.
+- **Auth**
+  - `otp/request {mobile, deviceId}`, `login` and `password-login` each send `{…, deviceId, deviceName, appVersion}`.
+  - Then `set-password`, and `logout {refreshToken}`.
+  - S5 forgot-password is an OTP sign-in followed by `set-password`, because the backend reset is an emailed link.
+- **Journey (E6)**
+  - `GET /api/applications/mine` (newest), then `GET /api/applications/{id}/journey`. The `stepKey` maps to routes: `signup.*` → `/resume` (the next step comes from `completed`) and `offer.x` → `/loan/x`.
+  - Application status maps to `Stage`. An unknown status reads as "with the credit team".
+  - The open loan is `GET /api/loan/{id}` plus `/outstanding` (late charge and verified repaid).
+  - Refetch happens on app resume (`AppLifecycleListener`) and on pull-to-refresh (dashboard, Repay, Loans), through `api.refresh()`.
+- **Sign-up**
+  - Steps save through `PUT /api/applications/{id}/profile` and `POST …/journey/{STEP}`. A draft is created with `POST /api/applications {customerId}` after the OTP sign-in.
+  - Self-employed calls `…/self-employed`.
+  - A11 consent sends its code with `verify/bureau-consent/otp` when the step opens. On submit it calls, in order: `bureau-consent {otp, consentText}`, `verify/pan`, `verify/email`, `verify/bureau`, `verify/employment`, journey CONSENT, `submit-kyc`, then SUBMITTED. A bureau challenge goes to A13 (`verify/bureau/challenge/answer`).
+  - PAN and work email wait in the keystore until consent, then are cleared.
+- **Offer**
+  - `offer/amount`, `offer/summary` (the quote), `offer/kfs` then `offer/kfs/ack`, `offer/references` (relation upper-cased), `verify/address {manualAddress}`.
+  - `GET` then `POST offer/disbursal-account` (the account on file, sent back unchanged).
+- **Loan**
+  - `GET /api/loan/{id}/repayments` for transactions, `GET /api/loans/{id}/documents` and `…/{docId}/url` (the 5-minute link opens in the browser), `GET /api/payment-settings` (pay to), `GET /api/notifications`.
+  - `POST /api/loan/{id}/repayments {amountPaise, method UPI, txnRef, paidOn, purpose REPAYMENT|EXTENSION, extensionId}` with one `Idempotency-Key` per pending submit. A retry of the same payment reuses the key; it is dropped on success.
+- **Extension**
+  - The screens render from `loan.pendingExtension.status` only. Server APPROVED shows as offered, ACCEPTED as confirmed (pay), PAYMENT_PENDING as checking, ACTIVE as verified. EXPIRED, CANCELLED, DECLINED and REJECTED show as ended; an unknown status gets a safe "being updated" banner.
+  - Calls:
+    - `…/seen` once per offer;
+    - `…/otp` when C12 opens and on Resend;
+    - `…/accept {otp, consentVersion, version}`;
+    - `…/decline {DID_NOT_ASK, version}` from "Didn't ask for this?";
+    - payment with `purpose=EXTENSION` and `quoteForToday.totalPaise`.
+- **EMI**: `GET /api/loans/{id}/emi`, shown only when APPROVED. C13 now sends the code with `…/emi/{id}/otp` and accepts with `…/accept {otp, consentVersion, version}`.
+- **Account**
+  - `GET` and `POST /api/complaints {category, body, loanId}`, using an `Idempotency-Key` per submit that is reused on retry. The D5 categories map to the backend enum.
+  - `GET /api/devices/me`, `DELETE /api/devices/me/{deviceId}`, `POST /api/me/account-deletion` (`LOAN_OPEN` → blocked).
+- **`GET /api/app/config`**
+  - Read at launch before sign-in; `core/brand.dart` is the fallback.
+  - It drives every support and grievance contact on screen and the legal links (`core/links.dart`, opened with `url_launcher`). Website pages use the config URL when it lists the page.
+  - It also drives `minVersion`: below it, the app opens the new force-update screen `/update` (EXT-24).
+- **Android**: `INTERNET` permission in the main manifest (release had none), and `<queries>` for tel, mailto and https.
+
+Tests (`test/client_test.dart`):
+- Envelope unwrap and `error.code` with the request id.
+- 5xx → SERVER_ERROR with its id; socket error → OFFLINE.
+- Two parallel 401s → exactly one refresh, both retried with the new token.
+- Refused refresh → SESSION_EXPIRED, the hook fires and the token is forgotten; offline refresh keeps the token.
+- `deviceId` matches the server pattern and is stable.
+- A complaint retried after a network failure reuses its Idempotency-Key, and the next one gets a new key.
+- Journey: signed out → `/intro`; `offer.kfs` → `/loan/kfs`.
+- `loanOf` with unknown lifecycle and repayment enums decodes to `unknown`, money as sent.
+- `pendingExtension` keeps id, version and status; unknown extension and EMI states decode to `unknown`.
+- An unknown extension state renders the safe banner without throwing.
+- `versionBelow`.
+- Quote rates read back.
+
+Deviations:
+- **Interface changes, not a codegen client.** Screens still call one `Api`. These members changed: `sendOtp`/`verifyOtp` gain `consent:`; `submitApplication(dob:)`; `raiseComplaint(loan:)`; `signOutDevice(Device)`. These are new: `sendExtensionOtp`, `declineExtension`, `sendEmiOtp`, `acceptEmi`, `documentUrl`, `simulate`, `refresh`, `config`. The OpenAPI generator (`tool/gen_api.dart`) and its contract test are not built; decoders are hand-written in `http_api.dart`.
+- **B1 offers one amount.** No borrower endpoint prices an arbitrary amount (`offer/summary` prices only the saved drawdown). `quotes()` returns that one quote, so B1 shows a single amount until a per-amount quote endpoint exists.
+- **Disclosure rates.** `OfferSummaryView` has no rates, so fee, GST and daily bps are read back from the server's own paise in the decoder (exact on ladder amounts).
+- **Loan interest.** `LoanView` has no interest figure, so it is principal − fee − GST − net. All money still comes from the server.
+- **Loan number.** `LoanView` has no borrower-facing account number, so the loan id stands in for `DNL…`.
+- **Extension history amounts.** `extensions[]` lines carry no charge, so history rows show dates without an amount.
+- **No officer name.** `pendingExtension` names no officer, so C12 says "our collections team".
+- **"Not now" on C12** only leaves the screen. It does not decline, because DECLINED is terminal.
+
+Not done (updated by 11b below):
+- **A1b onboarding-paused form.** The server wants the full Aadhaar number; the board asks for the last 4.
+- **B7 "Use my location".** Needs `geolocator`. The typed address works.
+- **Other phase items:**
+  - FCM push (`PUT /api/devices/me` with a token);
+  - Play Integrity (`X-Integrity-Token`);
+  - `local_auth`, riverpod, l10n/ARB, Crashlytics;
+  - the `maintenance` banner;
+  - referral code;
+  - document share.
+- **Release APK size** not measured here; the coordinator builds it.
+
+**Status (2026-11-02): 11b done. Uploads, guided selfie, provider hand-offs, email codes, the A13 question and re-borrow are wired to the real API.** `flutter analyze` is clean and `flutter test` is green with 323 tests, up from 316: six client tests and one C6 widget test are new. `tool/screens_test.dart` still renders all 82 screens on the demo server, which has a stand-in for every new method. Nothing was built here.
+
+Packages added:
+- **`image_picker`** for the camera: document photos, the payment screenshot from the gallery, and the three selfie frames.
+  - It hands off to the phone's own camera app through an intent, so the app declares no `CAMERA` permission and needs no preview code.
+  - On Android 13+ the gallery is the system photo picker (CC-56).
+  - Photos are scaled to 1,800 px and quality 75 on the phone (CC-49).
+- **`file_picker`** for PDFs (statements, payslips, card scans, cheque or passbook). `image_picker` cannot pick documents.
+- **No `camera` or `app_links`.** A live selfie preview is not needed for staff review in v1. The callback app link only has to bring the app forward; the app then reads status from the server.
+- **Size impact:** both plugins are thin Android wrappers over AndroidX libraries that are mostly already present (core, activity, annotation; plus `exifinterface` and `lifecycle-runtime`). No Tika or other heavy library is pulled in. Expected cost is roughly 0.2–0.4 MB per ABI after R8; not measured.
+
+Android:
+- An `autoVerify` app-link intent filter for `https://dhannow.com/app/cb/*`, the backend's `redirect-allowlist`. The site publishes `assetlinks.json`.
+- `launchMode` is now `singleTask`, so the callback closes the Custom Tab and resumes the activity rather than stacking a second one.
+- `flutter_deeplinking_enabled=false`, so the callback path is not pushed as a route.
+- `<queries>` for `CustomTabsService` and `IMAGE_CAPTURE`.
+- `MainActivity` has a one-method channel, `dhannow/system`, with `openAppSettings`, for E9 "Open settings". No permission plugin was needed.
+
+Code:
+- **`core/files.dart`**: `pickFile(context, PickFrom.camera|selfie|files|images)` returns a `PickedFile` with bytes.
+  - It enforces the server's rule on the phone: PDF, JPG or PNG, at most 5 MB.
+  - A file over 5 MB is refused before it is read into memory.
+  - A denied camera opens E9.
+  - The demo returns named stand-ins, so widget tests need no plugin.
+  - The old `PickedFile`/`uploadError` in `onboarding/common.dart` are replaced. HEIC is no longer offered.
+- **Upload flow** (`HttpApi`):
+  - Application documents: `POST /api/applications/{id}/verify/presign-upload {docType, fileName, contentType}` → `PUT` to the presigned URL (plain dio, no `Authorization`, same `Content-Type`) → key → `POST …/verify/documents {docType, objectKeys, filePassword}`.
+  - Payment screenshot: `POST /api/storage/presign-upload {category: REPAYMENT_PROOF, filename, contentType}`, which answers without the envelope (the client now passes such bodies through) → `PUT` → `proofUrl`.
+  - Each picked screenshot is uploaded once, so a retry sends the same proof under the same `Idempotency-Key`.
+- **Uploads by step:**
+  - A7: `BANK_STATEMENT` + journey BANK.
+  - A8: three `SALARY_SLIP` → `verify/salary {monthlySalaryPaise, slipObjectKeys, filePassword}`. FAIL shows "couldn't read these salary slips". The salary is kept from A5 or read from the profile.
+  - A9: `AADHAAR_CARD_FRONT`/`_BACK`.
+  - A10: `PAN_CARD_FRONT`/`_BACK`.
+  - A12: address proof is uploaded, and the UAN goes through `profile/self` + `verify/employment`.
+  - E10: `AADHAAR_FRONT`/`_BACK` + `verify/aadhaar-manual` + journey OFFER_DIGILOCKER.
+  - B10/B10b: a typed account and an optional `BANK_PROOF` (`useBankProof`).
+  - C6/C12b: the screenshot is now required in `PaidForm` ("Attach the screenshot of your payment").
+- **B6b guided selfie:**
+  - Each "Capture" takes one front-camera photo: straight, right, left.
+  - Three `SELFIE` uploads, then `verify/selfie/frames {straightKey, rightKey, leftKey}`, then journey OFFER_SELFIE.
+  - REVIEW shows "Photos sent. Our team will check them" and carries on.
+  - `SELFIE_ATTEMPTS_EXCEEDED` shows the server's "Our team will check your photos" and carries on.
+  - A failed send keeps the frames, and "Try again" resends them.
+- **Hand-offs** (`openInCustomTab`, `url_launcher` `LaunchMode.inAppBrowserView`, no new package):
+  - It returns when the app resumes (via the callback link or the tab closing), then reads status from the server, polling up to 3 times, 2 s apart. Nothing is read from the callback URL.
+  - B3 DigiLocker: `verify/digilocker/init {redirectUrl: https://dhannow.com/app/cb/digilocker}` → tab → `digilocker/status` → `complete` → journey. Exhausted sessions or three failures open E10.
+  - B8 e-sign: `offer/sanction-letter` → `offer/esign/init {success/failureRedirectUrl}` → tab → `offer/esign/status` PASS. `derived.fallback` opens B8b.
+  - B8b drawn signature: the strokes are rendered to a white-background PNG on the phone (`signaturePng`), then sent as `offer/esign {signatureDataUrl}`.
+  - B11 eNACH: `offer/mandate/init` → tab → `offer/mandate/status`.
+- **A6**: `sendEmailCode` saves the address on the profile, then calls `verify/email/otp` or `verify/official-email/otp`. A `sent:false` on the work address marks it undeliverable. `verifyEmailCode` calls `…/otp/confirm {otp}`.
+- **A13:**
+  - The question and options come from the BUREAU row of `verify/summary` (`derived.bureauChallengeQuestion/Options`).
+  - Answers go to `challenge/answer`; a question still open afterwards shows "That answer wasn't accepted". "I don't recognise any of these" calls `challenge/skip`. Then `submit-kyc`.
+  - The question stage now comes back after a restart: DRAFT at `signup.submitted` with an open challenge.
+- **C10**: "Borrow again" calls `POST /api/applications/reborrow`. SANCTIONED walks the offer journey, and a legacy PRE_APPROVED sends B1's amount to `POST …/apply`. A REJECTED result (past delinquency) opens A14.
+
+Tests (`test/client_test.dart`):
+- A payment presigns once.
+- The PUT carries the `Content-Type` and no token.
+- A retry after a network failure reuses the proof key and the `Idempotency-Key`.
+- No screenshot, or a file over 5 MB, is refused before any call.
+- Selfie: three SELFIE presigns, then frames with the three keys, giving REVIEW.
+- DigiLocker:
+  - opens the provider URL;
+  - the return URL is on the allowlist;
+  - a lagging status is read again;
+  - the journey advances.
+- A13 reads the question from the summary, and a refused answer stays open.
+- The drawn signature is a PNG.
+
+In `money_test`, the payment flows attach a screenshot, and a new test shows a payment without one is refused.
+
+Deviations:
+- **Selfie through the system camera app.** Guidance is the on-screen prompt per pose, not a live oval over a preview.
+- **Address proof (A12) is uploaded but not filed.** `verify/documents` does not allow ELECTRICITY_BILL/GAS_BILL/RENT_AGREEMENT, as on the web.
+
+Not done:
+- **A1b onboarding-paused form.** The server wants the full Aadhaar number; the board asks for the last 4.
+- **B7 "Use my location".** Needs `geolocator`.
+- **Selfie liveness provider path** (`selfie/liveness/init`). v1 is manual review.
+- **Other phase items:** FCM push, Play Integrity, `local_auth`, riverpod, l10n, Crashlytics, the maintenance banner, referral code, document share.
+- **The release APK size** was not measured.
+
+Backend gaps: all closed on 2026-11-02, see below.
+
+**Backend gaps from the app (2026-11-02).** The backend now covers what the app had to work around. Unit and integration tests cover each fix.
+- **B1 price list.** `GET /api/applications/{id}/offer/quotes` returns one `OfferSummaryView` per ladder amount up to the sanctioned ceiling, on the offer's frozen terms. `OfferSummaryView` gains `feeRateBps`, `gstRateBps` and `dailyRateBps`.
+- **`LoanView`** gains:
+  - `loanAccountNumber`: `DNL` + the loan id, seven digits wide. It is derived, so no migration is needed. The PDFs print the same number.
+  - `daysLeft`: IST calendar days to the due date, borrower read only, null once the loan is closed.
+  - `upfrontInterestPaise` was already there (Phase 10b).
+  - `extensions[].chargePaidPaise`: the payment on file for each extension.
+  - `pendingExtension.offeredBy`: the officer's first name only.
+- **Waitlist (A1b).** `POST /api/onboarding-waitlist` takes the Aadhaar last 4 (`aadhaar` or `aadhaarLast4`). Only the last 4 is stored, and a full number is cut to it. The Aadhaar duplicate check is gone because four digits identify no one. Rows already stored keep their full number, encrypted.
+- **App password sign-in while `play-integrity` is OFF.** An `X-Client: android` request skips Turnstile on `borrower-password-login` only.
+  - Every such request is capped at 30 an hour per IP (the ALB hop) and 10 an hour per device id, on top of the per-mobile limiter.
+  - Risk: the header is client-supplied, so a bot can trade the challenge for these caps. Guessing one account stays at the limiter's rate, and stuffing across accounts is bounded per address.
+  - Every other surface still needs Turnstile. `allow-android-without-check` is still refused in prod. Turning `play-integrity` ON ends the exception.
+- **Forgot password (S5)** has two new calls:
+  - `POST /api/auth/borrower/forgot-password/otp {mobile, deviceId}` sends a code only to a registered number. It gives the same answer and counts against the same caps either way, and it never creates a customer. A closed account reads as unknown.
+  - `POST /api/auth/borrower/forgot-password/reset {mobile, otp, password, deviceId, deviceName, appVersion}` checks the password policy first, then the code. An unknown number gets `INVALID_OTP`. On success it returns a session (`AuthResponse`).
+  - The OTP purpose is `PASSWORD_RESET`.
+- **Address proof.** `verify/documents` accepts `ELECTRICITY_BILL`, `GAS_BILL` and `RENT_AGREEMENT`.
+- **Compliance: no disbursal without KFS and signature.**
+  - `ApplicationFlowService.transition` refuses every first entry to DISBURSEMENT_PENDING without both a PASS e-sign and an acknowledged KFS for that amount and pricing version. This covers accept, mandate override and ADMIN force, and also a staff-set ESIGN row.
+  - The PRE_APPROVED → DISBURSEMENT_PENDING edge is removed.
+  - A legacy PRE_APPROVED `apply` now becomes an offer: the stored limit (or the credit level), today's terms frozen, and SANCTIONED status. It then walks KFS → e-sign → disbursal account.
+  - The test is `disbursalIsImpossibleWithoutAKfsAcknowledgementAndASignatureOnEveryPath`.
+- **`/api/storage/presign-upload`** returns the `ApiResponse` envelope. The web console reads `data` and still accepts a bare body.
+- **Upload limits.**
+  - Presigns are refused for anything but PDF, JPG or PNG (`UNSUPPORTED_FILE_TYPE`). This applies to the application presign and to `REPAYMENT_PROOF`; lead files keep CSV/XLSX.
+  - When a key comes back (`verify/documents`, `verify/salary`, selfie frames, the borrower's repayment proof), an S3 HEAD checks that the object exists (`UPLOAD_NOT_FOUND`), is at most 5 MB (`FILE_TOO_LARGE`) and has an allowed type. If S3 cannot be reached the answer is `UPLOAD_UNAVAILABLE` and nothing is filed.
+  - A presigned PUT cannot cap size, so the HEAD is the real check. Rejected objects stay in S3 until a bucket lifecycle rule removes them (Phase 13).
+- **Journey.** `JourneyView.bureauChallengePending` is true while the bureau's security question is open: not answered, skipped or exhausted.
+- **Phase 10a follow-ups:**
+  - `navix.mobile.legal[].version` comes from `site/doc-versions.json` (all `1`) and is served in `GET /api/app/config` legal[].
+  - `verify/agreement {versions}` now stores `[{key, version}]`. The older `"terms@1"` strings are read too. The app does not call it yet.
+  - `SiteLadderParityTest` checks `site/parity/ladder.json` against `LoanMath` and the extension quote.
+  - SMS and email links (credit question, resume step, mandate invite) are `<base>/app/open`, or `?to=repay|loans|support` (`AppLinks`).
+  - The staff invite link and the emailed reset link are unchanged.
 
 ## Phase 12: Testing strategy (continuous, gate per phase)
 

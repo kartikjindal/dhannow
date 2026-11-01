@@ -3,11 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="dn-doc-version" content="1">
 <title>Loan agreement access – DhanNow</title>
 <link rel="icon" href="logo.jpeg">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bebas+Neue&display=swap">
 <style>
-:root{--ink:#0B0B0C;--soft:#4A4D52;--line:#E5E7E8;--field:#EEF3FF;--cobalt:#1F5BDB;--cobalt-dark:#1A4BB8}
+:root{--ink:#0B0B0C;--soft:#4A4D52;--line:#E5E7E8;--field:#EEF3FF;--cobalt:#1F5BDB;--cobalt-dark:#1A4BB8;--warn:#8A6200;--warn-bg:#FEF6D8}
 *{box-sizing:border-box}
 body{margin:0;background:#F2F3F3;color:var(--ink);font:16px/1.65 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 a{color:var(--cobalt-dark);text-underline-offset:3px}
@@ -33,22 +34,24 @@ table{width:100%;border-collapse:collapse;font-size:15px}
 th,td{text-align:left;vertical-align:top;padding:10px 12px 10px 0;border-bottom:1px solid var(--line)}
 th{font-weight:600}
 .note{background:var(--field);border-radius:16px;padding:16px 20px;font-size:15px;margin-bottom:40px}
+.note.warn{background:var(--warn-bg);color:var(--warn);margin-bottom:24px}
 footer{background:#fff;border-top:1px solid var(--line);color:var(--soft);font-size:14px}
 footer div{max-width:1120px;margin:0 auto;padding:32px 20px}
 @media (max-width:560px){body{font-size:16px}article{margin:16px 12px;padding:32px 18px 48px}header .home{display:none}header .btn{margin-left:auto}}
 </style>
 </head>
 <body>
-<div class="bar">Our website is still being built. For now, apply in the DhanNow Android app. <a href="index.html#app">Get the app</a></div>
+<div class="bar">Our website is still being built. For now, apply in the DhanNow Android app. <a href="download.html">Get the app</a></div>
 <header><div>
   <a href="index.html" aria-label="DhanNow home"><img src="logo.jpeg" alt="DhanNow"></a>
   <a class="home" href="index.html">Home</a>
-  <a class="btn" href="index.html#app">Get the app</a>
+  <a class="btn" href="download.html">Get the app</a>
 </div></header>
 <main>
 <article>
 <h1>Loan agreement access</h1>
-<p class="note">This page is a draft and is being reviewed before publication. Questions? Call 92113 31169 or email <a href="mailto:support@dhannow.com">support@dhannow.com</a>.</p>
+<p class="note">This page is a draft and is being reviewed before publication. Questions? Call <a data-brand="support.phone" data-brand-href="support.phone" href="tel:+919211331169">92113 31169</a> or email <a data-brand="support.email" data-brand-href="support.email" href="mailto:support@dhannow.com">support@dhannow.com</a>.</p>
+<p class="note warn"><strong>Illustrative sample.</strong> This page only shows what the document covers. Your own Key Facts Statement, sanction letter and loan agreement are made for your loan in the DhanNow app, and only those apply to you. Lender of record: <span data-brand="lender.legalName">[lender legal name]</span>.</p>
 <p>Effective Date: [Insert Effective Date] Last Updated: [Insert Last Updated Date] Website: www.dhannow.com</p>
 <p>Brand Name: DHAN NOW Technology / Operating Entity: NAVIX Finance Private Limited CIN: U64990HR2026PTC144926 Registered Office: Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana – 122001, India.</p>
 <p>Customer Support: 9211331169 Email: support@dhannow.com</p>
@@ -60,7 +63,7 @@ footer div{max-width:1120px;margin:0 auto;padding:32px 20px}
 <h3>2. Who Is the Actual Lender?</h3>
 <p>The actual lender is the entity legally responsible for providing the relevant loan.</p>
 <p>The legal name of the actual lender must be clearly disclosed in the customer&#x27;s loan offer, Key Fact Statement (KFS), loan agreement, and other applicable documents.</p>
-<p>Actual Lender&#x27;s Legal Name: [Insert verified legal name of the actual lender.] Registered Office: [Insert verified address.] Official Website: [Insert verified website.] Customer Support: [Insert verified contact details.] Grievance Redressal Contact: [Insert verified details.]</p>
+<p>Actual Lender&#x27;s Legal Name: <span data-brand="lender.legalName">[lender legal name]</span> Registered Office: <span data-brand="lender.address">[lender registered address]</span> Official Website: [Insert verified website.] Customer Support: <span data-brand="lender.contact">[lender support and grievance contact]</span> Grievance Redressal Contact: <span data-brand="lender.contact">[lender support and grievance contact]</span></p>
 <p>The above information must be completed and verified before publication.</p>
 <p>NAVIX Finance Private Limited and any other participating entity must be described according to its actual legal status, authorisations, and contractual role.</p>
 <p>A technology platform or service provider must not be described as the lender unless that description is legally correct.</p>
@@ -231,6 +234,6 @@ footer div{max-width:1120px;margin:0 auto;padding:32px 20px}
 <p>Where a particular method of document delivery, acceptance, execution, or retention is required by applicable law, that requirement will prevail.</p>
 </article>
 </main>
-<footer><div>DhanNow is the customer brand of NAVIX Finance Private Limited (CIN U64990HR2026PTC144926), Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001, India. <a href="index.html">Back to home</a></div></footer>
+<footer><div>DhanNow is the customer brand of <span data-brand="company.legalName">NAVIX Finance Private Limited</span> (CIN <span data-brand="company.cin">U64990HR2026PTC144926</span>), <span data-brand="company.registeredOffice">Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001</span>, India. <a href="index.html">Back to home</a></div></footer>
 </body>
 </html>

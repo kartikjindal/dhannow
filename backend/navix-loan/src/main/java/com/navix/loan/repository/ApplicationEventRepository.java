@@ -1,0 +1,107 @@
+package com.navix.loan.repository;
+
+import com.navix.loan.entity.ApplicationEvent;
+import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+/** Persistence for the application approval/audit trail. */
+@Repository
+public interface ApplicationEventRepository extends JpaRepository<ApplicationEvent, Long> {
+
+    List<ApplicationEvent> findByApplicationIdOrderByAtAsc(Long applicationId);
+
+    /** One staffer's actions, newest first — backs the decision history (/staff/my-decisions). */
+    List<ApplicationEvent> findByActorIdOrderByAtDesc(String actorId);
+
+    /**
+     * One application's events with a given action, newest first — backs
+     * {@code VerificationOutreachService.preview}'s "last sent" readout. Matched against a specific
+     * check type by the caller filtering {@code notes} (which carries {@code "<CHECK> via <CHANNEL>"}),
+     * since one application can send resume links for several different checks.
+     */
+    List<ApplicationEvent> findByApplicationIdAndActionOrderByAtDesc(Long applicationId, String action);
+
+    /** Batched "latest activity" lookup for a set of applications (telecalling staleness), newest
+     *  event first per row so the first hit per {@code applicationId} in iteration order is the latest. */
+    List<ApplicationEvent> findByApplicationIdInOrderByAtDesc(List<Long> applicationIds);
+
+    /**
+     * Newest-first events for a page of applications, narrowed to a set of action labels — backs
+     * {@code ApplicationActorResolver} ("who decided this file", "who released the money"). Newest
+     * first so the caller keeps the first hit per application and ignores the rest. Callers MUST
+     * short-circuit on an empty collection; {@code in ()} is not valid SQL.
+     */
+    List<ApplicationEvent> findByApplicationIdInAndActionInOrderByAtDesc(
+            java.util.Collection<Long> applicationIds, java.util.Collection<String> actions);
+
+    /**
+     * Every event by any of {@code actorIds} in the half-open window {@code [from, to)} — backs the
+     * staff-performance summary.
+     *
+     * <p>Both bounds are required rather than nullable-for-"all time": Postgres cannot infer the
+     * type of a bare {@code :param is null} test and rejects the statement outright. The caller has
+     * exact real bounds to pass anyway — nothing predates the epoch and nothing is logged in the
+     * future — so an unbounded read needs no special case here.
+     *
+     * <p>Scoped by actor rather than by date alone so it rides {@code idx_application_event_actor_at}
+     * (V59); the roster is always a bounded list of staff ids, even for ADMIN.
+     *
+     * <p>Newest first, so the decision-history list can share this one query with the aggregation
+     * instead of keeping a second, unbounded finder alongside it.
+     */
+    @Query("""
+            select e from ApplicationEvent e
+            where e.actorId in :actorIds and e.at >= :from and e.at < :to
+            order by e.at desc
+            """)
+    List<ApplicationEvent> findForActorsInWindow(@Param("actorIds") Collection<String> actorIds,
+                                                 @Param("from") Instant from,
+                                                 @Param("to") Instant to);
+
+    /**
+     * When each application's CURRENT status was entered: the newest event that actually transitioned
+     * INTO the application's live status. Same-status audit rows (APPLY / REASSIGN / MARK_PENDING /
+     * REVERIFY all log from == to) are excluded — they are activity, not a stage change — and CREATE
+     * (from = null -> DRAFT) is deliberately included as a genuine first entry into DRAFT.
+     *
+     * <p>Aggregated in the database so the customer-list rollup reads one row per application instead
+     * of every application's whole history. Callers MUST short-circuit on an empty collection —
+     * {@code in ()} is not valid SQL.
+     */
+    @Query("""
+            select e.applicationId as applicationId, max(e.at) as at
+            from ApplicationEvent e, LoanApplication a
+            where a.id = e.applicationId
+              and e.applicationId in :applicationIds
+              and e.toStatus = a.status
+              and (e.fromStatus is null or e.fromStatus <> e.toStatus)
+            group by e.applicationId
+            """)
+    List<StatusEnteredAt> findCurrentStatusEnteredAt(@Param("applicationIds") Collection<Long> applicationIds);
+
+    /**
+     * Newest event per application: {@code max(at)} across every event row for each id in
+     * {@code applicationIds}, reused by {@link com.navix.loan.controller.ApplicationController} in
+     * place of loading every event row for the page and keeping the first hit per app.
+     * {@code at} is {@code NOT NULL}, so this is exactly the {@code at} of the row that would be
+     * first under {@code ORDER BY at DESC} for that application — <b>not</b> the same thing as
+     * {@link #findCurrentStatusEnteredAt}, which is stage-entry time (the newest transition INTO the
+     * application's current status), not simply the newest event of any kind.
+     *
+     * <p>Callers MUST short-circuit on an empty collection; {@code in ()} is not valid SQL.
+     */
+    @Query("select e.applicationId as applicationId, max(e.at) as at from ApplicationEvent e "
+         + "where e.applicationId in :applicationIds group by e.applicationId")
+    List<StatusEnteredAt> findLatestEventAt(@Param("applicationIds") Collection<Long> applicationIds);
+
+    /** Projection for {@link #findCurrentStatusEnteredAt} — one application and its stage-entry time. */
+    interface StatusEnteredAt {
+        Long getApplicationId();
+        Instant getAt();
+    }
+}

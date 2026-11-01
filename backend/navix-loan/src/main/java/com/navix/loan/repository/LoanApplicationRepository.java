@@ -1,0 +1,112 @@
+package com.navix.loan.repository;
+
+import com.navix.loan.domain.ApplicationStatus;
+import com.navix.loan.entity.LoanApplication;
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+/** Persistence for {@link LoanApplication} — the application aggregate. */
+@Repository
+public interface LoanApplicationRepository
+        extends JpaRepository<LoanApplication, Long>, JpaSpecificationExecutor<LoanApplication> {
+
+    List<LoanApplication> findByCustomerId(Long customerId);
+
+    /** The application that minted a given loan (set at activation); for loan→borrower resolution. */
+    Optional<LoanApplication> findByLoanId(Long loanId);
+
+    /**
+     * The applications that minted a batch of loans, in one query — backs {@code
+     * LoanRegisterService}'s bulk "loan → application" resolution so the staff loan register costs a
+     * fixed number of queries instead of loading every application in the database. Callers MUST
+     * short-circuit on an empty collection; {@code in ()} is not valid SQL.
+     */
+    List<LoanApplication> findByLoanIdIn(Collection<Long> loanIds);
+
+    /** Drives the Credit Head queue (no date filter there) — newest first. */
+    List<LoanApplication> findByStatusOrderByCreatedAtDescIdDesc(ApplicationStatus status);
+
+    /** Every application in any of {@code statuses} — the multi-status form, e.g. the pending-API
+     *  dashboard's "still needs a KYC decision" queue. Callers MUST short-circuit on an empty
+     *  collection; {@code in ()} is not valid SQL. */
+    List<LoanApplication> findByStatusIn(Collection<ApplicationStatus> statuses);
+
+    /** Every application NOT in any of {@code statuses} — the complement form, e.g. the telecalling
+     *  queue's "has not reached sanction yet". {@code status} is NOT NULL (V2), so this returns
+     *  exactly what filtering the same set out of {@code findAll()} in memory would. Callers MUST
+     *  short-circuit on an empty collection; {@code not in ()} is not valid SQL. */
+    List<LoanApplication> findByStatusNotIn(Collection<ApplicationStatus> statuses);
+
+    /** True when the customer has any application outside {@code statuses}; callers must pass a non-empty set. */
+    boolean existsByCustomerIdAndStatusNotIn(Long customerId, Collection<ApplicationStatus> statuses);
+
+    List<LoanApplication> findByAssignedExecutiveIdAndStatusOrderByCreatedAtDescIdDesc(
+            Long assignedExecutiveId, ApplicationStatus status);
+
+    /**
+     * Customer ids of every application currently assigned to one executive. Backs the scoped
+     * Customers list — an executive sees only their own book, and this resolves half of it in a
+     * single query rather than pulling applications into memory.
+     */
+    @Query("select distinct a.customerId from LoanApplication a where a.assignedExecutiveId = :executiveId")
+    Set<Long> findCustomerIdsByAssignedExecutiveId(@Param("executiveId") Long executiveId);
+
+    /**
+     * Customer ids behind a set of application ids — the other half of the scoped Customers list
+     * (applications the caller has recorded a decision on). Callers MUST short-circuit on an empty
+     * collection; {@code in ()} is not valid SQL.
+     */
+    @Query("select distinct a.customerId from LoanApplication a where a.id in :applicationIds")
+    Set<Long> findCustomerIdsByIdIn(@Param("applicationIds") Collection<Long> applicationIds);
+
+    /** Every application of the given customers — the paged Customers list hydrates one page's ids. */
+    List<LoanApplication> findByCustomerIdIn(Collection<Long> customerIds);
+
+    /** Application count per status, for the staff dashboard pipeline (statuses with no rows are absent). */
+    @Query("select a.status as status, count(a) as count from LoanApplication a group by a.status")
+    List<StatusCount> countGroupByStatus();
+
+    /** Projection for {@link #countGroupByStatus()} — one status and its application count. */
+    interface StatusCount {
+        ApplicationStatus getStatus();
+
+        Long getCount();
+    }
+
+    /**
+     * Live count of applications sitting with each executive at {@code status} — the
+     * "in their queue right now" figure on the staff-performance dashboard. A snapshot, deliberately
+     * not date-windowed: it answers "what are they holding", not "what did they do".
+     */
+    @Query("""
+            select a.assignedExecutiveId as staffId, count(a) as count from LoanApplication a
+            where a.assignedExecutiveId is not null and a.status = :status
+            group by a.assignedExecutiveId
+            """)
+    List<AssigneeCount> countGroupByAssignedExecutive(@Param("status") ApplicationStatus status);
+
+    /** Projection for {@link #countGroupByAssignedExecutive(ApplicationStatus)}. */
+    interface AssigneeCount {
+        Long getStaffId();
+
+        Long getCount();
+    }
+
+    /** Batched {@link #existsByCustomerIdAndStatusNotIn}: which of {@code customerIds} have an application outside {@code statuses}. */
+    @Query("select distinct a.customerId from LoanApplication a where a.customerId in :customerIds "
+            + "and a.status not in :statuses")
+    Set<Long> findCustomerIdsWithStatusNotIn(@Param("customerIds") Collection<Long> customerIds,
+                                             @Param("statuses") Collection<ApplicationStatus> statuses);
+
+    /** Which of these applications' borrowers accepted the signup terms (the register's "agreement"). */
+    @Query(value = "select p.application_id from customer_profile p "
+            + "where p.application_id in (:ids) and p.terms_accepted_at is not null", nativeQuery = true)
+    Set<Long> findIdsWithTermsAccepted(@Param("ids") Collection<Long> ids);
+}

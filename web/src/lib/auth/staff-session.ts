@@ -1,0 +1,122 @@
+"use client";
+
+import * as React from "react";
+import type { StaffRole } from "@/lib/auth/rbac";
+import { clearWorkingRole, readWorkingRole } from "@/lib/auth/working-role";
+import { readEnvelopeError, formatEnvelopeError } from "@/lib/api/errors";
+
+/**
+ * Client-side accessor for the REAL staff session.
+ *
+ * The session lives in the httpOnly `navix_staff` cookie (set by
+ * `POST /api/auth/staff/login`, which authenticates against the backend and
+ * stores the JWT server-side). The browser never sees the token — it reads the
+ * sanitized identity from `GET /api/auth/staff/me` instead.
+ */
+
+export interface StaffSession {
+  id: string;
+  name: string;
+  /** The WORKING role (header switcher); check permissions with `can(realRole, role, p)`. */
+  role: StaffRole;
+  /** The role on the session cookie. */
+  realRole: StaffRole;
+}
+
+const STAFF_SESSION_EVENT = "navix-staff-session";
+
+function withWorkingRole(s: Omit<StaffSession, "realRole">): StaffSession {
+  return { ...s, realRole: s.role, role: readWorkingRole(s.id, s.role) };
+}
+
+/** Read the current staff identity from the BFF (or null when signed out). */
+export async function fetchStaffSession(): Promise<StaffSession | null> {
+  try {
+    const res = await fetch("/api/auth/staff/me", { cache: "no-store", credentials: "same-origin" });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { session: Omit<StaffSession, "realRole"> | null };
+    return json.session ? withWorkingRole(json.session) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Thrown by {@link loginStaff} — preserves the backend's error `code` (e.g. `SESSION_CONFLICT`)
+ *  alongside the formatted message, so the caller can react to specific failures. */
+export class StaffLoginError extends Error {
+  readonly code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = "StaffLoginError";
+    this.code = code;
+  }
+}
+
+/**
+ * Sign in with email + password (the real staff login). Authenticates against the
+ * backend via the BFF and stores the JWT in the httpOnly `navix_staff` cookie.
+ * Returns the sanitized session (no token); throws a {@link StaffLoginError} on failure
+ * (e.g. "Invalid email or password", or `SESSION_CONFLICT` when a session is already live)
+ * so the form can surface it. `force` = "sign me in here and end the other session" — pass
+ * `true` only after the caller has shown the SESSION_CONFLICT choice and the user picked
+ * "Continue here". `captchaToken` is the Cloudflare Turnstile response — ignored by the backend
+ * unless NAVIX_CAPTCHA_SECRET is set, and SPENT by every call, so the SESSION_CONFLICT retry needs
+ * a fresh one.
+ */
+export async function loginStaff(
+  email: string,
+  password: string,
+  force = false,
+  captchaToken = "",
+  /** Staff MFA (Phase 7): the 6-digit authenticator code, once the backend asked for one. */
+  totpCode?: string,
+): Promise<StaffSession> {
+  const res = await fetch("/api/auth/staff/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ email, password, force, captchaToken, totpCode }),
+  });
+  if (!res.ok) {
+    const env = await readEnvelopeError(res, "Sign-in failed. Please try again.");
+    throw new StaffLoginError(formatEnvelopeError(env), env.code);
+  }
+  const body = (await res.json()) as Omit<StaffSession, "realRole">;
+  // A fresh login starts on the default working role; a refresh (no login) keeps the chosen one.
+  clearWorkingRole(body.id);
+  const session = withWorkingRole(body);
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(STAFF_SESSION_EVENT));
+  return session;
+}
+
+/** Clear the staff session cookie and notify any mounted `useStaffSession` hooks. */
+export async function signOutStaff(): Promise<void> {
+  try {
+    await fetch("/api/auth/staff/logout", { method: "POST", credentials: "same-origin" });
+  } catch {
+    // best-effort — the cookie is httpOnly; logout is the only way to clear it
+  }
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(STAFF_SESSION_EVENT));
+}
+
+/** Reactive staff session hook (re-reads on login/logout via the session event). */
+export function useStaffSession(): { session: StaffSession | null; loading: boolean } {
+  const [session, setSession] = React.useState<StaffSession | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    let active = true;
+    const sync = async () => {
+      const s = await fetchStaffSession();
+      if (!active) return;
+      setSession(s);
+      setLoading(false);
+    };
+    void sync();
+    window.addEventListener(STAFF_SESSION_EVENT, sync);
+    return () => {
+      active = false;
+      window.removeEventListener(STAFF_SESSION_EVENT, sync);
+    };
+  }, []);
+  return { session, loading };
+}

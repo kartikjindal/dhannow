@@ -1,0 +1,248 @@
+package com.navix.loan.entity;
+
+import com.navix.common.entity.BaseAuditEntity;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
+/**
+ * The customer's KYC snapshot captured for a single application, so staff reviewers
+ * (KYC approver, credit executive, credit head, …) can see who they are deciding on.
+ *
+ * <p>One row per application (1:1). PAN is stored in full but only ever surfaced to staff
+ * masked (see {@code ReviewDtos.ProfileView}). Demo-grade and self-contained inside the loan
+ * module; unifying with the orphaned onboarding/KYC modules is a later step.
+ */
+@Entity
+@Table(name = "customer_profile")
+@Getter
+@Setter
+@NoArgsConstructor
+public class CustomerProfile extends BaseAuditEntity {
+
+    @Column(name = "application_id", nullable = false, unique = true)
+    private Long applicationId;
+
+    @Column(name = "full_name", length = 160)
+    private String fullName;
+
+    /** Encrypted at rest (PLAN Phase 9); looked up by {@link #panHash}. Unique across customers. */
+    @Column(name = "pan")
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
+    private String pan;
+
+    /** Blind index of {@link #pan} (V111), written on every save. */
+    @Column(name = "pan_hash", length = 64)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    private String panHash;
+
+    /**
+     * The 12-digit Aadhaar number the borrower types on the intake Aadhaar-card screen (V75). Stored
+     * in FULL and shown to staff unmasked — a product decision that reversed V35, because the number
+     * now feeds the fraud rule: it is cross-checked (on the digits the mask reveals) against the masked
+     * Aadhaar the PAN record and DigiLocker return, and a mismatch auto-rejects the application
+     * ({@code ApplicationRejection.FRAUD_REJECTED}). Verhoeff-validated and unique across customers.
+     */
+    @Column(name = "aadhaar")
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
+    private String aadhaar;
+
+    /** Blind index of {@link #aadhaar} (V111). */
+    @Column(name = "aadhaar_hash", length = 64)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    private String aadhaarHash;
+
+    /** Borrower's mobile (normalised to 10 digits); surfaced masked. Unique across customers. */
+    @Column(name = "mobile", length = 15)
+    private String mobile;
+
+    @Column(name = "dob")
+    private LocalDate dob;
+
+    @Column(name = "address", length = 400)
+    private String address;
+
+    @Column(name = "employer", length = 160)
+    private String employer;
+
+    @Column(name = "employment_status", length = 64)
+    private String employmentStatus;
+
+    /** Optional borrower-supplied EPFO UAN (12 digits) — gives the Digitap employment lookup its
+     *  direct method (method 3) instead of the PAN/mobile fallback (V66). */
+    @Column(name = "uan", length = 12)
+    private String uan;
+
+    @Column(name = "monthly_salary_paise")
+    private Long monthlySalaryPaise;
+
+    /** Recorded annual salary in paise (informational; defaults to monthly×12 when absent). V26. */
+    @Column(name = "annual_salary_paise")
+    private Long annualSalaryPaise;
+
+    /** Recorded salary/eligibility percentage (HR datum; the firm eligibility cap is RiskPort's 25%). V26. */
+    @Column(name = "salary_percentage", precision = 5, scale = 2)
+    private BigDecimal salaryPercentage;
+
+    /** Recorded expected annual increment percentage (HR datum). V26. */
+    @Column(name = "increment_percentage", precision = 5, scale = 2)
+    private BigDecimal incrementPercentage;
+
+    @Column(name = "salary_bank", length = 120)
+    private String salaryBank;
+
+    /** Borrower's contact email for notifications (personal preferred, else verified official). V22. */
+    @Column(name = "email", length = 255)
+    private String email;
+
+    // --- Phase 1 intake (V44; revamp.md) ---
+
+    /**
+     * Official work email. The <b>only</b> address the email-verification API is run against — it
+     * corroborates the employer. The personal {@link #email} above stays the contact address so a
+     * job change never costs the borrower their reset links (revamp.md decision 15).
+     */
+    @Column(name = "official_email", length = 255)
+    private String officialEmail;
+
+    /** Salary account number, stored in full (revamp.md decision 16). Never logged, never exported. */
+    @Column(name = "salary_account_number")
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
+    private String salaryAccountNumber;
+
+    @Column(name = "salary_ifsc", length = 16)
+    private String salaryIfsc;
+
+    /** The mobile registered against the salary account — may differ from the login mobile. */
+    @Column(name = "salary_account_mobile", length = 15)
+    private String salaryAccountMobile;
+
+    /**
+     * The date the borrower was last paid. {@code loan_application.salary_credit_day} is derived
+     * from its day-of-month; this keeps the evidence the credit team actually reviews.
+     */
+    @Column(name = "previous_salary_date")
+    private LocalDate previousSalaryDate;
+
+    /** Version of the T&C the borrower accepted on screen 1 (e.g. {@code terms-and-conditions@1}). */
+    @Column(name = "terms_version", length = 40)
+    private String termsVersion;
+
+    @Column(name = "terms_accepted_at")
+    private Instant termsAcceptedAt;
+
+    /**
+     * When the borrower declared they are <b>not</b> a Politically Exposed Person. The tick is
+     * mandatory, so any application that got past screen 1 has this set — there is no PEP path.
+     */
+    @Column(name = "pep_declared_at")
+    private Instant pepDeclaredAt;
+
+    // --- emergency contact (editable on the borrower profile; not verified). V27 ---
+
+    @Column(name = "emergency_contact_name", length = 160)
+    private String emergencyContactName;
+
+    @Column(name = "emergency_contact_phone", length = 20)
+    private String emergencyContactPhone;
+
+    @Column(name = "emergency_contact_relation", length = 60)
+    private String emergencyContactRelation;
+
+    // --- derived verification fields (populated by ApplicationVerificationService; V16) ---
+
+    /** Credit bureau score (never surfaced to the borrower). */
+    @Column(name = "bureau_score")
+    private Long bureauScore;
+
+    /** Which bureau answered: EXPERIAN or CRIF. */
+    @Column(name = "bureau_source", length = 40)
+    private String bureauSource;
+
+    /** A/B/C/D risk grade (staff/internal only). */
+    @Column(name = "risk_category", length = 4)
+    private String riskCategory;
+
+    @Column(name = "pan_verified")
+    private Boolean panVerified;
+
+    /** Aadhaar↔PAN seeding link, read from pan_comprehensive. */
+    @Column(name = "aadhaar_linked")
+    private Boolean aadhaarLinked;
+
+    /** Aadhaar verified via DigiLocker (consent completed + Aadhaar fetched + document ingested). V29. */
+    @Column(name = "aadhaar_verified")
+    private Boolean aadhaarVerified;
+
+    @Column(name = "email_verified")
+    private Boolean emailVerified;
+
+    /** The borrower proved control of {@code email} (the PERSONAL address) with an emailed OTP.
+     *  Distinct from {@link #emailVerified}, which is the provider deliverability + employer match
+     *  on {@code officialEmail}. */
+    @Column(name = "personal_email_verified")
+    private Boolean personalEmailVerified;
+
+    /** The borrower proved control of {@code officialEmail} (the WORK address) with an emailed OTP.
+     *  Three distinct signals sit on the two addresses: {@link #emailVerified} is the provider
+     *  deliverability + employer match on {@code officialEmail}, this is inbox control of the same
+     *  address, and {@link #personalEmailVerified} is inbox control of {@code email}. V65. */
+    @Column(name = "official_email_otp_verified")
+    private Boolean officialEmailOtpVerified;
+
+    @Column(name = "address_verified")
+    private Boolean addressVerified;
+
+    @Column(name = "penny_drop_verified")
+    private Boolean pennyDropVerified;
+
+    /** 0..1 fuzzy name-match across PAN / Aadhaar / penny-drop (identity cross-match). */
+    @Column(name = "name_match_score")
+    private Double nameMatchScore;
+
+    /** DigiLocker session client id (threaded through status/list/download). */
+    @Column(name = "digilocker_client_id", length = 120)
+    private String digilockerClientId;
+
+    /** True once the borrower has accepted the agreement documents. */
+    @Column(name = "agreement_accepted")
+    private Boolean agreementAccepted;
+
+    // --- credit brief (V20): 1–5★ "should we recommend" rating + parsed bureau facts.
+    //     Staff/internal only — never surfaced to the borrower. Credit score = bureauScore. ---
+
+    /** 1.0–5.0 in 0.5 steps. */
+    @Column(name = "credit_star_rating")
+    private BigDecimal creditStarRating;
+
+    /** Verdict band, e.g. STRONGLY RECOMMEND / RECOMMEND / REFER — MANUAL REVIEW / NOT RECOMMENDED. */
+    @Column(name = "credit_recommendation", length = 40)
+    private String creditRecommendation;
+
+    /** Generated 2–3 sentence underwriter summary. */
+    @Column(name = "credit_brief_summary")
+    private String creditBriefSummary;
+
+    @Column(name = "credit_brief_generated_at")
+    private Instant creditBriefGeneratedAt;
+
+    /** JSON of the parsed {@code BureauReportFacts} (Categories A/B/C) backing the brief card + PDF. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "credit_brief_facts")
+    private String creditBriefFacts;
+
+    @jakarta.persistence.PrePersist
+    @jakarta.persistence.PreUpdate
+    void indexPii() {
+        panHash = com.navix.common.pii.PiiCipher.panIndex(pan);
+        aadhaarHash = com.navix.common.pii.PiiCipher.digitsIndex(aadhaar);
+    }
+}

@@ -1,0 +1,153 @@
+package com.navix.loan.dto;
+
+import com.navix.common.pii.PiiView;
+import com.navix.loan.domain.ApplicationStatus;
+import com.navix.loan.entity.CustomerProfile;
+import com.navix.loan.entity.LoanApplication;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
+
+/**
+ * ADMIN-only flat view over every application — complete AND incomplete (DRAFT / partially filled) —
+ * joining the lifecycle row with its KYC snapshot and an onboarding-completeness summary. Backs the
+ * admin "All applications" register and its CSV / PDF export. Money is integer paise.
+ */
+public final class AdminApplicationDtos {
+
+    private AdminApplicationDtos() {
+    }
+
+    /** One row of the rejection register (V44). {@code applicationId} is null for a blocked re-attempt.
+     *  Carries the same identity/credit fields as the live-applications queue rows (PAN, salary
+     *  account/IFSC, requested amount, credit score/★ rating) so the register reads as a full record,
+     *  not just a name + reason. */
+    public record RejectionView(
+            Long id,
+            Long applicationId,
+            Long customerId,
+            String borrowerName,
+            String mobile,
+            String pan,
+            String salaryAccountNumber,
+            String salaryIfsc,
+            Long amountRequestedPaise,
+            Integer creditScore,
+            Double starRating,
+            String reasonCode,
+            String reasonDetail,
+            boolean auto,
+            Instant blockedUntil,
+            Instant createdAt) {
+
+        public static RejectionView of(com.navix.loan.entity.ApplicationRejection r, CustomerProfile p,
+                Long amountRequestedPaise) {
+            return new RejectionView(r.getId(), r.getApplicationId(), r.getCustomerId(),
+                    p == null ? null : p.getFullName(),
+                    r.getMobile() != null ? r.getMobile() : (p == null ? null : p.getMobile()),
+                    p == null ? null : PiiView.pan(p.getPan()),
+                    p == null ? null : PiiView.account(p.getSalaryAccountNumber()),
+                    p == null ? null : p.getSalaryIfsc(),
+                    amountRequestedPaise,
+                    p != null && p.getBureauScore() != null ? p.getBureauScore().intValue() : null,
+                    p != null && p.getCreditStarRating() != null ? p.getCreditStarRating().doubleValue() : null,
+                    r.getReasonCode(), r.getReasonDetail(), Boolean.TRUE.equals(r.getAuto()),
+                    r.getBlockedUntil(), r.getCreatedAt());
+        }
+    }
+
+    /** One page of the ADMIN register; {@code total} matches the filter, {@code allCount} is every row. */
+    public record AdminApplicationPage(List<AdminApplicationView> rows, int page, int size, long total,
+                                       long allCount) {
+    }
+
+    public record AdminApplicationView(
+            // --- application ---
+            Long id,
+            Long customerId,
+            ApplicationStatus status,
+            Long amountRequestedPaise,
+            Long eligibleLimitPaise,
+            String purpose,
+            Integer salaryCreditDay,
+            Long assignedExecutiveId,
+            Long loanId,
+            // --- KYC profile (null when no profile captured yet) ---
+            boolean hasProfile,
+            String fullName,
+            String pan,
+            String mobile,
+            String email,
+            LocalDate dob,
+            String address,
+            String employer,
+            String employmentStatus,
+            Long monthlySalaryPaise,
+            String salaryBank,
+            String salaryAccountNumber,
+            String salaryIfsc,
+            Integer creditScore,
+            Double starRating,
+            String recommendation,
+            String riskCategory,
+            // --- onboarding completeness ---
+            int stepsCompleted,
+            int stepsRequired,
+            boolean agreementAccepted,
+            boolean complete,
+            Instant kycCapturedAt,
+            BureauState bureauState,
+            // Staff-only, server-resolved from assignedExecutiveId / the audit trail — populated only
+            // via withAssignment(...), mirroring ApplicationDtos.ApplicationView.
+            String assignedExecutiveName,
+            Instant currentStageEnteredAt,
+            com.navix.common.loan.TrustSignals trust,
+            /** Stored {@code journey_step} pointer; null if never set. */
+            String journeyStep) {
+
+        public static AdminApplicationView of(LoanApplication a, CustomerProfile p, BureauState bureauState,
+                int stepsCompleted, int stepsRequired, boolean agreementAccepted, boolean complete) {
+            return new AdminApplicationView(
+                    a.getId(), a.getCustomerId(), a.getStatus(),
+                    a.getAmountRequested(), a.getEligibleLimit(), a.getPurpose(),
+                    a.getSalaryCreditDay(), a.getAssignedExecutiveId(), a.getLoanId(),
+                    p != null,
+                    p != null ? p.getFullName() : null,
+                    p != null ? PiiView.pan(p.getPan()) : null,
+                    p != null ? p.getMobile() : null,
+                    p != null ? p.getEmail() : null,
+                    p != null ? p.getDob() : null,
+                    p != null ? p.getAddress() : null,
+                    p != null ? p.getEmployer() : null,
+                    p != null ? p.getEmploymentStatus() : null,
+                    p != null ? p.getMonthlySalaryPaise() : null,
+                    p != null ? p.getSalaryBank() : null,
+                    p != null ? PiiView.account(p.getSalaryAccountNumber()) : null,
+                    p != null ? p.getSalaryIfsc() : null,
+                    p != null && p.getBureauScore() != null ? p.getBureauScore().intValue() : null,
+                    p != null && p.getCreditStarRating() != null ? p.getCreditStarRating().doubleValue() : null,
+                    p != null ? p.getCreditRecommendation() : null,
+                    p != null ? p.getRiskCategory() : null,
+                    stepsCompleted, stepsRequired, agreementAccepted, complete,
+                    p != null ? p.getCreatedAt() : null, bureauState, null, null, null, a.getJourneyStep());
+        }
+
+        public AdminApplicationView withAssignment(String assignedExecutiveName, Instant currentStageEnteredAt) {
+            return new AdminApplicationView(id, customerId, status, amountRequestedPaise, eligibleLimitPaise,
+                    purpose, salaryCreditDay, assignedExecutiveId, loanId, hasProfile, fullName, pan, mobile,
+                    email, dob, address, employer, employmentStatus, monthlySalaryPaise, salaryBank,
+                    salaryAccountNumber, salaryIfsc, creditScore, starRating, recommendation, riskCategory,
+                    stepsCompleted, stepsRequired, agreementAccepted, complete, kycCapturedAt, bureauState,
+                    assignedExecutiveName, currentStageEnteredAt, trust, journeyStep);
+        }
+
+        public AdminApplicationView withTrust(com.navix.common.loan.TrustSignals trust) {
+            return new AdminApplicationView(id, customerId, status, amountRequestedPaise, eligibleLimitPaise,
+                    purpose, salaryCreditDay, assignedExecutiveId, loanId, hasProfile, fullName, pan, mobile,
+                    email, dob, address, employer, employmentStatus, monthlySalaryPaise, salaryBank,
+                    salaryAccountNumber, salaryIfsc, creditScore, starRating, recommendation, riskCategory,
+                    stepsCompleted, stepsRequired, agreementAccepted, complete, kycCapturedAt, bureauState,
+                    assignedExecutiveName, currentStageEnteredAt, trust, journeyStep);
+        }
+    }
+}

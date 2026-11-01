@@ -1,0 +1,490 @@
+/**
+ * Client-side exporters for staff dashboards: a plain CSV writer and a DhanNow-branded PDF built with
+ * jsPDF + jspdf-autotable. Both take the same column model (a header + an accessor) so a page can
+ * declare its columns once and offer both formats. The PDF carries the DhanNow wordmark, the document
+ * title, a "Downloaded by …" provenance line, and a per-page confidential footer.
+ */
+
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
+import { NAVIX_MARK_PNG } from "./brand-mark";
+import { BRAND } from "@/lib/brand";
+
+/** A column: a header label and an accessor that pulls a cell value from a row. */
+export interface ExportColumn<Row> {
+  header: string;
+  value: (row: Row) => string | number | null | undefined;
+}
+
+/** Who triggered the export — stamped onto the PDF for provenance. */
+export interface ExportActor {
+  name: string;
+  role: string;
+}
+
+/**
+ * Optional statement-period metadata (e.g. for the transactions ledger): the period label and the
+ * inclusive from/to dates the rows cover, plus the timezone the dates are read in. Rendered on the PDF
+ * so the document states exactly which window it represents.
+ */
+export interface ExportMeta {
+  periodLabel: string;
+  /** Human "from" / "to" (e.g. "30 Jun 2026"); omitted for an all-time export. */
+  from?: string;
+  to?: string;
+  timezone?: string;
+}
+
+// DhanNow design tokens, mirrored from src/styles/theme.css (jsPDF needs raw RGB): ink
+// --c-navy-800 · cobalt accent --c-gold-500 (token still named GOLD) · zebra --c-grey-50.
+// Keeps branded PDFs aligned with the re-skinned UI.
+const NAVY: [number, number, number] = [11, 11, 12];
+const GOLD: [number, number, number] = [31, 91, 219];
+const ROW_ALT: [number, number, number] = [247, 248, 248];
+
+function cell(v: string | number | null | undefined): string {
+  return v == null ? "" : String(v);
+}
+
+/** jsPDF's built-in Helvetica has no rupee glyph (it printed as "( ¹)"), so the PDF says "Rs." instead. */
+function pdfText(s: string): string {
+  return s.replace(/₹/g, "Rs.");
+}
+
+const PDF_FONT_SIZE = 8;
+const PDF_CELL_PAD = 4;
+/** Widest a column may grow before its text wraps (pt). Longer single words (UUIDs) still get their full width. */
+const PDF_MAX_COL_WIDTH = 170;
+const NUMERIC = /^-?[\d,]+(\.\d+)?$/;
+
+function triggerDownload(content: BlobPart, filename: string, mime: string): void {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/**
+ * One CSV cell: RFC-4180 quoting, plus formula neutralising. Borrower-typed text (an address, a
+ * reference's name) reaches these files, and a spreadsheet runs a cell starting with = + - @ as a
+ * formula — a leading apostrophe makes it plain text. Real negative numbers are left alone.
+ */
+export function csvCell(v: string | number | null | undefined): string {
+  const raw = cell(v);
+  const s = /^[=+\-@\t\r]/.test(raw) && !NUMERIC.test(raw) ? `'${raw}` : raw;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** Write rows to a CSV download. Values are quoted/escaped per RFC-4180 when needed. */
+export function exportCsv<Row>(fileBase: string, columns: ExportColumn<Row>[], rows: Row[]): void {
+  const esc = csvCell;
+  const header = columns.map((c) => esc(c.header)).join(",");
+  const body = rows.map((r) => columns.map((c) => esc(c.value(r))).join(",")).join("\n");
+  exportCsvText(fileBase, header + "\n" + body);
+}
+
+/**
+ * Download already-assembled CSV text (one whose rows are not a single uniform table — e.g. the
+ * sectioned customer export). The caller is responsible for having passed every cell through
+ * `csvCell`.
+ */
+export function exportCsvText(fileBase: string, csv: string): void {
+  // BOM so Excel reads UTF-8 (₹ etc.) correctly.
+  triggerDownload("﻿" + csv, `${fileBase}.csv`, "text/csv;charset=utf-8;");
+}
+
+/** Height of the navy header band plus its gold rule, below which a page's content starts. */
+const PDF_HEADER_BOTTOM = 61;
+
+/** The DhanNow header band — emblem, wordmark, document title/subtitle — on the current page. */
+function drawPdfHeader(doc: jsPDF, title: string, subtitle?: string): void {
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  // --- header band + gold rule ---
+  doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+  doc.rect(0, 0, pageWidth, 58, "F");
+  doc.setFillColor(GOLD[0], GOLD[1], GOLD[2]);
+  doc.rect(0, 58, pageWidth, 3, "F");
+
+  // emblem (transparent PNG sits on the navy band)
+  try {
+    doc.addImage(NAVIX_MARK_PNG, "PNG", 36, 12, 36, 36);
+  } catch {
+    // addImage can throw in non-DOM/test environments — the wordmark still renders.
+  }
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(20);
+  doc.text(BRAND.wordmark, 82, 30);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(GOLD[0], GOLD[1], GOLD[2]);
+  doc.text("FINANCE", 83, 44);
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.text(pdfText(title), pageWidth - 40, 28, { align: "right" });
+  if (subtitle) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(210, 220, 230);
+    doc.text(pdfText(subtitle), pageWidth - 40, 44, { align: "right" });
+  }
+}
+
+/** "DhanNow · Confidential" + "Page i of n" on every page of the document. */
+function drawPdfFooter(doc: jsPDF): void {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const pageCount = doc.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(130, 130, 130);
+    doc.text(`${BRAND.name} · Confidential`, 40, pageHeight - 18);
+    doc.text(`Page ${i} of ${pageCount}`, pageWidth - 40, pageHeight - 18, { align: "right" });
+  }
+}
+
+type ColumnStyles = Record<number, { cellWidth: number; halign?: "right" }>;
+
+/**
+ * Size every column from its content. Squeezing 25+ columns onto one landscape page made autoTable
+ * wrap cells one character per line; instead each column gets the width its text needs (capped so a
+ * paragraph wraps by word) and, when the total exceeds the page, the caller lets the columns spill
+ * onto extra pages with the first (key) column repeated so a row stays identifiable.
+ */
+function sizeColumns(
+  doc: jsPDF,
+  head: string[],
+  body: string[][],
+  pageWidth: number,
+  fontSize = PDF_FONT_SIZE,
+  /** Let a header wrap by word: only its longest word sets the column's minimum width. */
+  wrapHeaders = false,
+): { columnStyles: ColumnStyles; fits: boolean } {
+  doc.setFontSize(fontSize);
+  const pad = (fontSize < PDF_FONT_SIZE ? 3 : PDF_CELL_PAD) * 2;
+  const columnStyles: ColumnStyles = {};
+  let total = 0;
+  head.forEach((_, i) => {
+    let content = 0;
+    let word = 0;
+    const measure = (text: string, wraps = false) => {
+      if (!wraps) content = Math.max(content, doc.getTextWidth(text));
+      for (const w of text.split(/\s+/)) word = Math.max(word, doc.getTextWidth(w));
+    };
+    doc.setFont("helvetica", "bold");
+    measure(head[i], wrapHeaders);
+    doc.setFont("helvetica", "normal");
+    body.forEach((row) => measure(row[i]));
+    const width = Math.min(Math.max(content, word), Math.max(PDF_MAX_COL_WIDTH, word)) + pad + 1;
+    total += width;
+    // Money columns (header carries the currency) read right-aligned; IDs and mobiles stay left.
+    const money = /Rs\./.test(head[i]) && body.every((row) => row[i] === "" || row[i] === "—" || NUMERIC.test(row[i]));
+    columnStyles[i] = { cellWidth: width, ...(money ? { halign: "right" as const } : {}) };
+  });
+  return { columnStyles, fits: total <= pageWidth - 80 };
+}
+
+/**
+ * Write rows to a DhanNow-branded PDF download (landscape A4), stamped with who downloaded it. Wide
+ * column sets paginate horizontally (key column repeated) instead of being crushed into one page.
+ */
+export function exportPdf<Row>(opts: {
+  fileBase: string;
+  title: string;
+  subtitle?: string;
+  columns: ExportColumn<Row>[];
+  rows: Row[];
+  actor: ExportActor;
+  /** ISO-ish timestamp string; the caller passes one so this stays deterministic/testable. */
+  generatedAt: string;
+  /** Optional statement-period block (period label + from/to + timezone). */
+  meta?: ExportMeta;
+}): void {
+  const { fileBase, title, subtitle, columns, rows, actor, generatedAt, meta } = opts;
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  drawPdfHeader(doc, title, subtitle);
+
+  // --- provenance line ---
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(90, 90, 90);
+  doc.text(
+    `Downloaded by ${actor.name} · ${actor.role}  ·  Generated ${generatedAt}  ·  ${rows.length} row${rows.length === 1 ? "" : "s"}`,
+    40,
+    78,
+  );
+
+  // --- statement-period block (optional) ---
+  let tableStart = 90;
+  if (meta) {
+    const period = meta.from && meta.to
+      ? `Statement period: ${meta.periodLabel}  ·  ${meta.from} – ${meta.to}`
+      : `Statement period: ${meta.periodLabel}`;
+    const tz = meta.timezone ? `  ·  Timezone: ${meta.timezone}` : "";
+    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.setFont("helvetica", "bold");
+    doc.text(`${period}${tz}  ·  ${rows.length} transaction${rows.length === 1 ? "" : "s"}`, 40, 90);
+    tableStart = 102;
+  }
+
+  // --- table ---
+  const head = columns.map((c) => pdfText(c.header));
+  const body = rows.map((r) => columns.map((c) => pdfText(cell(c.value(r)))));
+
+  const { columnStyles, fits } = sizeColumns(doc, head, body, pageWidth);
+
+  autoTable(doc, {
+    startY: tableStart,
+    head: [head],
+    body,
+    styles: { fontSize: PDF_FONT_SIZE, cellPadding: PDF_CELL_PAD, overflow: "linebreak", valign: "top" },
+    headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: ROW_ALT },
+    margin: { left: 40, right: 40, top: 40, bottom: 36 },
+    // columnStyles alignment applies to the body only; mirror it onto the header cell.
+    didParseCell: (d) => {
+      if (d.section === "head" && columnStyles[d.column.index]?.halign) d.cell.styles.halign = "right";
+    },
+    // A table that fits keeps autoTable's stretch-to-page layout; a wider one paginates horizontally.
+    ...(fits
+      ? { columnStyles: Object.fromEntries(Object.entries(columnStyles).map(([k, v]) => [k, { halign: v.halign }])) }
+      : { columnStyles, horizontalPageBreak: true, horizontalPageBreakRepeat: 0 }),
+  });
+
+  drawPdfFooter(doc);
+
+  doc.save(`${fileBase}.pdf`);
+}
+
+/** One table of a multi-section PDF: a heading, a header row and its body rows. */
+export interface PdfSection {
+  title: string;
+  header: string[];
+  rows: (string | number | null | undefined)[][];
+}
+
+/**
+ * Write several titled tables to one DhanNow-branded PDF download (portrait A4) — the shape a
+ * single customer's full profile takes: profile, applications, loans, repayments, verifications,
+ * documents, each under its own heading. Same header band, provenance line and per-page footer as
+ * `exportPdf`; a section that would start within a few lines of the page foot moves to a new page
+ * so a heading is never orphaned from its table.
+ */
+export function exportPdfSections(opts: {
+  fileBase: string;
+  title: string;
+  subtitle?: string;
+  sections: PdfSection[];
+  actor: ExportActor;
+  /** ISO-ish timestamp string; the caller passes one so this stays deterministic/testable. */
+  generatedAt: string;
+}): void {
+  const { fileBase, title, subtitle, sections, actor, generatedAt } = opts;
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  drawPdfHeader(doc, title, subtitle);
+
+  // --- provenance line ---
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(90, 90, 90);
+  doc.text(`Downloaded by ${actor.name} · ${actor.role}  ·  Generated ${generatedAt}`, 40, 78);
+
+  let y = 96;
+  for (const section of sections) {
+    // A heading needs room for itself plus a header row and one body row beneath it.
+    if (y > pageHeight - 110) {
+      doc.addPage();
+      y = PDF_HEADER_BOTTOM + 30;
+    }
+    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.text(pdfText(section.title), 40, y);
+    y += 8;
+
+    const head = section.header.map(pdfText);
+    const body = section.rows.map((r) => r.map((v) => pdfText(cell(v))));
+    // Money columns (header carries the currency) read right-aligned, as in `exportPdf`.
+    const money = head.map(
+      (h, i) => /Rs\./.test(h) && body.every((row) => row[i] === "" || row[i] === "—" || NUMERIC.test(row[i])),
+    );
+    const columnStyles = Object.fromEntries(money.map((m, i) => [i, m ? { halign: "right" as const } : {}]));
+
+    autoTable(doc, {
+      startY: y,
+      head: [head],
+      // An empty section still prints its header row with a single "—" so the reader sees it was
+      // looked at and found empty, not skipped.
+      body: body.length > 0 ? body : [head.map((_, i) => (i === 0 ? "—" : ""))],
+      styles: { fontSize: PDF_FONT_SIZE, cellPadding: PDF_CELL_PAD, overflow: "linebreak", valign: "top" },
+      headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold" },
+      alternateRowStyles: { fillColor: ROW_ALT },
+      columnStyles,
+      margin: { left: 40, right: 40, top: PDF_HEADER_BOTTOM + 20, bottom: 36 },
+      didParseCell: (d) => {
+        if (d.section === "head" && money[d.column.index]) d.cell.styles.halign = "right";
+      },
+    });
+    y = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 22;
+  }
+
+  drawPdfFooter(doc);
+
+  doc.save(`${fileBase}.pdf`);
+}
+
+/** A report already formatted to strings, for {@link exportReportPdf}. */
+export interface PdfReport {
+  fileBase: string;
+  title: string;
+  /** Shown under the title in the header band (e.g. the category). */
+  subtitle?: string;
+  /** One-paragraph explanation of what the report contains. */
+  description?: string;
+  /** "Period: 01 Oct 2026 – 23 Oct 2026 · by disbursal date", or a snapshot statement. */
+  periodLine: string;
+  /** Headline figures drawn as tiles above the table. */
+  facts: { label: string; value: string }[];
+  header: string[];
+  rows: string[][];
+  /** Optional totals row, drawn as the table foot. */
+  foot?: string[];
+  notes: string[];
+  actor: ExportActor;
+  generatedAt: string;
+}
+
+/**
+ * A DhanNow-branded report PDF: header band, provenance, a short description, the period, a row of
+ * headline-figure tiles, the full table (with a totals foot), and the report's notes. Narrow tables
+ * print portrait; wide ones landscape, paginating horizontally like {@link exportPdf} when even that
+ * is too narrow. It carries exactly the rows and figures the matching CSV carries.
+ */
+export function exportReportPdf(r: PdfReport): void {
+  const doc = new jsPDF({ orientation: r.header.length > 6 ? "landscape" : "portrait", unit: "pt", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const contentWidth = pageWidth - 80;
+
+  drawPdfHeader(doc, r.title, r.subtitle);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(90, 90, 90);
+  doc.text(
+    pdfText(`Downloaded by ${r.actor.name} · ${r.actor.role}  ·  Generated ${r.generatedAt}  ·  ${r.rows.length} row${r.rows.length === 1 ? "" : "s"}`),
+    40,
+    78,
+  );
+
+  let y = 96;
+  if (r.description) {
+    doc.setFontSize(9);
+    doc.setTextColor(60, 60, 60);
+    const lines = doc.splitTextToSize(pdfText(r.description), contentWidth) as string[];
+    doc.text(lines, 40, y);
+    y += lines.length * 11 + 4;
+  }
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+  doc.text(pdfText(r.periodLine), 40, y);
+  y += 12;
+
+  // --- headline-figure tiles ---
+  if (r.facts.length > 0) {
+    const gap = 10;
+    const perRow = Math.min(r.facts.length, 5);
+    const w = (contentWidth - gap * (perRow - 1)) / perRow;
+    const h = 44;
+    r.facts.forEach((f, i) => {
+      const col = i % perRow;
+      if (i > 0 && col === 0) y += h + gap;
+      const x = 40 + col * (w + gap);
+      doc.setFillColor(ROW_ALT[0], ROW_ALT[1], ROW_ALT[2]);
+      doc.roundedRect(x, y, w, h, 4, 4, "F");
+      doc.setFillColor(GOLD[0], GOLD[1], GOLD[2]);
+      doc.rect(x, y + 6, 3, h - 12, "F");
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 100, 100);
+      doc.text(pdfText(f.label).toUpperCase(), x + 10, y + 15, { maxWidth: w - 16 });
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(13);
+      doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+      doc.text(pdfText(f.value), x + 10, y + 34, { maxWidth: w - 16 });
+    });
+    y += h + 16;
+  }
+
+  // --- table ---
+  const head = r.header.map(pdfText);
+  const body = r.rows.map((row) => row.map(pdfText));
+  const foot = r.foot?.map(pdfText);
+  // Headers wrap by word, and a wide report then tries a smaller type to keep every column on one page; only when even 6.5pt
+  // won't fit does it paginate horizontally (key column repeated), as `exportPdf` does.
+  const measured = foot ? [...body, foot] : body;
+  let fontSize = PDF_FONT_SIZE;
+  let sized = sizeColumns(doc, head, measured, pageWidth, fontSize, true);
+  for (const smaller of [7, 6.5]) {
+    if (sized.fits) break;
+    fontSize = smaller;
+    sized = sizeColumns(doc, head, measured, pageWidth, fontSize, true);
+  }
+  const { columnStyles, fits } = sized;
+  const empty = body.length === 0;
+
+  autoTable(doc, {
+    startY: y,
+    head: [head],
+    body: empty ? [[{ content: "No records for this period.", colSpan: head.length, styles: { halign: "center", textColor: 120 } }]] : body,
+    ...(foot && !empty ? { foot: [foot], showFoot: "lastPage" as const } : {}),
+    styles: { fontSize, cellPadding: fontSize < PDF_FONT_SIZE ? 3 : PDF_CELL_PAD, overflow: "linebreak", valign: "top" },
+    headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold" },
+    footStyles: { fillColor: [232, 244, 238], textColor: NAVY, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: ROW_ALT },
+    margin: { left: 40, right: 40, top: 40, bottom: 36 },
+    didParseCell: (d) => {
+      if (d.section !== "body" && columnStyles[d.column.index]?.halign) d.cell.styles.halign = "right";
+    },
+    ...(fits
+      ? { columnStyles: Object.fromEntries(Object.entries(columnStyles).map(([k, v]) => [k, { halign: v.halign }])) }
+      : { columnStyles, horizontalPageBreak: true, horizontalPageBreakRepeat: 0 }),
+  });
+
+  // --- notes ---
+  if (r.notes.length > 0) {
+    y = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 22;
+    doc.setFontSize(8.5);
+    const lines = r.notes.flatMap((n) => doc.splitTextToSize(pdfText(`•  ${n}`), contentWidth) as string[]);
+    if (y + 16 + lines.length * 11 > pageHeight - 40) {
+      doc.addPage();
+      y = 60;
+    }
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.text("Notes", 40, y);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(80, 80, 80);
+    doc.text(lines, 40, y + 14);
+  }
+
+  drawPdfFooter(doc);
+  doc.save(`${r.fileBase}.pdf`);
+}

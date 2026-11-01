@@ -1,0 +1,127 @@
+package com.navix.common.security;
+
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.Jws;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.security.Keys;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Date;
+import javax.crypto.SecretKey;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+/**
+ * Issues and verifies the HS256 JWTs that carry DhanNow identity. Two audiences —
+ * {@code staff} (subject = staffId) and {@code borrower} (subject = customerId) —
+ * stay in separate namespaces (a borrower token can never satisfy a staff route).
+ *
+ * <p>The signing key is derived (SHA-256) from {@code navix.auth.secret} so any
+ * configured secret length yields a valid 256-bit HMAC key. The secret is supplied
+ * at runtime (env {@code AUTH_SECRET} / SSM) — never committed.
+ */
+@Component
+public class JwtService {
+
+    public static final String AUDIENCE_STAFF = "staff";
+    public static final String AUDIENCE_BORROWER = "borrower";
+
+    private final SecretKey key;
+    private final long ttlSeconds;
+    private final long borrowerTtlSeconds;
+
+    public JwtService(
+            @Value("${navix.auth.secret:navix-local-dev-secret-change-me}") String secret,
+            @Value("${navix.auth.ttl-seconds:86400}") long ttlSeconds,
+            @Value("${navix.auth.borrower-ttl-seconds:604800}") long borrowerTtlSeconds) {
+        this.key = Keys.hmacShaKeyFor(sha256(secret));
+        this.ttlSeconds = ttlSeconds;
+        this.borrowerTtlSeconds = borrowerTtlSeconds;
+    }
+
+    /**
+     * A verified token's identity. {@code id} is the actor id (staffId / customerId).
+     * {@code sessionId} is the staff single-session key (the {@code sid} claim) — null for borrower
+     * tokens, which are explicitly allowed on multiple devices, and for tokens minted before this
+     * feature shipped (grandfathered, see {@code StaffSessionRegistry}).
+     */
+    public record Principal(String id, String name, String role, String audience, String sessionId,
+                            String deviceId) {
+    }
+
+    /**
+     * Issue a signed token. {@code role} is the actor role; {@code audience} = staff|borrower.
+     * Borrower tokens get the longer {@code borrower-ttl-seconds} (7-day "remember me"); staff keep
+     * the shorter {@code ttl-seconds}.
+     */
+    public String issue(String subjectId, String name, String role, String audience) {
+        return issue(subjectId, name, role, audience, null);
+    }
+
+    /**
+     * Issue a signed token carrying a {@code sid} claim — the staff single-session key (see
+     * {@code AuthController.staffLogin} / {@code StaffSessionRegistry}). Pass {@code null} for
+     * audiences that don't use session enforcement (borrower).
+     */
+    public String issue(String subjectId, String name, String role, String audience, String sessionId) {
+        long ttl = AUDIENCE_BORROWER.equals(audience) ? borrowerTtlSeconds : ttlSeconds;
+        return issue(subjectId, name, role, audience, sessionId, null, ttl);
+    }
+
+    /**
+     * PLAN Phase 8: an app session's short access token. {@code deviceId} rides as the {@code did} claim, so the
+     * devices list can mark the caller's own phone; {@code ttlSeconds} is the access TTL (15 min by default).
+     */
+    public String issueForDevice(String subjectId, String name, String role, String audience, String deviceId,
+                                 long ttlSeconds) {
+        return issue(subjectId, name, role, audience, null, deviceId, ttlSeconds);
+    }
+
+    private String issue(String subjectId, String name, String role, String audience, String sessionId,
+                         String deviceId, long ttl) {
+        long now = System.currentTimeMillis();
+        var builder = Jwts.builder()
+                .subject(subjectId)
+                .claim("name", name)
+                .claim("role", role)
+                .audience().add(audience).and()
+                .issuedAt(new Date(now))
+                .expiration(new Date(now + ttl * 1000));
+        if (sessionId != null) {
+            builder.claim("sid", sessionId);
+        }
+        if (deviceId != null) {
+            builder.claim("did", deviceId);
+        }
+        return builder.signWith(key).compact();
+    }
+
+    /** Verify a token's signature/expiry and return its {@link Principal}; throws on any failure. */
+    public Principal verify(String token) {
+        Jws<Claims> jws = Jwts.parser().verifyWith(key).build().parseSignedClaims(token);
+        Claims c = jws.getPayload();
+        String audience = c.getAudience() != null && !c.getAudience().isEmpty()
+                ? c.getAudience().iterator().next() : null;
+        return new Principal(c.getSubject(), c.get("name", String.class), c.get("role", String.class), audience,
+                c.get("sid", String.class), c.get("did", String.class));
+    }
+
+    /** Verify, swallowing failures into an {@link java.util.Optional}-style null. */
+    public Principal tryVerify(String token) {
+        try {
+            return verify(token);
+        } catch (JwtException | IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static byte[] sha256(String secret) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(secret.getBytes(StandardCharsets.UTF_8));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+}

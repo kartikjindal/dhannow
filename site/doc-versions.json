@@ -1,0 +1,89 @@
+{
+  "_readme": "Legal page versions (PLAN Phase 10a W2). Do not edit by hand: `python site/doc_versions.py --bump <page>` after changing a page. The backend reads `version` into GET /api/app/config legal[] and stores it with consent.",
+  "pages": {
+    "about.html": {
+      "version": "1",
+      "sha256": "07ca727b7533a298e70e07c4b11812a3c1ad9ad39b83bd13e26f52bed0f5027a"
+    },
+    "consent.html": {
+      "version": "1",
+      "sha256": "ce6e0c0ef5124c70f3c1b69b21914e021a18a34599bb9231a7eaa571035ece71"
+    },
+    "contact.html": {
+      "version": "1",
+      "sha256": "b11ec31453bfa64dd4b7cd065d84f5bd8156a5f9fa2ee85ff3dd6f7ab31ecc02"
+    },
+    "cookie-policy.html": {
+      "version": "1",
+      "sha256": "95aca1fe682f7f196fa8082e663134783163fff3b0f2552c03c5b6c6fdda4a9b"
+    },
+    "disclaimer.html": {
+      "version": "1",
+      "sha256": "40ca5ba1fd0b570eb1af0056211a0bdb980984694fef8677c2c3511bd6470b81"
+    },
+    "eligibility.html": {
+      "version": "1",
+      "sha256": "eaa9cfa584b3a153808aa451bf4d894a9f5d2bbc17a888f5fc5eb906ed842953"
+    },
+    "fair-practices.html": {
+      "version": "1",
+      "sha256": "f16878c3d2682ea8eca1cebedd0cf07ad4c1b501bc1018d4240e89f7b5607387"
+    },
+    "faq.html": {
+      "version": "1",
+      "sha256": "c42ddda79ea62ab7280e0ca78f86bf0eecab64448be1514354b5f7d0a1fb9abc"
+    },
+    "governance.html": {
+      "version": "1",
+      "sha256": "3e5907bf42d30b27cc81b5abe4fd208af255a488074a1d6c21ee94a37a26fb89"
+    },
+    "grievance.html": {
+      "version": "1",
+      "sha256": "c5e8618fa7c940ae416e07f36e103708d3310f110c1f617dfe94b3fa15105552"
+    },
+    "how-it-works.html": {
+      "version": "1",
+      "sha256": "d5b84dfaafd529c8590c2defdc3ce50562f128346a633a55ab8a1a2d4111e26f"
+    },
+    "kfs-policy.html": {
+      "version": "1",
+      "sha256": "f1274e7f46725a2f938e29048bb5142f08820167dbc7c9147c430ca2aaa5669f"
+    },
+    "kfs.html": {
+      "version": "1",
+      "sha256": "d1b863cda6e34a78aab758996db19a614156798fac1b5e71ef22fb2ba9c9b7ae"
+    },
+    "loan-agreement.html": {
+      "version": "1",
+      "sha256": "486a0b078a1fbb7cd952681acfc077f3cd152e36b785c14765fc0515bfbe78c8"
+    },
+    "loan-information.html": {
+      "version": "1",
+      "sha256": "4affbe694d4788dca9d232886286dfac9ecc0ca736f180052560e2510003006c"
+    },
+    "payment-refund-policy.html": {
+      "version": "1",
+      "sha256": "b18f3eaa654c3228e647cfdb6c7f1faa183af46166985a58710fac3978c3413f"
+    },
+    "privacy.html": {
+      "version": "1",
+      "sha256": "74d5b5d54e63dc2380b4bce5bb6180cce559088c63ac5271763b0d564d78b928"
+    },
+    "repayment-policy.html": {
+      "version": "1",
+      "sha256": "fa4d87536c3cf74e9bf8ae1cf92216201760dec3d339427a29ffe1e2438ce842"
+    },
+    "risk.html": {
+      "version": "1",
+      "sha256": "da14a817e7c9582e801012ebdac0edbebffbe350c32898eefbed2281425a5ff1"
+    },
+    "sanction-letter.html": {
+      "version": "1",
+      "sha256": "095f6c2edfa3600212f4d9a254822a2bf82e564f1813496e75dcdf7eb23c23b1"
+    },
+    "terms.html": {
+      "version": "1",
+      "sha256": "8af19c6239d8522434131f3303f2290675dec981e0991b7030b7d7d4757560bf"
+    }
+  }
+}

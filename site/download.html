@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get the app – DhanNow</title>
+<meta name="description" content="Download the DhanNow Android app. Apply, sign and repay in the app.">
+<link rel="icon" href="logo.jpeg">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bebas+Neue&display=swap">
+<style>
+/* Board E16 (docs/wireframes/Download.dc.html). Tokens = app F2 (site/check_theme.py). */
+:root{--page:#F2F3F3;--surface:#FAFAFA;--ink:#0B0B0C;--soft:#4A4D52;--line:#E5E7E8;--field:#EEF3FF;--cobalt:#1F5BDB;--cobalt-dark:#1A4BB8;--cobalt-press:#163F9C;--ok:#17804F;--ok-bg:#E3F7EC}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--page);color:var(--ink);font:16px/1.6 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--cobalt-dark);text-underline-offset:3px}
+a:hover{color:var(--cobalt-press)}
+:focus-visible{outline:3px solid var(--cobalt);outline-offset:3px}
+header{background:#fff;border-bottom:1px solid var(--line)}
+header div{max-width:720px;margin:0 auto;padding:0 16px;height:72px;display:flex;align-items:center}
+header img{height:44px;display:block}
+header .home{margin-left:auto;font-weight:500;color:var(--ink);text-decoration:none;padding:12px 0}
+main{max-width:720px;margin:0 auto;padding:40px 16px 64px}
+h1{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;letter-spacing:.6px;line-height:1;font-size:clamp(44px,8vw,64px);margin:0 0 12px}
+h2{font-size:18px;font-weight:600;margin:0}
+.lede{color:var(--soft);margin:0 0 28px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:24px;box-shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9);margin-bottom:16px}
+.row{display:flex;align-items:center;gap:12px;justify-content:space-between}
+.chip{font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px;background:var(--ok-bg);color:var(--ok)}
+dl{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;margin:16px 0 20px;font-size:15px}
+dt{color:var(--soft)}
+dd{margin:0;overflow-wrap:anywhere}
+.btn{display:flex;align-items:center;justify-content:center;min-height:52px;border-radius:999px;background:var(--cobalt);color:#fff;font-weight:600;font-size:16px;text-decoration:none;box-shadow:0 10px 24px -12px rgba(31,91,219,.55)}
+.btn:hover{background:var(--cobalt-dark);color:#fff}
+.sha{font-size:13px;color:var(--soft);margin:12px 0 0;overflow-wrap:anywhere}
+ol{margin:12px 0 0;padding-left:22px}
+li{margin-bottom:6px}
+.note{background:var(--field);border-radius:16px;padding:16px 20px;font-size:15px}
+.play img{height:80px;display:block;margin:8px 0 0 -12px}
+footer{color:var(--soft);font-size:14px;max-width:720px;margin:0 auto;padding:0 16px 40px}
+</style>
+</head>
+<body>
+<header><div>
+  <a href="index.html" aria-label="DhanNow home"><img src="logo.jpeg" alt="DhanNow"></a>
+  <a class="home" href="index.html">Home</a>
+</div></header>
+<main>
+<h1>Get the DhanNow app</h1>
+<p class="lede">Apply, sign and repay in the Android app. There’s no login on the website.</p>
+
+<!-- W4: docs/brand.json app.distribution picks one of the two cards ("apk" until the Play listing is live). -->
+<section class="card" data-dist="apk" aria-labelledby="apk-h">
+  <div class="row"><h2 id="apk-h">DhanNow for Android</h2><span class="chip">Signed</span></div>
+  <dl>
+    <dt>Version</dt><dd><span data-brand="app.apk.version">[VERSION]</span> · <span data-brand="app.apk.sizeMb">[SIZE]</span> MB</dd>
+    <dt>Needs</dt><dd data-brand="app.minAndroid">Android 7.0 or newer</dd>
+    <dt>Package</dt><dd data-brand="app.package">com.dhannow.app</dd>
+  </dl>
+  <a class="btn" data-brand-href="app.apk.url" href="#" download>Download APK</a>
+  <p class="sha">SHA-256: <span data-brand="app.apk.sha256">[SHA-256 OF SIGNED APK]</span>. Check it matches your file before installing.</p>
+</section>
+<section class="card" data-dist="apk" aria-labelledby="how-h">
+  <h2 id="how-h">How to install</h2>
+  <ol>
+    <li>Tap Download APK.</li>
+    <li>Open the file.</li>
+    <li>If asked, allow installs from your browser for this one time.</li>
+    <li>Open DhanNow.</li>
+  </ol>
+</section>
+
+<section class="card play" data-dist="play" aria-labelledby="play-h" hidden>
+  <h2 id="play-h">DhanNow on Google Play</h2>
+  <a data-brand-href="app.playUrl" href="https://play.google.com/store/apps/details?id=com.dhannow.app"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get it on Google Play"></a>
+</section>
+
+<p class="note">We never ask you to install anything from WhatsApp, SMS or any other website. Questions? Call <a data-brand="support.phone" data-brand-href="support.phone" href="tel:+919211331169">92113 31169</a> or email <a data-brand="support.email" data-brand-href="support.email" href="mailto:support@dhannow.com">support@dhannow.com</a>.</p>
+</main>
+<footer>DhanNow is the customer brand of <span data-brand="company.legalName">NAVIX Finance Private Limited</span> (CIN <span data-brand="company.cin">U64990HR2026PTC144926</span>). <a href="index.html">Back to home</a></footer>
+</body>
+</html>

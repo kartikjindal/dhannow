@@ -1,0 +1,69 @@
+import { type BrowserContext, type Page } from "@playwright/test";
+
+/** Staff roles (mirrors lib/auth/rbac.ts). */
+export const STAFF_ROLES = [
+  "CREDIT_EXECUTIVE", "CREDIT_HEAD", "DISBURSEMENT_HEAD", "ACCOUNTANT",
+  "COLLECTION_HEAD", "COLLECTION_EXECUTIVE", "DSA", "ADMIN",
+] as const;
+export type StaffRole = (typeof STAFF_ROLES)[number];
+
+/** Persona display names per role (from staff-personas.ts / V10 seed) — for UI clicks. */
+export const STAFF_PERSONA_NAMES: Record<StaffRole, string> = {
+  CREDIT_EXECUTIVE: "Rahul Mehta",
+  CREDIT_HEAD: "Priya Nair",
+  DISBURSEMENT_HEAD: "Vikram Shah",
+  ACCOUNTANT: "Deepa Iyer",
+  COLLECTION_HEAD: "Arjun Patel",
+  COLLECTION_EXECUTIVE: "Sana Khan",
+  DSA: "Arjun Rao",
+  ADMIN: "Meera Krishnan",
+};
+
+/** Seeded login email per role (V10 seed); the shared demo password is below. */
+export const STAFF_PERSONA_EMAILS: Record<StaffRole, string> = {
+  CREDIT_EXECUTIVE: "rahul.mehta@navix.example",
+  CREDIT_HEAD: "priya.nair@navix.example",
+  DISBURSEMENT_HEAD: "vikram.shah@navix.example",
+  ACCOUNTANT: "deepa.iyer@navix.example",
+  COLLECTION_HEAD: "arjun.patel@navix.example",
+  COLLECTION_EXECUTIVE: "sana.khan@navix.example",
+  DSA: "arjun.rao@navix.example",
+  ADMIN: "meera.krishnan@navix.example",
+};
+/** Set on the e2e stack only; no staff password is seeded in the migrations. */
+export const STAFF_DEFAULT_PASSWORD = process.env.E2E_STAFF_PASSWORD ?? "";
+
+/**
+ * One real sign-in per role per worker; every later call replays the cookie.
+ *
+ * <p>The backend rate-limits `/api/auth/staff/login` to a handful of attempts in a short window and
+ * counts SUCCESSES as well as failures (`AttemptLimiter`), so a suite that logs in on every test
+ * locks its own accounts out part-way through and fails with what look like UI errors — a queue
+ * heading "not found" because the page under test is really the login screen. Caching keeps each
+ * account at exactly one attempt, which is well inside any cap and cuts a couple of seconds per test.
+ *
+ * <p>Safe to replay: the staff JWT lives a day and `/api/auth/staff/logout` only clears the cookie —
+ * there is no server-side revocation to invalidate a cached one.
+ */
+const staffCookieCache = new Map<StaffRole, Awaited<ReturnType<BrowserContext["cookies"]>>>();
+
+export async function loginStaff(page: Page, role: StaffRole): Promise<boolean> {
+  const cached = staffCookieCache.get(role);
+  if (cached?.length) {
+    await page.context().addCookies(cached);
+    return true;
+  }
+  const res = await page.request.post("/api/auth/staff/login", {
+    data: { email: STAFF_PERSONA_EMAILS[role], password: STAFF_DEFAULT_PASSWORD },
+  });
+  if (!res.ok()) return false;
+  const session = (await page.context().cookies()).filter((c) => c.name === "navix_staff");
+  if (session.length) staffCookieCache.set(role, session);
+  return true;
+}
+
+/** A unique-ish 10-digit Indian mobile per test run (avoids OTP-store collisions). */
+export function uniqueMobile(): string {
+  const n = (Date.now() % 1_000_000).toString().padStart(6, "0");
+  return "98" + n.slice(0, 8).padEnd(8, "0");
+}

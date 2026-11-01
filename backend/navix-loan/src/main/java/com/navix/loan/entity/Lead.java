@@ -1,0 +1,125 @@
+package com.navix.loan.entity;
+
+import com.navix.common.entity.BaseAuditEntity;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
+/**
+ * Pre-customer telecaller lead — DSA-style intake with call disposition.
+ * Not a {@code customer}; conversion to the loan lifecycle is out of scope for v1.
+ */
+@Entity
+@Table(name = "lead")
+@Getter
+@Setter
+@NoArgsConstructor
+public class Lead extends BaseAuditEntity {
+
+    @Column(nullable = false, length = 160)
+    private String name;
+
+    @Column(nullable = false, length = 10)
+    private String mobile;
+
+    @Column(length = 160)
+    private String email;
+
+    @Column(length = 120)
+    private String city;
+
+    @Column(length = 6)
+    private String pincode;
+
+    @Column(length = 160)
+    private String employer;
+
+    @Column(name = "monthly_salary_paise")
+    private Long monthlySalaryPaise;
+
+    @Column(name = "loan_amount_interested_paise")
+    private Long loanAmountInterestedPaise;
+
+    /** DSA | REFERRAL | WALK_IN | OTHER */
+    @Column(length = 24)
+    private String source;
+
+    @Column(name = "source_detail", length = 240)
+    private String sourceDetail;
+
+    /** NOT_CALLED | CALLED | CALLBACK | NO_ANSWER | NOT_INTERESTED | WRONG_NUMBER | CONNECTED */
+    @Column(name = "call_status", nullable = false, length = 32)
+    private String callStatus = "NOT_CALLED";
+
+    /** 1–5 quality stars; null until rated. Matches DB smallint (V43). */
+    @JdbcTypeCode(SqlTypes.SMALLINT)
+    @Column(name = "quality_rating")
+    private Integer qualityRating;
+
+    @Column(columnDefinition = "text")
+    private String notes;
+
+    @Column(columnDefinition = "text")
+    private String remarks;
+
+    /**
+     * Where the outreach on this lead got to — {@code NEW | OUTREACHED | REJECTED} (V70).
+     *
+     * <p>A separate axis from {@link #callStatus}, which records how a call ATTEMPT went and whose
+     * seven values feed {@code LeadStats.byCallStatus} and buildByDay's "called" metric; folding
+     * outcomes into it would move those numbers silently.
+     *
+     * <p>{@code CONFIRMED} is deliberately not storable here. It is resolved on read from the
+     * attributed application ({@link DsaAttributionService}), because attribution is a PAN match
+     * computed at read time and no lead-to-application link is persisted to drive a write.
+     */
+    @Column(name = "lead_outcome", nullable = false, length = 16)
+    private String leadOutcome = "NEW";
+
+    /**
+     * One staff note the DSA who uploaded this lead can read (V70).
+     *
+     * <p>Deliberately NOT {@link #remarks}, which is the telecaller's private call commentary and
+     * predates anyone outside staff being able to read a lead at all — surfacing it would leak
+     * internal notes on every row already in the table. This column starts empty, and the staff UI
+     * labels it as DSA-visible at the point of writing.
+     */
+    @Column(name = "dsa_note", columnDefinition = "text")
+    private String dsaNote;
+
+    @Column(name = "created_by_staff_id", nullable = false)
+    private Long createdByStaffId;
+
+    /**
+     * The DSA who owns this lead (real {@code staff_user.id}), set only when the creator is a
+     * DSA (V55). Null for telecaller/walk-in/etc. leads. This is the hard ownership boundary a
+     * DSA reads/writes against — never a client-supplied id.
+     */
+    @Column(name = "owner_dsa_id")
+    private Long ownerDsaId;
+
+    /**
+     * Mandatory for DSA leads (the attribution key — matched against
+     * {@code customer_profile.pan}, uppercase/trimmed), null for telecaller leads. A PAN may be
+     * owned by at most one DSA lead ({@code uq_lead_dsa_pan}, V55).
+     */
+    @Column
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
+    private String pan;
+
+    /** Blind index of {@link #pan} (V111): the DSA uniqueness ({@code uq_lead_dsa_pan_hash}) and every PAN match. */
+    @Column(name = "pan_hash", length = 64)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    private String panHash;
+
+    @jakarta.persistence.PrePersist
+    @jakarta.persistence.PreUpdate
+    void indexPii() {
+        panHash = com.navix.common.pii.PiiCipher.panIndex(pan);
+    }
+}

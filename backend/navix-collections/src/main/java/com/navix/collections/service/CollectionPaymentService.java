@@ -1,0 +1,440 @@
+package com.navix.collections.service;
+
+import com.navix.collections.dto.CollectionsDtos.CollectionPaymentView;
+import com.navix.collections.entity.CollectionCase;
+import com.navix.collections.entity.CollectionPayment;
+import com.navix.collections.entity.CollectionPaymentKind;
+import com.navix.collections.entity.CollectionPaymentStatus;
+import com.navix.collections.entity.Settlement;
+import com.navix.collections.entity.SettlementStatus;
+import com.navix.collections.repository.CollectionCaseRepository;
+import com.navix.collections.repository.CollectionPaymentRepository;
+import com.navix.collections.repository.SettlementRepository;
+import com.navix.common.security.SeparationOfDutiesGuard;
+import com.navix.common.exception.BusinessException;
+import com.navix.common.exception.ResourceNotFoundException;
+import com.navix.common.loan.LoanDirectory;
+import com.navix.common.loan.LoanSummary;
+import com.navix.common.notification.event.CollectionPaymentDecidedEvent;
+import com.navix.common.notification.event.CollectionPaymentRaisedEvent;
+import com.navix.common.security.ActorContext;
+import com.navix.common.staff.StaffDirectory;
+import com.navix.common.staff.StaffSummary;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Money collected in the field, and the checker who lets it touch the ledger (V47; revamp.md
+ * decisions 43, 44).
+ *
+ * <p>The shape of the rule: <b>the person who takes a payment never books it.</b> A Collection
+ * Executive (or their Head) records what the borrower paid; the <b>Accountant</b> — who can see the
+ * borrower's whole loan cycle — validates it against the bank, and only that validation credits the
+ * loan. A settlement takes one extra hop first, because it writes off part of the debt and that
+ * concession is the Collection Head's to make.
+ *
+ * <pre>
+ *   PART_PAYMENT / FULL_PAYMENT  →  PENDING_ACCOUNTANT  →  VALIDATED (loan credited)
+ *   SETTLEMENT   →  PENDING_HEAD →  PENDING_ACCOUNTANT  →  VALIDATED (loan credited)
+ *                        └──────────────── REJECTED (terminal, with remarks) ──┘
+ * </pre>
+ *
+ * <p>All amounts are integer paise.
+ */
+@Service
+@RequiredArgsConstructor
+public class CollectionPaymentService {
+
+    /**
+     * An undated payment is recorded on the Indian calendar day it was actually taken. A bare
+     * {@code LocalDate.now()} would stamp yesterday between 00:00 and 05:30 IST, which on a payment
+     * is a real reconciliation error, not just a display one. Same convention as
+     * {@code CollectionsService}.
+     */
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
+
+    private static final String OFFICER_ROLE = "COLLECTION_EXECUTIVE";
+    private static final String HEAD_ROLE = "COLLECTION_HEAD";
+    private static final String CHECKER_ROLE = "ACCOUNTANT";
+
+    private final CollectionPaymentRepository paymentRepository;
+    private final CollectionCaseRepository caseRepository;
+    private final SettlementRepository settlementRepository;
+    // Releasing a settlement payment approves the concession behind it — see headApprove.
+    private final SettlementService settlementService;
+    private final LoanDirectory loanDirectory;
+    private final StaffDirectory staffDirectory;
+    private final ApplicationEventPublisher eventPublisher;
+    private final CollectionsService collectionsService;
+    private final com.navix.collections.repository.LoanExtensionRepository extensionRepository;
+
+    /**
+     * Record a payment taken on a case. A settlement must name an <b>approved</b> settlement — the
+     * concession has to exist before there is anything to settle against, and requiring it here is
+     * what stops "settlement" being used to write down a balance nobody agreed to.
+     */
+    @Transactional
+    public CollectionPaymentView raise(UUID caseId, CollectionPaymentKind kind, long amountPaise,
+                                       LocalDate paidOn, String txnRef, String proofRef,
+                                       UUID settlementId) {
+        return raise(caseId, kind, amountPaise, paidOn, txnRef, proofRef, settlementId, null);
+    }
+
+    /**
+     * As above; an {@code EXTENSION} names the case's ACCEPTED extension and must be exactly its quote for
+     * {@code paidOn} (422 {@code EXTENSION_AMOUNT_MISMATCH} otherwise, never silently accepted).
+     */
+    @Transactional
+    public CollectionPaymentView raise(UUID caseId, CollectionPaymentKind kind, long amountPaise,
+                                       LocalDate paidOn, String txnRef, String proofRef,
+                                       UUID settlementId, UUID extensionId) {
+        requireOneOf(OFFICER_ROLE, HEAD_ROLE);
+        if (amountPaise <= 0) {
+            throw new BusinessException("INVALID_AMOUNT", "Payment amount must be positive");
+        }
+        collectionsService.assertCaseAccessible(caseId);
+        CollectionCase c = caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("CollectionCase", String.valueOf(caseId)));
+
+        CollectionPayment p = new CollectionPayment();
+        p.setCollectionCaseId(caseId);
+        p.setLoanId(c.getLoanId());
+        p.setKind(kind);
+        p.setAmountPaise(amountPaise);
+        p.setPaidOn(paidOn != null ? paidOn : LocalDate.now(IST));
+        p.setTxnRef(blankToNull(txnRef));
+        p.setProofRef(blankToNull(proofRef));
+        p.setRaisedBy(actorStaffId());
+        p.setRaisedAt(Instant.now());
+
+        if (kind == CollectionPaymentKind.EXTENSION) {
+            p.setExtensionId(requireAcceptedExtension(c, extensionId, amountPaise, p.getPaidOn()).getId());
+            p.setStatus(CollectionPaymentStatus.PENDING_ACCOUNTANT);
+        } else if (kind.needsHeadApproval()) {
+            p.setSettlementId(requireProposedOrApprovedSettlement(caseId, settlementId));
+            // Already approved by the Head? Then the approval it was waiting for has happened and it
+            // goes straight on to the Accountant.
+            boolean approved = settlementRepository.findById(p.getSettlementId())
+                    .map(s -> s.getStatus() == SettlementStatus.APPROVED).orElse(false);
+            p.setStatus(approved ? CollectionPaymentStatus.PENDING_ACCOUNTANT
+                    : CollectionPaymentStatus.PENDING_HEAD);
+        } else {
+            p.setStatus(CollectionPaymentStatus.PENDING_ACCOUNTANT);
+        }
+
+        CollectionPayment saved = paymentRepository.save(p);
+        eventPublisher.publishEvent(new CollectionPaymentRaisedEvent(
+                saved.getId(), caseId, saved.getLoanId(), customerIdOf(saved.getLoanId()),
+                amountPaise, kind.name(),
+                saved.getStatus() == CollectionPaymentStatus.PENDING_HEAD,
+                saved.getRaisedBy(), Instant.now()));
+        return toView(saved);
+    }
+
+    /**
+     * The Collection Head clears a settlement payment through to the Accountant — <b>one</b> click,
+     * which also approves the concession it settles if that hasn't happened yet.
+     *
+     * <p>Splitting those into two approvals was a bug, not a nicety: an un-approved settlement never
+     * caps the borrower's payable ({@code RepaymentService.outstandingAsOf} only reads
+     * <em>approved</em> ones), so a paid full-and-final left the loan open for the difference — the
+     * exact thing the concession was supposed to write off. The Head's decision is one decision, so
+     * it lands on both records. {@link SettlementService#approve} still applies its own
+     * proposer ≠ approver check on the settlement.
+     */
+    @Transactional
+    public CollectionPaymentView headApprove(UUID paymentId) {
+        requireOneOf(HEAD_ROLE);
+        CollectionPayment p = require(paymentId);
+        if (p.getStatus() != CollectionPaymentStatus.PENDING_HEAD) {
+            throw new BusinessException("PAYMENT_NOT_PENDING_HEAD",
+                    "This payment is not waiting for a Collection Head");
+        }
+        long approver = actorStaffId();
+        if (p.getRaisedBy() != null && p.getRaisedBy() == approver) {
+            throw new BusinessException("SOD_VIOLATION",
+                    "The approver must differ from the officer who recorded the payment");
+        }
+        if (p.getSettlementId() != null) {
+            settlementRepository.findById(p.getSettlementId())
+                    .filter(s -> s.getStatus() == SettlementStatus.PROPOSED)
+                    .ifPresent(s -> settlementService.approve(s.getId()));
+        }
+        p.setStatus(CollectionPaymentStatus.PENDING_ACCOUNTANT);
+        CollectionPayment saved = paymentRepository.save(p);
+        eventPublisher.publishEvent(new CollectionPaymentRaisedEvent(
+                saved.getId(), saved.getCollectionCaseId(), saved.getLoanId(),
+                customerIdOf(saved.getLoanId()), saved.getAmountPaise(), saved.getKind().name(),
+                false, saved.getRaisedBy(), Instant.now()));
+        return toView(saved);
+    }
+
+    /**
+     * The Accountant validates the payment against the bank and credits the loan, or rejects it with
+     * remarks. Validation is the <b>only</b> path by which a collections payment reaches the ledger.
+     *
+     * <p>Remarks are required on a rejection: the officer has to be able to act on it (wrong amount?
+     * unmatched UTR? paid to the wrong account?) rather than just see the payment vanish.
+     */
+    @Transactional
+    public CollectionPaymentView validate(UUID paymentId, boolean accept, String remarks) {
+        requireOneOf(CHECKER_ROLE);
+        CollectionPayment p = require(paymentId);
+        // The loan lock (NACH's) plus @Version: a second Accountant waits here, then finds it decided (EXT-20).
+        loanDirectory.lockLoan(p.getLoanId());
+        if (p.getStatus() != CollectionPaymentStatus.PENDING_ACCOUNTANT) {
+            throw new BusinessException("PAYMENT_NOT_PENDING_VALIDATION",
+                    p.getStatus() == CollectionPaymentStatus.PENDING_HEAD
+                            ? "The Collection Head has not approved this settlement yet"
+                            : "This payment has already been " + p.getStatus().name().toLowerCase());
+        }
+        if (!accept && (remarks == null || remarks.isBlank())) {
+            throw new BusinessException("REMARKS_REQUIRED",
+                    "Say why you are rejecting this payment — the collections officer needs to act on it");
+        }
+        long validator = actorStaffId();
+        // PLAN Phase 4: the officer who recorded the payment never validates it, ADMIN included.
+        SeparationOfDutiesGuard.paymentVerifier(validator, p.getRaisedBy());
+        p.setValidatedBy(validator);
+        p.setValidatedAt(Instant.now());
+        p.setRemarks(blankToNull(remarks));
+        com.navix.collections.entity.LoanExtension ext = p.getExtensionId() == null ? null
+                : extensionRepository.findById(p.getExtensionId()).orElse(null);
+        if (ext != null) {
+            // Proposer ≠ approver ≠ payment verifier (PLAN Phase 4/6b).
+            SeparationOfDutiesGuard.extensionPaymentVerifier(validator, ext.getProposedBy(), ext.getApprovedBy());
+        }
+        if (accept && ext != null) {
+            // An extension payment moves the due date instead of crediting the balance; this is the only
+            // collections path that does (LoanDirectory.applyExtension).
+            if (p.getLedgerPaymentId() == null) {
+                p.setLedgerPaymentId(loanDirectory.applyExtension(p.getLoanId(), ext.getId(), p.getAmountPaise(),
+                        p.getPaidOn(), p.getTxnRef(), p.getProofRef()));
+            }
+            p.setStatus(CollectionPaymentStatus.VALIDATED);
+        } else if (accept) {
+            // The one write into the loan ledger. Guarded by ledgerPaymentId so a retry after a
+            // partial failure — or a double-click — can't credit the borrower's loan twice.
+            if (p.getLedgerPaymentId() == null) {
+                p.setLedgerPaymentId(loanDirectory.creditCollectionPayment(
+                        p.getLoanId(), p.getAmountPaise(), p.getTxnRef(), p.getProofRef(), p.getPaidOn()));
+            }
+            p.setStatus(CollectionPaymentStatus.VALIDATED);
+        } else {
+            p.setStatus(CollectionPaymentStatus.REJECTED);
+            if (ext != null && ext.getStatus() == com.navix.collections.entity.ExtensionStatus.PAYMENT_PENDING) {
+                ext.moveTo(com.navix.collections.entity.ExtensionStatus.ACCEPTED); // EXT-19: pay again until pay-by
+            }
+        }
+        CollectionPayment saved = paymentRepository.save(p);
+        eventPublisher.publishEvent(new CollectionPaymentDecidedEvent(
+                saved.getId(), saved.getCollectionCaseId(), saved.getLoanId(),
+                customerIdOf(saved.getLoanId()), saved.getAmountPaise(), accept,
+                saved.getRemarks(), saved.getRaisedBy(), Instant.now()));
+        return toView(saved);
+    }
+
+    // ---- reads --------------------------------------------------------------------------
+
+    @Transactional(readOnly = true)
+    public List<CollectionPaymentView> listForCase(UUID caseId) {
+        requireNonDsaStaff();
+        collectionsService.assertCaseAccessible(caseId);
+        return toViews(paymentRepository.findByCollectionCaseIdOrderByRaisedAtDesc(caseId));
+    }
+
+    /** The Accountant's validation queue, or the Collection Head's approval queue. */
+    @Transactional(readOnly = true)
+    public List<CollectionPaymentView> listByStatus(CollectionPaymentStatus status) {
+        requireNonDsaStaff();
+        return toViews(scoped(paymentRepository.findByStatusOrderByRaisedAtAsc(status)));
+    }
+
+    @Transactional(readOnly = true)
+    public List<CollectionPaymentView> listAll() {
+        requireNonDsaStaff();
+        return toViews(scoped(paymentRepository.findAllByOrderByRaisedAtDesc()));
+    }
+
+    /** Narrows to the caller's own cases when they work as a collections executive. */
+    private List<CollectionPayment> scoped(List<CollectionPayment> payments) {
+        Set<UUID> ids = collectionsService.scopedCaseIdsOrNull();
+        return ids == null ? payments
+                : payments.stream().filter(p -> ids.contains(p.getCollectionCaseId())).toList();
+    }
+
+    /**
+     * Batched view-building for a page of payments: one {@link StaffDirectory#namesFor} for every
+     * raiser/validator and one {@link LoanDirectory#findLoans} for every loan (the borrower name),
+     * rather than the two {@code findStaff} calls plus a {@code findLoan} the single-row
+     * {@link #toView(CollectionPayment)} costs per row.
+     */
+    private List<CollectionPaymentView> toViews(List<CollectionPayment> payments) {
+        Set<Long> staffIds = new HashSet<>();
+        Set<Long> loanIds = new HashSet<>();
+        for (CollectionPayment p : payments) {
+            staffIds.add(p.getRaisedBy());
+            staffIds.add(p.getValidatedBy());
+            loanIds.add(p.getLoanId());
+        }
+        staffIds.removeIf(Objects::isNull);
+        loanIds.removeIf(Objects::isNull);
+        Map<Long, String> names = staffDirectory.namesFor(staffIds);
+        Map<Long, LoanSummary> loansById = loanDirectory.findLoans(loanIds);
+        return payments.stream().map(p -> toView(p, names, loansById)).toList();
+    }
+
+    // ---- helpers ------------------------------------------------------------------------
+
+    /**
+     * Resolve the settlement a settlement-payment settles: the one given, else the case's only live
+     * one. Rejected settlements are never acceptable — a concession the Head turned down cannot be
+     * paid against.
+     */
+    private UUID requireProposedOrApprovedSettlement(UUID caseId, UUID settlementId) {
+        List<Settlement> live = settlementRepository.findByCollectionCaseId(caseId).stream()
+                .filter(s -> s.getStatus() != SettlementStatus.REJECTED)
+                .toList();
+        if (settlementId != null) {
+            return live.stream().map(Settlement::getId).filter(settlementId::equals).findFirst()
+                    .orElseThrow(() -> new BusinessException("SETTLEMENT_NOT_FOUND",
+                            "That settlement is not open on this case"));
+        }
+        if (live.size() != 1) {
+            throw new BusinessException("SETTLEMENT_REQUIRED",
+                    live.isEmpty()
+                            ? "Propose a settlement on this case before recording a settlement payment"
+                            : "This case has more than one open settlement — say which one this pays");
+        }
+        return live.get(0).getId();
+    }
+
+    /**
+     * The case's ACCEPTED, unexpired extension, and the amount equal to its quote for {@code paidOn}. Moves it to
+     * PAYMENT_PENDING under the loan lock, so the borrower cannot pay the same extension in the app meanwhile.
+     */
+    private com.navix.collections.entity.LoanExtension requireAcceptedExtension(CollectionCase c, UUID extensionId,
+                                                                                long amountPaise, LocalDate paidOn) {
+        loanDirectory.lockLoan(c.getLoanId());
+        com.navix.collections.entity.LoanExtension ext = (extensionId == null ? java.util.Optional
+                .<com.navix.collections.entity.LoanExtension>empty() : extensionRepository.findById(extensionId))
+                .filter(e -> e.getLoanId().equals(c.getLoanId()))
+                .orElseThrow(() -> new BusinessException("EXTENSION_REQUIRED",
+                        "Name the accepted extension on this case that the payment is for"));
+        if (ext.getStatus() != com.navix.collections.entity.ExtensionStatus.ACCEPTED) {
+            throw new com.navix.common.exception.ConflictException("STALE_STATE",
+                    "The borrower has not confirmed this extension, or it is already being paid.", ext.getStatus().name());
+        }
+        if (Instant.now().isAfter(ext.getExpiresAt())) {
+            throw new com.navix.common.exception.ConflictException("EXTENSION_EXPIRED",
+                    "This extension offer has expired.", "EXPIRED");
+        }
+        long quote = loanDirectory.extensionFacts(c.getLoanId(), paidOn).quote().totalPaise();
+        if (quote != amountPaise) {
+            throw new BusinessException("EXTENSION_AMOUNT_MISMATCH",
+                    "The extension costs " + quote + " paise for a payment on " + paidOn + ".");
+        }
+        ext.moveTo(com.navix.collections.entity.ExtensionStatus.PAYMENT_PENDING);
+        return ext;
+    }
+
+    private CollectionPayment require(UUID paymentId) {
+        return paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new ResourceNotFoundException("CollectionPayment", String.valueOf(paymentId)));
+    }
+
+    private Long customerIdOf(Long loanId) {
+        return loanId == null ? null
+                : loanDirectory.findLoan(loanId).map(LoanSummary::customerId).orElse(null);
+    }
+
+    private CollectionPaymentView toView(CollectionPayment p) {
+        return new CollectionPaymentView(
+                p.getId(), p.getCollectionCaseId(), p.getLoanId(),
+                p.getKind().name(), p.getAmountPaise(), p.getPaidOn(),
+                p.getTxnRef(), p.getProofRef(), p.getSettlementId(),
+                p.getStatus().name(),
+                p.getRaisedBy(), staffName(p.getRaisedBy()), p.getRaisedAt(),
+                p.getValidatedBy(), staffName(p.getValidatedBy()), p.getValidatedAt(),
+                p.getRemarks(), p.getLedgerPaymentId(),
+                borrowerName(p.getLoanId()), p.getExtensionId());
+    }
+
+    /** Batched variant of {@link #toView(CollectionPayment)} for the list reads — reads
+     *  pre-resolved names/loans instead of hitting {@link StaffDirectory} and {@link LoanDirectory}
+     *  per row. */
+    private CollectionPaymentView toView(CollectionPayment p, Map<Long, String> names,
+                                         Map<Long, LoanSummary> loansById) {
+        LoanSummary loan = p.getLoanId() == null ? null : loansById.get(p.getLoanId());
+        return new CollectionPaymentView(
+                p.getId(), p.getCollectionCaseId(), p.getLoanId(),
+                p.getKind().name(), p.getAmountPaise(), p.getPaidOn(),
+                p.getTxnRef(), p.getProofRef(), p.getSettlementId(),
+                p.getStatus().name(),
+                p.getRaisedBy(), p.getRaisedBy() == null ? null : names.get(p.getRaisedBy()), p.getRaisedAt(),
+                p.getValidatedBy(), p.getValidatedBy() == null ? null : names.get(p.getValidatedBy()),
+                p.getValidatedAt(),
+                p.getRemarks(), p.getLedgerPaymentId(),
+                loan == null ? null : loan.borrowerName(), p.getExtensionId());
+    }
+
+    private String borrowerName(Long loanId) {
+        return loanId == null ? null
+                : loanDirectory.findLoan(loanId).map(LoanSummary::borrowerName).orElse(null);
+    }
+
+    private String staffName(Long staffId) {
+        return staffId == null ? null
+                : staffDirectory.findStaff(staffId).map(StaffSummary::name).orElse(null);
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
+    }
+
+    /**
+     * Readers of the payment queues: any staff role but DSA (the Accountant's and the Head's queues
+     * both read through here). Each row carries a collection case id, which opens the borrower's case.
+     */
+    private static void requireNonDsaStaff() {
+        String role = ActorContext.get().role();
+        if (role == null || "BORROWER".equals(role) || "ANONYMOUS".equals(role) || "DSA".equals(role)) {
+            throw new BusinessException("FORBIDDEN_ROLE", "Staff role required");
+        }
+    }
+
+    /** Authorise the current actor against one of {@code roles} (ADMIN always passes). */
+    private static void requireOneOf(String... roles) {
+        String role = ActorContext.get().role();
+        if ("ADMIN".equals(role)) {
+            return;
+        }
+        for (String r : roles) {
+            if (r.equals(role)) {
+                return;
+            }
+        }
+        throw new BusinessException("FORBIDDEN_ROLE",
+                "This action requires one of: " + String.join(", ", roles));
+    }
+
+    private static long actorStaffId() {
+        try {
+            return Long.parseLong(ActorContext.get().id());
+        } catch (NumberFormatException e) {
+            throw new BusinessException("ACTOR_NOT_STAFF",
+                    "The acting identity is not a real staff id; sign in as staff");
+        }
+    }
+}

@@ -1,0 +1,121 @@
+package com.navix.loan.entity;
+
+import com.navix.common.entity.BaseAuditEntity;
+import com.navix.loan.domain.PaymentMethod;
+import com.navix.loan.domain.PaymentStatus;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Table;
+import java.time.Instant;
+import java.time.LocalDate;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+/**
+ * A repayment made against a {@link Loan}.
+ *
+ * <p>Single-repayment product, but partial payments are allowed: the loan stays
+ * outstanding until the balance reaches zero, at which point it closes.
+ * Prepayment is allowed anytime (interest only to the day of repayment, no
+ * penalty). Manual repayments (UPI / bank transfer) must carry proof.
+ *
+ * TODO: wire to RepaymentService; recompute Loan.outstanding on each payment.
+ */
+@Entity
+@Table(name = "payment")
+@Getter
+@Setter
+@NoArgsConstructor
+public class Payment extends BaseAuditEntity {
+
+    /** FK to the loan being repaid. */
+    @Column(name = "loan_id", nullable = false)
+    private Long loanId;
+
+    /** Amount paid in this transaction, in paise. */
+    @Column(name = "amount", nullable = false)
+    private Long amount;
+
+    /** Method used to pay. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "method", nullable = false, length = 24)
+    private PaymentMethod method;
+
+    /** Verification state (proof required before VERIFIED). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 24)
+    private PaymentStatus status;
+
+    /** UPI / bank transaction reference supplied by the borrower. */
+    @Column(name = "txn_ref")
+    private String txnRef;
+
+    /** Storage URL/key for an uploaded payment screenshot. */
+    @Column(name = "proof_url")
+    private String proofUrl;
+
+    /** Date the payment was made. */
+    @Column(name = "paid_on")
+    private LocalDate paidOn;
+
+    /** True if this is a partial payment (balance remains outstanding). */
+    @Column(name = "partial", nullable = false)
+    private boolean partial;
+
+    /** Fixed-picklist reason code (WRONG_REFERENCE / AMOUNT_MISMATCH / NOT_RECEIVED /
+     *  UNREADABLE_PROOF / OTHER) — set only when {@code status == REJECTED}. */
+    @Column(name = "rejection_reason", length = 64)
+    private String rejectionReason;
+
+    /** Optional free-text elaboration alongside {@link #rejectionReason}. */
+    @Column(name = "rejection_note")
+    private String rejectionNote;
+
+    /**
+     * The Accountant who verified or rejected this payment (FK to {@code staff_user.id}); null on
+     * rows decided before V59. Which way they went is {@link #status} — this records only who and
+     * when, so the two can never disagree.
+     *
+     * <p>Deliberately not {@code updatedBy}: that column holds the actor's mutable display name
+     * (see V59's header) and is overwritten by any later write to the row.
+     */
+    @Column(name = "decided_by")
+    private Long decidedBy;
+
+    @Column(name = "decided_at")
+    private Instant decidedAt;
+
+    /**
+     * The staff member who recorded this payment (V99), so the verifier can be held to someone else
+     * (PLAN Phase 4 SoD). Null when the borrower recorded it, or when it arrives already validated
+     * upstream (collections, NACH), and on rows before V99.
+     */
+    @Column(name = "recorded_by")
+    private Long recordedBy;
+
+    /** REPAYMENT, or EXTENSION for the charge that buys a loan extension (V103). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "purpose", nullable = false, length = 16)
+    private com.navix.loan.domain.PaymentPurpose purpose = com.navix.loan.domain.PaymentPurpose.REPAYMENT;
+
+    /** The {@code loan_extension} an EXTENSION payment is for; null on a repayment. */
+    @Column(name = "extension_id")
+    private java.util.UUID extensionId;
+
+    /** A verified payment found bounced (V104, CC-10): who reversed it, when and why. */
+    @Column(name = "reversed_by")
+    private Long reversedBy;
+
+    @Column(name = "reversed_at")
+    private Instant reversedAt;
+
+    @Column(name = "reversal_reason")
+    private String reversalReason;
+
+    public boolean isExtension() {
+        return purpose == com.navix.loan.domain.PaymentPurpose.EXTENSION;
+    }
+}

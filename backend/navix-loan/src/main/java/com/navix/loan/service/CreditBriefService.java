@@ -1,0 +1,337 @@
+package com.navix.loan.service;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.navix.common.verification.BureauReportFacts;
+import com.navix.loan.dto.BureauState;
+import com.navix.loan.dto.CreditBriefDtos.CreditBriefView;
+import com.navix.loan.entity.CustomerProfile;
+import com.navix.loan.entity.ApplicationDocument;
+import com.navix.loan.entity.LoanApplication;
+import com.navix.loan.pdf.CreditBriefPdfRenderer;
+import com.navix.loan.repository.CustomerProfileRepository;
+import com.navix.loan.repository.ApplicationDocumentRepository;
+import com.navix.loan.repository.ApplicationVerificationRepository;
+import com.navix.loan.repository.LoanApplicationRepository;
+import com.navix.loan.service.CreditRatingCalculator.Rating;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.Optional;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+/**
+ * Builds and persists the borrower credit brief from a bureau {@link BureauReportFacts} snapshot:
+ * computes the 1–5★ rating ({@link CreditRatingCalculator}), renders the one-page PDF
+ * ({@link CreditBriefPdfRenderer}), stores it to S3 at a deterministic key, upserts a
+ * {@code CREDIT_BRIEF} {@link ApplicationDocument} so it sits with the customer's uploaded documents,
+ * and writes the rating + summary + facts back onto the {@link CustomerProfile}.
+ *
+ * <p>Generation is <b>best-effort</b>: any failure (PDF, S3, serialization) is swallowed with a log so
+ * it can never break the bureau pull / onboarding it hangs off.
+ */
+@Service
+@Slf4j
+@RequiredArgsConstructor
+public class CreditBriefService {
+
+    public static final String DOC_TYPE = "CREDIT_BRIEF";
+    // Package-visible: CreditBriefPdfWriter owns the S3 + document-row write and reuses these.
+    static final String FILE_NAME = "credit-brief.pdf";
+    static final String CONTENT_TYPE = "application/pdf";
+
+    private final CreditRatingCalculator calculator;
+    private final CreditBriefPdfRenderer renderer;
+    private final CreditBriefPdfWriter pdfWriter;
+    private final ApplicationDocumentRepository documentRepo;
+    private final CustomerProfileRepository profileRepo;
+    private final LoanApplicationRepository applicationRepo;
+    private final ApplicationVerificationRepository verificationRepo;
+    private final ObjectMapper objectMapper;
+    private final BureauStateService bureauStateService;
+
+    /**
+     * Generate (or regenerate) the brief for an application from freshly-parsed bureau facts. Mutates
+     * and saves {@code profile}. No-op when {@code facts} is null (thin-file / CRIF).
+     */
+    @Transactional
+    public void generate(Long appId, CustomerProfile profile, BureauReportFacts facts) {
+        generate(appId, profile, facts, null);
+    }
+
+    /**
+     * A pull that found no bureau record leaves NO rating behind — it clears whatever an earlier pull
+     * wrote. Without this the profile ends up self-contradictory: the score is nulled but the star
+     * rating, verdict and summary survive, so a customer the bureau now has no record of still shows
+     * as (say) "2.0 stars, NOT RECOMMENDED, presents a weak credit profile (bureau score 482)" with a
+     * specific score quoted in prose.
+     *
+     * <p>Fixed here rather than in the UI because the profile columns feed several staff surfaces
+     * (the application detail dialog, the credit badge, the pipeline row, the all-applications
+     * register) and only {@code CreditProfileCard} gates on {@code bureauState} — clearing at the
+     * source makes every one of them correct at once, and a new screen cannot reintroduce the bug.
+     *
+     * <p>{@code CreditBriefService.view} already short-circuits on a null star rating, so a cleared
+     * profile renders the NO_RECORD empty state rather than throwing. The CREDIT_BRIEF document row
+     * is deliberately left alone: it is a historical artefact of the earlier pull, not a claim about
+     * the customer today.
+     */
+    private void clearStaleBrief(CustomerProfile profile) {
+        if (profile.getCreditStarRating() == null && profile.getCreditBriefFacts() == null) {
+            return;
+        }
+        profile.setCreditStarRating(null);
+        profile.setCreditRecommendation(null);
+        profile.setCreditBriefSummary(null);
+        profile.setCreditBriefFacts(null);
+        profile.setCreditBriefGeneratedAt(null);
+        profileRepo.save(profile);
+    }
+
+    /** Generate the summarized brief while retaining the complete provider response for its appendix. */
+    @Transactional
+    public void generate(Long appId, CustomerProfile profile, BureauReportFacts facts, String rawResponseJson) {
+        if (profile == null) {
+            return;
+        }
+        if (facts == null) {
+            clearStaleBrief(profile);
+            return;
+        }
+        Rating rating = calculator.rate(facts);
+
+        // 1) Persist the rating headline + facts FIRST — this drives every staff surface and must not
+        //    depend on the PDF/S3 step succeeding (e.g. S3 unreachable in local/dev).
+        try {
+            // An unrated report keeps its facts and its summary but gets NO stars and NO
+            // recommendation. 0.0★ would render as the worst possible borrower, and the entire point
+            // of preserving a score-less report is that its tradelines are real and readable.
+            profile.setCreditStarRating(rating.rated() ? BigDecimal.valueOf(rating.stars()) : null);
+            profile.setCreditRecommendation(rating.rated() ? rating.recommendation() : null);
+            profile.setCreditBriefSummary(rating.summary());
+            profile.setCreditBriefGeneratedAt(Instant.now());
+            profile.setCreditBriefFacts(objectMapper.writeValueAsString(facts));
+            profileRepo.save(profile);
+        } catch (Exception e) {
+            log.warn("Credit brief rating persist failed for application {}: {}", appId, e.toString());
+            return;
+        }
+
+        // 2) Best-effort: render the one-page PDF, store it to S3, and register the CREDIT_BRIEF
+        //    document so it rides the customer's documents list. A failure here leaves the rating intact.
+        try {
+            Long customerId = applicationRepo.findById(appId)
+                    .map(LoanApplication::getCustomerId).orElse(null);
+            // Render with the borrower's REAL KYC identity (not the bureau report's copy / demo fixture).
+            byte[] pdf = renderer.render(appId, customerId, profile.getBureauSource(),
+                    displayFacts(facts, profile), rating, LocalDate.now(), rawResponseJson);
+            String key = "applications/" + appId + "/credit_brief/" + FILE_NAME;
+            // Own transaction (REQUIRES_NEW): a failure in here must not abort the caller's.
+            pdfWriter.storeAndRegister(appId, key, pdf);
+        } catch (Exception e) {
+            log.warn("Credit brief PDF/S3 step failed for application {} (rating saved): {}",
+                    appId, e.toString());
+        }
+    }
+
+    /**
+     * Lazy backstop for read paths: if the profile carries parsed facts but the PDF document is missing
+     * (e.g. an earlier S3 hiccup, or the row was removed), regenerate it from the stored facts.
+     *
+     * <p><b>Never writes on a read-only transaction.</b> This is a write hanging off a read path, and
+     * callers like {@code CustomerService.detail()} are {@code @Transactional(readOnly = true)}. The
+     * INSERT below would fail with Postgres {@code 25006} and — swallowed or not — leave the caller's
+     * transaction aborted, turning their read into a 500. A missing PDF is a cosmetic gap (the brief
+     * still renders from the stored facts, just without a download link); poisoning the caller's read
+     * is not. The next write-path read of the brief regenerates it.
+     */
+    @Transactional
+    public void ensureBrief(Long appId, CustomerProfile profile) {
+        if (profile == null || profile.getCreditBriefFacts() == null) {
+            return;
+        }
+        if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+            return;
+        }
+        if (briefDocument(appId).isPresent()) {
+            return;
+        }
+        try {
+            BureauReportFacts facts = objectMapper.readValue(profile.getCreditBriefFacts(),
+                    BureauReportFacts.class);
+            JsonNode response = providerResponse(appId);
+            generate(appId, profile, facts, response != null ? response.toString() : null);
+        } catch (Exception e) {
+            log.warn("Credit brief lazy regeneration failed for application {}: {}", appId, e.toString());
+        }
+    }
+
+    /**
+     * Assemble the staff credit-brief view for an application: the rating headline, the categorized
+     * (masked) facts, and the PDF document id. Returns an {@code available=false} shell when no brief
+     * exists (thin-file / not yet pulled). Lazily regenerates the PDF if facts exist but the doc is gone.
+     */
+    @Transactional
+    public CreditBriefView view(Long appId) {
+        CustomerProfile profile = profileRepo.findByApplicationId(appId).orElse(null);
+        JsonNode providerResponse = providerResponse(appId);
+        BureauState bureauState = bureauStateService.state(appId);
+        // Gated on the FACTS, not the rating. A report can be perfectly readable and still carry no
+        // usable score (CRIF's out-of-band SCORE-VALUE), and gating on the star rating meant those
+        // reports returned an available=false shell — the tradelines we went to the trouble of
+        // preserving would never have reached a single screen.
+        if (profile == null || profile.getCreditBriefFacts() == null) {
+            return new CreditBriefView(appId, providerResponse != null, null, null, null, null,
+                    null, null, null, providerResponse, bureauState,
+                    profile != null ? profile.getBureauSource() : null, bureauReportId(appId),
+                    java.util.List.of());
+        }
+        ensureBrief(appId, profile);
+        // The identity shown on the brief must be the borrower's REAL KYC — the same profile the staff
+        // profile / customer-details card shows — not the bureau report's copy of it. In the local demo
+        // (NAVIX_BUREAU_FIXTURE) every pull returns the same samplepan.json, so the report's
+        // PAN/mobile/DOB/name belong to the fixture person (the same for everyone). Override the identity
+        // from the profile; the bureau's credit-health / exposure numbers pass through unchanged.
+        BureauReportFacts f = displayFacts(factsOf(profile), profile);
+        Long docId = briefDocument(appId).map(ApplicationDocument::getId).orElse(null);
+        CreditBriefView.Facts facts = f == null ? null : new CreditBriefView.Facts(
+                f.name(), f.pan(), f.mobile(), f.dob(), f.city(),
+                f.pin(), f.creditScore(), f.totalAccounts(), f.activeAccounts(), f.closedAccounts(),
+                f.defaults(), f.totalBalanceRupees(), f.securedBalanceRupees(), f.unsecuredBalanceRupees(),
+                f.recentInquiries30d(), f.detail());
+        return new CreditBriefView(appId, true,
+                profile.getBureauScore() != null ? profile.getBureauScore().intValue() : null,
+                // Null for a report the bureau returned without a usable score — the view's
+                // starRating is a nullable Double precisely so "not scored" and "scored badly" stay
+                // distinguishable. Unconditional .doubleValue() here NPE'd the moment a score-less
+                // report was allowed past the gate above.
+                profile.getCreditStarRating() != null
+                        ? profile.getCreditStarRating().doubleValue() : null,
+                profile.getCreditRecommendation(),
+                profile.getCreditBriefSummary(),
+                profile.getCreditBriefGeneratedAt(),
+                docId, facts, providerResponse, bureauState, profile.getBureauSource(), bureauReportId(appId),
+                ratingReasons(profile));
+    }
+
+    /** The reasons behind the stored stars, recomputed from the stored facts (empty when unrated). */
+    private java.util.List<String> ratingReasons(CustomerProfile profile) {
+        if (profile.getCreditStarRating() == null) {
+            return java.util.List.of();
+        }
+        BureauReportFacts raw = factsOf(profile);
+        return raw == null ? java.util.List.of() : calculator.rate(raw, asOf(profile)).reasons();
+    }
+
+    /** The day the brief was generated — the rating's personal-loan window ends there. */
+    static LocalDate asOf(CustomerProfile profile) {
+        Instant at = profile.getCreditBriefGeneratedAt();
+        return at != null ? at.atZone(java.time.ZoneId.of("Asia/Kolkata")).toLocalDate() : LocalDate.now();
+    }
+
+    /**
+     * Re-apply the current rating rules to a stored brief without a new bureau pull: stars, verdict
+     * and summary are recomputed from the saved facts. Returns true when anything changed. The
+     * CREDIT_BRIEF PDF is left as it was — a historical artefact of the pull, like on a no-record pull.
+     */
+    @Transactional
+    public boolean rescoreStored(CustomerProfile profile) {
+        BureauReportFacts facts = factsOf(profile);
+        if (facts == null) {
+            return false;
+        }
+        Rating rating = calculator.rate(facts, asOf(profile));
+        BigDecimal stars = rating.rated() ? BigDecimal.valueOf(rating.stars()) : null;
+        String recommendation = rating.rated() ? rating.recommendation() : null;
+        boolean same = (stars == null ? profile.getCreditStarRating() == null
+                        : profile.getCreditStarRating() != null && stars.compareTo(profile.getCreditStarRating()) == 0)
+                && java.util.Objects.equals(recommendation, profile.getCreditRecommendation())
+                && java.util.Objects.equals(rating.summary(), profile.getCreditBriefSummary());
+        if (same) {
+            return false;
+        }
+        profile.setCreditStarRating(stars);
+        profile.setCreditRecommendation(recommendation);
+        profile.setCreditBriefSummary(rating.summary());
+        profileRepo.save(profile);
+        return true;
+    }
+
+    private Long bureauReportId(Long appId) {
+        return documentRepo.findFirstByApplicationIdAndDocTypeOrderByIdDesc(
+                appId, ApplicationVerificationService.BUREAU_REPORT).map(ApplicationDocument::getId).orElse(null);
+    }
+
+    private JsonNode providerResponse(Long appId) {
+        return verificationRepo.findByApplicationIdAndCheckType(appId, "BUREAU")
+                .map(row -> row.getRawResponse())
+                .filter(raw -> raw != null && !raw.isBlank())
+                .map(raw -> {
+                    try {
+                        return objectMapper.readTree(raw);
+                    } catch (Exception invalidStoredJson) {
+                        log.warn("Could not parse stored provider response for application {}: {}",
+                                appId, invalidStoredJson.toString());
+                        return null;
+                    }
+                })
+                .orElse(null);
+    }
+
+    /** The stored CREDIT_BRIEF document for an application, if any (for the download presign). */
+    public Optional<ApplicationDocument> briefDocument(Long appId) {
+        return documentRepo.findFirstByApplicationIdAndDocTypeOrderByIdDesc(appId, DOC_TYPE);
+    }
+
+    /** Deserialize the stored facts JSON back to the typed record (null-safe). */
+    public BureauReportFacts factsOf(CustomerProfile profile) {
+        if (profile == null || profile.getCreditBriefFacts() == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(profile.getCreditBriefFacts(), BureauReportFacts.class);
+        } catch (Exception e) {
+            log.warn("Could not parse stored credit-brief facts for application {}: {}",
+                    profile.getApplicationId(), e.toString());
+            return null;
+        }
+    }
+
+    /**
+     * The identity shown on the brief (on-screen card + the rendered PDF) comes from the borrower's
+     * real KYC {@link CustomerProfile}, not the bureau report. The bureau's copy can differ, and in the
+     * local demo ({@code NAVIX_BUREAU_FIXTURE}) every pull returns the same sample report — so its
+     * PAN / mobile / DOB / name belong to the fixture person, wrong for everyone. The profile value wins
+     * when present (it's exactly what the staff profile card shows), falling back to the bureau only if a
+     * profile field is blank. City / PIN <b>are passed through</b> from the bureau report — they have
+     * no KYC equivalent to override with, so unlike name/PAN/mobile/DOB there is nothing to prefer over
+     * the report's copy. (Category B/C credit-health and exposure figures, and the itemised
+     * {@link com.navix.common.verification.BureauDetail}, are genuine bureau data throughout and always
+     * pass through unchanged.)
+     */
+    private BureauReportFacts displayFacts(BureauReportFacts bureau, CustomerProfile profile) {
+        if (bureau == null || profile == null) {
+            return bureau;
+        }
+        String dob = profile.getDob() != null ? profile.getDob().toString() : null;
+        return new BureauReportFacts(
+                firstNonBlank(profile.getFullName(), bureau.name()),
+                firstNonBlank(profile.getPan(), bureau.pan()),
+                firstNonBlank(profile.getMobile(), bureau.mobile()),
+                firstNonBlank(dob, bureau.dob()),
+                bureau.city(), bureau.pin(),
+                bureau.creditScore(), bureau.totalAccounts(), bureau.activeAccounts(),
+                bureau.closedAccounts(), bureau.defaults(),
+                bureau.totalBalanceRupees(), bureau.securedBalanceRupees(),
+                bureau.unsecuredBalanceRupees(), bureau.recentInquiries30d(), bureau.reportNumber(),
+                bureau.detail());
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        return a != null && !a.isBlank() ? a : b;
+    }
+}
