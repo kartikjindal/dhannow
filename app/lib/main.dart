@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'core/api/api.dart';
 import 'core/api/http_api.dart';
+import 'core/links.dart';
 import 'core/router.dart';
 import 'core/theme/theme.dart';
 
@@ -25,7 +26,14 @@ class DhanNowApp extends StatefulWidget {
 
 class _DhanNowAppState extends State<DhanNowApp> {
   // Server state is the only truth: refetch whenever the borrower comes back to the app.
-  final _life = AppLifecycleListener(onResume: () => api.refresh());
+  final _life = AppLifecycleListener(onResume: _resumed);
+
+  /// Refetch, then follow a link that brought the app back (`/app/open?to=…`).
+  static Future<void> _resumed() async {
+    await api.refresh();
+    final link = await takeLinkRoute();
+    if (link != null && (api.signedIn || link == '/support')) router.go(link);
+  }
 
   @override
   void dispose() {

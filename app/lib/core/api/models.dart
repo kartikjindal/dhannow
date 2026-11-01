@@ -391,6 +391,10 @@ class ApiException implements Exception {
         'PAYMENT_PROOF_REQUIRED' => 'Attach the screenshot of your payment.',
         'UPLOAD_FAILED' || 'UPLOAD_UNAVAILABLE' => 'The file didn’t upload. Check your connection and try again.',
         'UPLOAD_REFUSED' => serverMessage ?? 'Choose a PDF, JPG or PNG up to 5 MB.',
+        'UNSUPPORTED_FILE_TYPE' => 'Choose a PDF, JPG or PNG file.',
+        'FILE_TOO_LARGE' => 'This file is over 5 MB. Choose a smaller one or take a photo instead.',
+        'UPLOAD_NOT_FOUND' => 'The file didn’t finish uploading. Add it again.',
+        'ONBOARDING_PAUSED' => 'New applications are paused for now. Leave your details and we’ll call you.',
         'SALARY_NOT_VERIFIED' => 'We couldn’t read these salary slips. Upload clear copies of your last 3 months.',
         'EMAIL_UNDELIVERABLE' => 'We couldn’t send a code to this address. Check it, or use another email.',
         'SELFIE_ATTEMPTS_EXCEEDED' => 'You’ve used all 3 selfie tries. Our team will check your photos.',
@@ -425,10 +429,13 @@ class Contact {
 }
 
 class LegalLink {
-  const LegalLink(this.key, this.title, this.url);
+  const LegalLink(this.key, this.title, this.url, [this.version]);
   final String key;
   final String title;
   final String url;
+
+  /// The page's `dn-doc-version`, recorded when the borrower accepts it (`verify/agreement`).
+  final String? version;
 }
 
 /// `GET /api/app/config`, read before sign-in: contacts, legal links, flags and the force-update

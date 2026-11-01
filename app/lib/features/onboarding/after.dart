@@ -258,7 +258,7 @@ class _ApplyGateScreenState extends State<ApplyGateScreen> with Busy {
       'aadhaarLast4': _aadhaar.text,
     };
     run(() async {
-      // ponytail: no gate endpoint yet; the demo records it as a step outside the sign-up list.
+      // `POST /api/onboarding-waitlist`; only the Aadhaar last 4 is sent and kept.
       await api.saveStep('apply', data);
       if (mounted) context.go('/apply/submitted', extra: data);
     });

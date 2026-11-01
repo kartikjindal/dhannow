@@ -42,12 +42,13 @@ abstract class Api extends ChangeNotifier {
   Future<void> refresh() async => notifyListeners();
 
   // ---- auth (S4–S6, A2, A3) ----
-  /// [consent]: the bureau-consent code on A11 (sent to the mobile on file, checked on submit).
-  Future<void> sendOtp(String mobile, {bool consent = false});
+  /// [OtpFor.consent]: the bureau-consent code on A11 (to the mobile on file, checked on submit).
+  /// [OtpFor.reset]: S5, sent only to a registered number.
+  Future<void> sendOtp(String mobile, {OtpFor purpose = OtpFor.signIn});
 
-  /// Signs in with the code (sign-up, forgot password, E5). With [consent] it only keeps the code
-  /// for [submitApplication].
-  Future<void> verifyOtp(String code, {bool consent = false});
+  /// Signs in with the code (sign-up, E5). For [OtpFor.consent] and [OtpFor.reset] it only keeps
+  /// the code: the server checks it with [submitApplication] or [resetPassword].
+  Future<void> verifyOtp(String code, {OtpFor purpose = OtpFor.signIn});
   Future<void> login(String mobile, String password);
   Future<void> setPassword(String password);
   Future<void> resetPassword(String password);
@@ -144,6 +145,9 @@ abstract class Api extends ChangeNotifier {
   Future<void> signOutDevice(Device device);
   Future<void> requestDeletion();
 }
+
+/// What an OTP is for (one code screen, three server calls).
+enum OtpFor { signIn, consent, reset }
 
 const fallbackConfig = AppConfig(
   minVersion: '0.0.0',

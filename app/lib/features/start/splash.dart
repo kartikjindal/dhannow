@@ -6,16 +6,21 @@ import 'package:go_router/go_router.dart';
 import '../../core/api/api.dart';
 import '../../core/brand.dart';
 import '../../core/format.dart';
+import '../../core/links.dart';
 import '../../core/theme/theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/widgets.dart';
 
-/// Opens wherever `GET /journey` says (wireframe rule E6). OFFLINE goes to E3, other failures to
-/// E4 with the request ID.
+/// Opens wherever `GET /journey` says (wireframe rule E6), or where an SMS/email link points
+/// (`/app/open?to=…`): support always, repay and loans once signed in and past sign-up. OFFLINE goes
+/// to E3, other failures to E4 with the request ID.
 Future<void> openJourney(BuildContext context) async {
   try {
+    final link = await takeLinkRoute();
     final j = await api.journey();
-    if (context.mounted) context.go(j.route);
+    if (!context.mounted) return;
+    final loanStage = const {Stage.active, Stage.closed, Stage.disbursal, Stage.offer, Stage.offerFlow, Stage.inReview}.contains(j.stage);
+    context.go(link == '/support' || (link != null && loanStage && j.route != '/update') ? link! : j.route);
   } on ApiException catch (e) {
     if (context.mounted) context.go(e.code == 'OFFLINE' ? '/offline' : '/error', extra: e.requestId);
   }

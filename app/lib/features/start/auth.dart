@@ -155,7 +155,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     setState(() => _mobileError = _mobileRule.hasMatch(_mobile.text) ? null : 'Enter your 10-digit mobile number.');
     if (_mobileError != null) return;
     await _run(() async {
-      await api.sendOtp(_mobile.text);
+      await api.sendOtp(_mobile.text, purpose: OtpFor.reset);
       if (!mounted) return;
       if (_sent) showDnToast(context, 'Code sent');
       _code.clear();
@@ -164,7 +164,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   }
 
   Future<void> _verify() => _run(() async {
-    await api.verifyOtp(_code.text);
+    await api.verifyOtp(_code.text, purpose: OtpFor.reset);
     if (mounted) context.go('/reset-password');
   });
 
@@ -238,8 +238,8 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     try {
       await api.resetPassword(_password.text);
       if (!mounted) return;
-      showDnToast(context, 'Your password has been updated. You can now sign in with it.');
-      context.go('/login');
+      showDnToast(context, 'Your password has been updated.');
+      await openJourney(context); // the reset signs the borrower in
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.code == 'OFFLINE') context.push('/offline');

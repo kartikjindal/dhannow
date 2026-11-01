@@ -191,8 +191,8 @@ class HttpApi extends Api {
     final apps = ((await c.get('/api/applications/mine')) as List).cast<Map<String, dynamic>>();
     _app = apps.firstOrNull;
     _journey = _app == null ? null : await c.get('$_a/journey') as Map<String, dynamic>;
-    // A bureau question waits where sign-up stopped short of submit (A13 after a restart too).
-    _question = _status == 'DRAFT' && _journey?['stepKey'] == 'signup.submitted' && await _challenge() != null;
+    // The bureau's question is open (A13, after a restart too).
+    _question = _journey?['bureauChallengePending'] == true;
     final open = apps.where((a) => a['loanId'] != null && !const {'CLOSED', 'WRITTEN_OFF', 'CANCELLED'}.contains(a['status'])).firstOrNull;
     _loan = open == null ? null : await _fetchLoan(open, open: true);
   }
@@ -208,19 +208,26 @@ class HttpApi extends Api {
   // ---- auth ----
 
   @override
-  Future<void> sendOtp(String mobile, {bool consent = false}) => _do(() => _otp(() async {
-        if (consent) {
+  Future<void> sendOtp(String mobile, {OtpFor purpose = OtpFor.signIn}) => _do(() => _otp(() async {
+        if (purpose == OtpFor.consent) {
           await c.post('$_a/verify/bureau-consent/otp');
           return;
         }
         _mobile = mobile;
-        await c.send('POST', '/api/auth/borrower/otp/request', body: {'mobile': mobile, 'deviceId': await c.deviceId()}, auth: false);
+        // S5 sends only to a registered number and never creates a customer.
+        final path = purpose == OtpFor.reset ? '/api/auth/borrower/forgot-password/otp' : '/api/auth/borrower/otp/request';
+        await c.send('POST', path, body: {'mobile': mobile, 'deviceId': await c.deviceId()}, auth: false);
       }));
 
   @override
-  Future<void> verifyOtp(String code, {bool consent = false}) => _do(() => _otp(() async {
-        if (consent) {
-          _consentOtp = code; // checked by the server with the consent itself (submitApplication)
+  Future<void> verifyOtp(String code, {OtpFor purpose = OtpFor.signIn}) => _do(() => _otp(() async {
+        // Consent and reset codes are checked by the server with the step they authorise.
+        if (purpose == OtpFor.consent) {
+          _consentOtp = code;
+          return;
+        }
+        if (purpose == OtpFor.reset) {
+          _resetOtp = code;
           return;
         }
         final m = _mobile ?? (throw const ApiException('SESSION_EXPIRED'));
@@ -240,9 +247,17 @@ class HttpApi extends Api {
   @override
   Future<void> setPassword(String password) => _do(() async => c.post('/api/auth/borrower/set-password', {'password': password}));
 
-  /// After the OTP sign-in on S5 the borrower is signed in, so this is the same set-password call.
+  /// S6: the S5 code and the new password together; the answer is a session.
   @override
-  Future<void> resetPassword(String password) => setPassword(password);
+  Future<void> resetPassword(String password) => _do(() => _otp(() async {
+        final m = _mobile ?? (throw const ApiException('OTP_INVALID'));
+        await _session(await c.send('POST', '/api/auth/borrower/forgot-password/reset',
+            body: {'mobile': m, 'otp': _resetOtp, 'password': password, ...await _device()}, auth: false));
+        await c.store.write(_kMobile, m);
+        notifyListeners();
+      }));
+
+  String? _resetOtp;
 
   @override
   Future<void> logout() => _do(() async {
@@ -274,6 +289,8 @@ class HttpApi extends Api {
         return (
           stage: s,
           route: switch (s) {
+            // New applications paused (flag): the A1b form instead of sign-up.
+            Stage.onboarding when _app == null && config.flag('onboarding-paused') => '/apply',
             Stage.onboarding => '/resume',
             Stage.question => '/credit-question',
             Stage.rejected => '/application-rejected',
@@ -370,18 +387,18 @@ class HttpApi extends Api {
             await _saveDocs('PAN_CARD_BACK', [files['back']!], d['pdfPassword']);
             await _advance('PAN_CARD');
           case 'address-proof':
-            // ponytail: uploaded into the application's folder, as the web did; no endpoint files these
-            // doc types yet (backend gap), so staff find them only in storage.
             for (final e in files.entries) {
-              await _upload(e.value, switch (e.key) { 'Gas bill' => 'GAS_BILL', 'Rent agreement' => 'RENT_AGREEMENT', _ => 'ELECTRICITY_BILL' });
+              await _saveDocs(switch (e.key) { 'Gas bill' => 'GAS_BILL', 'Rent agreement' => 'RENT_AGREEMENT', _ => 'ELECTRICITY_BILL' }, [e.value], null);
             }
             final uan = d['uan'];
             if (uan != null && uan.isNotEmpty) {
               await c.put('$_a/profile/self', {'uan': uan});
               await c.post('$_a/verify/employment');
             }
+          case 'apply':
+            // A1b, onboarding paused: the server keeps only the Aadhaar last 4.
+            await c.post('/api/onboarding-waitlist', {'fullName': d['name'], 'email': d['email'], 'mobile': d['mobile'], 'pan': d['pan'], 'aadhaarLast4': d['aadhaarLast4']});
           default:
-            // 'apply' (onboarding paused): the server takes the full Aadhaar number, A1b the last four.
             throw const ApiException('NOT_IN_APP_YET');
         }
         notifyListeners();
@@ -418,9 +435,22 @@ class HttpApi extends Api {
   @override
   Future<({String question, List<String> options})?> creditQuestion() => _do(_challenge);
 
+  /// The legal pages' versions as accepted (`verify/agreement` keeps the last list, so each call
+  /// sends every page accepted so far).
+  Future<void> _recordVersions(List<String> keys) async {
+    final versions = [
+      for (final k in keys)
+        if (config.link(k)?.version case final v?) {'key': k, 'version': v},
+    ];
+    if (versions.isNotEmpty) await c.post('$_a/verify/agreement', {'versions': versions});
+  }
+
+  static const _consentPages = ['terms', 'consent', 'privacy'];
+
   @override
   Future<void> submitApplication({DateTime? dob}) => _do(() => _otp(() async {
         if (dob != null) await _profile({'dob': _iso(dob)});
+        await _recordVersions(_consentPages);
         await c.post('$_a/verify/bureau-consent', {'otp': _consentOtp, 'consentText': bureauConsentText});
         final pan = _draft['pan'];
         if (pan != null && pan.isNotEmpty) {
@@ -487,16 +517,20 @@ class HttpApi extends Api {
 
   /// ponytail: the server prices only the saved amount (`offer/summary`), so B1 offers that one
   /// amount until a per-amount quote endpoint exists (backend gap, Phase 11 status).
+  /// B1: one quote per ladder amount up to the ceiling, on the offer's frozen terms.
   @override
-  Future<List<Quote>> quotes() async => [await quote(0)];
+  Future<List<Quote>> quotes() => _do(() async => [for (final v in (await c.get('$_a/offer/quotes')) as List) quoteOf(v as Map<String, dynamic>)]);
 
+  /// The quote for [principalPaise] from the price list, else the saved drawdown (`offer/summary`).
   @override
-  Future<Quote> quote(int principalPaise) => _do(() async => quoteOf(await c.get('$_a/offer/summary') as Map<String, dynamic>));
+  Future<Quote> quote(int principalPaise) => _do(() async {
+        final listed = (await quotes()).where((q) => q.principalPaise == principalPaise).firstOrNull;
+        return listed ?? quoteOf(await c.get('$_a/offer/summary') as Map<String, dynamic>);
+      });
 
   @override
   Future<void> chooseAmount(int paise) => _do(() async {
-        // A legacy PRE_APPROVED re-borrow applies straight to disbursal; everyone else walks the offer.
-        await (_status == 'PRE_APPROVED' ? c.post('$_a/apply', {'amountPaise': paise}) : c.post('$_a/offer/amount', {'amountPaise': paise}));
+        await c.post('$_a/offer/amount', {'amountPaise': paise});
         _chosen = paise;
         notifyListeners();
       });
@@ -505,6 +539,7 @@ class HttpApi extends Api {
   Future<void> acceptKfs() => _do(() async {
         await c.post('$_a/offer/kfs'); // issues (or reuses) the KFS for this offer
         await c.post('$_a/offer/kfs/ack');
+        await _recordVersions([..._consentPages, 'kfs-policy']);
       });
 
   @override
@@ -580,6 +615,12 @@ class HttpApi extends Api {
   Future<Stage> reborrow() => _do(() async {
         _app = await c.post('/api/applications/reborrow') as Map<String, dynamic>;
         _chosen = null;
+        // A legacy PRE_APPROVED file has no sanction to carry: `apply` makes it an offer (SANCTIONED,
+        // credit-level ceiling), then it walks KFS → e-sign → account like any other; B1 re-picks.
+        if (_status == 'PRE_APPROVED') {
+          final max = (await c.get('/api/me/credit-level') as Map<String, dynamic>)['maxPaise'];
+          _app = await c.post('$_a/apply', {'amountPaise': max}) as Map<String, dynamic>;
+        }
         await _reload();
         return stage;
       });
@@ -929,7 +970,7 @@ class HttpApi extends Api {
       flags: {for (final e in ((v['flags'] as Map?) ?? const {}).entries) '${e.key}': e.value == true},
       support: contact(v['support'], fallbackConfig.support),
       grievance: contact(v['grievance'], fallbackConfig.grievance),
-      legal: [for (final l in (v['legal'] as List? ?? const [])) LegalLink('${l['key']}', '${l['title']}', '${l['url']}')],
+      legal: [for (final l in (v['legal'] as List? ?? const [])) LegalLink('${l['key']}', '${l['title']}', '${l['url']}', l['version'] == null ? null : '${l['version']}')],
     );
   }
 }
@@ -965,25 +1006,19 @@ DateTime? _date(Object? v) => v == null ? null : DateTime.tryParse('$v')?.toLoca
 
 int _int(Object? v) => (v as num?)?.toInt() ?? 0;
 
-/// `OfferSummaryView`. ponytail: the view carries no rates, so the disclosure bps are read back
-/// from the server's own figures (exact for LoanMath's whole-paise rounding on ladder amounts)
-/// until `feeRateBps`/`gstRateBps`/`dailyRateBps` are added to it (backend gap).
-Quote quoteOf(Map<String, dynamic> v) {
-  final p = _int(v['principalPaise']), fee = _int(v['processingFeePaise']), gst = _int(v['gstPaise']), interest = _int(v['interestPaise']);
-  final days = _int(v['tenureDays']) == 0 ? 14 : _int(v['tenureDays']);
-  return Quote(
-    principalPaise: p,
-    feePaise: fee,
-    gstPaise: gst,
-    interestPaise: interest,
-    netPaise: _int(v['netDisbursedPaise']),
-    repayPaise: _int(v['totalRepayablePaise']),
-    tenureDays: days,
-    feeRateBps: p == 0 ? 0 : fee * 10000 ~/ p,
-    gstRateBps: fee == 0 ? 0 : gst * 10000 ~/ fee,
-    dailyRateBps: p == 0 ? 0 : interest * 10000 ~/ (p * days),
-  );
-}
+/// `OfferSummaryView`: money and the disclosure rates exactly as the server priced them.
+Quote quoteOf(Map<String, dynamic> v) => Quote(
+      principalPaise: _int(v['principalPaise']),
+      feePaise: _int(v['processingFeePaise']),
+      gstPaise: _int(v['gstPaise']),
+      interestPaise: _int(v['interestPaise']),
+      netPaise: _int(v['netDisbursedPaise']),
+      repayPaise: _int(v['totalRepayablePaise']),
+      tenureDays: _int(v['tenureDays']) == 0 ? 14 : _int(v['tenureDays']),
+      feeRateBps: _int(v['feeRateBps']),
+      gstRateBps: _int(v['gstRateBps']),
+      dailyRateBps: _int(v['dailyRateBps']),
+    );
 
 /// `LoanView` (+ the application row for its number, + `OutstandingView` for an open loan).
 Loan loanOf(Map<String, dynamic> v, Map<String, dynamic> app, Map<String, dynamic>? outstanding) {
@@ -992,22 +1027,19 @@ Loan loanOf(Map<String, dynamic> v, Map<String, dynamic> app, Map<String, dynami
   final disbursed = _date(v['disbursedOn']) ?? DateTime.now();
   final dueDay = _date(v['dueDate']) ?? disbursed.add(const Duration(days: 14));
   final dueAt = DateTime(dueDay.year, dueDay.month, dueDay.day, 23, 59, 59);
-  final now = DateTime.now();
   final lifecycle = Lifecycle.of(v['lifecycleStatus']);
   final closed = lifecycle == Lifecycle.closed;
   final pending = v['pendingExtension'] as Map<String, dynamic>?;
   return Loan(
     id: '${v['id']}',
-    // ponytail: LoanView has no borrower-facing account number yet (backend gap); the loan id stands in.
-    accountNo: '${v['id']}',
+    accountNo: '${v['loanAccountNumber'] ?? v['id']}',
     applicationNo: '${app['id']}',
     quote: Quote(
       principalPaise: principal,
       feePaise: fee,
       gstPaise: gst,
-      // LoanView sends no interest figure for upfront loans (backend gap); it is what the three
-      // server figures leave of the principal.
-      interestPaise: principal - fee - gst - net,
+      // Deducted at disbursal; null only on navix-terms loans, which DhanNow borrowers never hold.
+      interestPaise: _int(v['upfrontInterestPaise']),
       netPaise: net,
       repayPaise: repay,
       feeRateBps: 0,
@@ -1016,20 +1048,21 @@ Loan loanOf(Map<String, dynamic> v, Map<String, dynamic> app, Map<String, dynami
     ),
     disbursedOn: disbursed,
     dueAt: dueAt,
-    daysLeft: DateTime(dueDay.year, dueDay.month, dueDay.day).difference(DateTime(now.year, now.month, now.day)).inDays,
+    // The server's IST count; null once closed.
+    daysLeft: _int(v['daysLeft']),
     lifecycle: lifecycle,
     hold: Hold.of(v['holdStatus']),
     repayment: Repayment.of(v['repaymentStatus']),
     repaidPaise: closed ? repay : _int(outstanding?['verifiedPaise']),
     latePaise: closed ? 0 : _int(outstanding?['penaltyPaise']),
-    dpd: lifecycle == Lifecycle.overdueD1 || lifecycle == Lifecycle.overdueReview ? -DateTime(dueDay.year, dueDay.month, dueDay.day).difference(DateTime(now.year, now.month, now.day)).inDays : 0,
+    dpd: lifecycle == Lifecycle.overdueD1 || lifecycle == Lifecycle.overdueReview ? -_int(v['daysLeft']) : 0,
     extensionsUsed: _int(v['extensionCount']),
     extensionCap: pending == null ? 3 : _int(pending['cap']),
     extensions: [
       for (final e in (v['extensions'] as List? ?? const []).cast<Map<String, dynamic>>())
         Extension(
           n: _int(e['seq']),
-          chargePaise: null,
+          chargePaise: (e['chargePaidPaise'] as num?)?.toInt(),
           oldDue: _dueAt(e['oldDueDate']) ?? dueAt,
           newDue: _dueAt(e['newDueDate']) ?? dueAt,
           status: ExtensionStatus.of(e['status']),
@@ -1060,6 +1093,7 @@ ExtensionOffer extensionOfferOf(Map<String, dynamic> v, DateTime currentDue) {
     oldDue: currentDue,
     newDue: _dueAt(v['newDueDate']) ?? currentDue.add(const Duration(days: 14)),
     expiresAt: _date(v['expiresAt']) ?? currentDue,
+    officer: v['offeredBy'] as String?,
   );
 }
 

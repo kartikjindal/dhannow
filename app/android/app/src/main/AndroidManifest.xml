@@ -34,8 +34,10 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="https" android:host="dhannow.com" android:pathPrefix="/app/cb/"/>
+                <!-- SMS and email links (AppLinks): /app/open?to=repay|loans|support. -->
+                <data android:scheme="https" android:host="dhannow.com" android:path="/app/open"/>
             </intent-filter>
-            <!-- The callback carries nothing the app reads, so it is not routed as a screen. -->
+            <!-- Links are read through the dhannow/system channel (takeLink), not routed by Flutter. -->
             <meta-data android:name="flutter_deeplinking_enabled" android:value="false"/>
         </activity>
         <!-- Don't delete the meta-data below.

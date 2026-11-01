@@ -7,6 +7,7 @@ import 'package:dhannow/core/api/api.dart';
 import 'package:dhannow/core/api/client.dart';
 import 'package:dhannow/core/api/http_api.dart';
 import 'package:dhannow/core/files.dart';
+import 'package:dhannow/core/links.dart' show routeForLink;
 import 'package:dhannow/features/offer/sign.dart' show signaturePng;
 import 'package:dhannow/core/theme/theme.dart';
 import 'package:dhannow/features/money/extension_status_card.dart';
@@ -263,6 +264,120 @@ void main() {
     });
   });
 
+  group('backend gaps closed (Phase 11c)', () {
+    /// An HttpApi signed in on application 7 in [status]; [extra] answers anything else.
+    Future<(HttpApi, FakeAdapter)> on(String status, FutureOr<(int, Object?, Map<String, String>)?> Function(RequestOptions o)? extra, {Map<String, Object?> journey = const {}}) async {
+      final store = MemoryStore()..values['refresh_token'] = 'r';
+      final a = FakeAdapter((o) {
+        if (o.path == '/api/applications/mine') return (200, ok([{'id': 7, 'status': status}]), <String, String>{});
+        if (o.path == '/api/applications/7/journey') return (200, ok({'stepKey': 'status', 'completed': [], ...journey}), <String, String>{});
+        if (o.uri.host == 'bucket.test') return (200, null, <String, String>{});
+        return extra?.call(o) ?? (200, ok(null), <String, String>{});
+      });
+      final api = HttpApi(client(a, store));
+      await api.journey();
+      return (api, a);
+    }
+
+    test('B1: one quote per ladder amount, with the server’s rates', () async {
+      Map<String, Object?> q(int p) => {'principalPaise': p, 'processingFeePaise': p ~/ 10, 'gstPaise': p * 18 ~/ 1000, 'interestPaise': p * 14 ~/ 100, 'netDisbursedPaise': p * 742 ~/ 1000, 'totalRepayablePaise': p, 'tenureDays': 14, 'feeRateBps': 1000, 'gstRateBps': 1800, 'dailyRateBps': 100};
+      final (api, _) = await on('SANCTIONED', (o) => o.path == '/api/applications/7/offer/quotes' ? (200, ok([q(100000), q(200000)]), <String, String>{}) : null);
+      final list = await api.quotes();
+      expect([for (final x in list) x.netPaise], [74200, 148400]);
+      expect((await api.quote(200000)).dailyRateBps, 100);
+    });
+
+    test('S5: the code goes to forgot-password/otp; the reset sends code + password and signs in', () async {
+      final store = MemoryStore();
+      final a = FakeAdapter((o) => switch (o.path) {
+            '/api/auth/borrower/forgot-password/reset' => (200, ok({'token': 'a1', 'refreshToken': 'r1', 'customerId': 3, 'customerCode': 'DN0000003'}), <String, String>{}),
+            _ => (200, ok({'sent': true}), <String, String>{}),
+          });
+      final api = HttpApi(client(a, store));
+      await api.sendOtp('9876543210', purpose: OtpFor.reset);
+      await api.verifyOtp('123456', purpose: OtpFor.reset);
+      expect(a.requests.map((r) => r.path), ['/api/auth/borrower/forgot-password/otp'], reason: 'the code is checked with the reset');
+      await api.resetPassword('abc12345!');
+      final reset = a.requests.last.data as Map;
+      expect((reset['mobile'], reset['otp'], reset['password']), ('9876543210', '123456', 'abc12345!'));
+      expect(reset['deviceId'], isNotNull);
+      expect(api.signedIn, isTrue);
+      expect(store.values['refresh_token'], 'r1');
+    });
+
+    test('S5: a wrong code at reset reads as the OTP error', () async {
+      final api = HttpApi(client(FakeAdapter((o) => o.path.endsWith('/reset') ? (422, fail('INVALID_OTP'), <String, String>{}) : (200, ok({'sent': true}), <String, String>{}))));
+      await api.sendOtp('9876543210', purpose: OtpFor.reset);
+      await api.verifyOtp('000000', purpose: OtpFor.reset);
+      await expectLater(api.resetPassword('abc12345!'), throwsA(isA<ApiException>().having((e) => e.code, 'code', 'OTP_INVALID')));
+    });
+
+    test('A12 address proof is filed; A1b sends only the Aadhaar last 4', () async {
+      var n = 0;
+      final (api, a) = await on('KYC_PENDING', (o) => o.path.endsWith('/presign-upload') ? (200, ok({'key': 'applications/7/x/${++n}.pdf', 'url': 'https://bucket.test/$n'}), <String, String>{}) : null);
+      final pdf = PickedFile('Gas_bill.pdf', bytes: 3, data: Uint8List.fromList([1, 2, 3]));
+      await api.saveStep('address-proof', const {}, files: {'Gas bill': pdf});
+      expect(a.requests.singleWhere((r) => r.path.endsWith('/verify/documents')).data, {'docType': 'GAS_BILL', 'objectKeys': ['applications/7/x/1.pdf'], 'filePassword': null});
+      await api.saveStep('apply', {'name': 'Aarav Sharma', 'mobile': '9876543210', 'email': 'a@b.in', 'pan': 'ABCPS1234K', 'aadhaarLast4': '4821'});
+      final w = a.requests.singleWhere((r) => r.path == '/api/onboarding-waitlist').data as Map;
+      expect(w['aadhaarLast4'], '4821');
+      expect(w.containsKey('aadhaar'), isFalse);
+    });
+
+    test('KFS acceptance records the accepted page versions from app config', () async {
+      final (api, a) = await on('SANCTIONED', null);
+      api.config = const AppConfig(minVersion: '0.0.0', support: Contact('s', '1', 'e'), grievance: Contact('g', '2', 'f'), legal: [
+        LegalLink('terms', 'Terms', 'https://dhannow.com/terms.html', '3'),
+        LegalLink('consent', 'Consent', 'https://dhannow.com/consent.html', '1'),
+        LegalLink('kfs-policy', 'KFS policy', 'https://dhannow.com/kfs-policy.html', '2'),
+      ]);
+      await api.acceptKfs();
+      expect(a.requests.singleWhere((r) => r.path.endsWith('/verify/agreement')).data, {
+        'versions': [
+          {'key': 'terms', 'version': '3'},
+          {'key': 'consent', 'version': '1'},
+          {'key': 'kfs-policy', 'version': '2'},
+        ],
+      });
+    });
+
+    test('an open bureau question opens A13 on resume; a legacy re-borrow becomes an offer', () async {
+      final (q, _) = await on('DRAFT', null, journey: {'stepKey': 'signup.submitted', 'bureauChallengePending': true});
+      expect((await q.journey()).route, '/credit-question');
+
+      var status = 'CLOSED';
+      final store = MemoryStore()..values['refresh_token'] = 'r';
+      final a = FakeAdapter((o) => switch (o.path) {
+            '/api/applications/mine' => (200, ok([{'id': 8, 'status': status}]), <String, String>{}),
+            '/api/applications/reborrow' => (200, ok({'id': 8, 'status': status = 'PRE_APPROVED'}), <String, String>{}),
+            '/api/me/credit-level' => (200, ok({'level': 2, 'maxPaise': 200000, 'ladder': []}), <String, String>{}),
+            '/api/applications/8/apply' => (200, ok({'id': 8, 'status': status = 'SANCTIONED'}), <String, String>{}),
+            '/api/applications/8/journey' => (200, ok({'stepKey': 'offer.amount'}), <String, String>{}),
+            _ => (200, ok(null), <String, String>{}),
+          });
+      final api = HttpApi(client(a, store));
+      await api.journey();
+      expect(await api.reborrow(), Stage.offer);
+      expect((a.requests.singleWhere((r) => r.path.endsWith('/apply')).data as Map)['amountPaise'], 200000);
+    });
+
+    test('SMS/email links: repay, loans, support; anything else is the journey', () {
+      expect(routeForLink('https://dhannow.com/app/open?to=repay'), '/repay');
+      expect(routeForLink('https://dhannow.com/app/open?to=loans'), '/loans');
+      expect(routeForLink('https://dhannow.com/app/open?to=support'), '/support');
+      expect(routeForLink('https://dhannow.com/app/open?to=admin'), isNull);
+      expect(routeForLink('https://dhannow.com/app/open'), isNull);
+      expect(routeForLink('https://dhannow.com/app/cb/esign?outcome=success'), isNull);
+      expect(routeForLink(null), isNull);
+    });
+
+    test('upload refusals from the server have their own messages', () {
+      for (final code in ['UNSUPPORTED_FILE_TYPE', 'FILE_TOO_LARGE', 'UPLOAD_NOT_FOUND', 'UPLOAD_UNAVAILABLE']) {
+        expect(ApiException(code).message, isNot(const ApiException('SOMETHING_ELSE').message), reason: code);
+      }
+    });
+  });
+
   group('decoding', () {
     final app = {'id': 7, 'loanId': 11};
     Map<String, Object?> view(Object? lifecycle, [Object? ext]) => {
@@ -276,6 +391,9 @@ void main() {
           'dueDate': '2026-11-15',
           'lifecycleStatus': lifecycle,
           'repaymentStatus': 'SOMETHING_NEW',
+          'upfrontInterestPaise': 14000,
+          'loanAccountNumber': 'DNL0000011',
+          'daysLeft': 9,
           'extensionCount': 0,
           'pendingExtension': ext,
         };
@@ -288,6 +406,7 @@ void main() {
       expect(l.quote.interestPaise, 14000);
       expect(l.outstandingPaise, 100000);
       expect(l.dueAt, DateTime(2026, 11, 15, 23, 59, 59));
+      expect((l.accountNo, l.daysLeft), ('DNL0000011', 9));
     });
 
     test('the open extension keeps its id and version and maps the server states', () {
@@ -300,8 +419,10 @@ void main() {
         'quoteForToday': {'feePaise': 10000, 'gstPaise': 1800, 'interestPaise': 14000, 'lateChargePaise': 6000, 'totalPaise': 31800},
         'newDueDate': '2026-11-29',
         'expiresAt': '2026-11-03T18:29:59Z',
+        'offeredBy': 'Priya',
       }), app, null);
       final o = l.pendingExtension!;
+      expect(o.officer, 'Priya');
       expect((o.id, o.version, o.status, o.totalPaise), ('e-1', 3, ExtensionStatus.offered, 31800));
       expect(ExtensionStatus.of('ACCEPTED'), ExtensionStatus.confirmed);
       expect(ExtensionStatus.of('ACTIVE'), ExtensionStatus.verified);
@@ -322,8 +443,8 @@ void main() {
       expect(versionBelow('1.0.0', '1.0.0'), isFalse);
     });
 
-    test('quote decoding reads the rates back from the server figures', () {
-      final q = quoteOf({'principalPaise': 100000, 'processingFeePaise': 10000, 'gstPaise': 1800, 'interestPaise': 14000, 'netDisbursedPaise': 74200, 'totalRepayablePaise': 100000, 'tenureDays': 14});
+    test('quote decoding takes the rates from the server', () {
+      final q = quoteOf({'principalPaise': 100000, 'processingFeePaise': 10000, 'gstPaise': 1800, 'interestPaise': 14000, 'netDisbursedPaise': 74200, 'totalRepayablePaise': 100000, 'tenureDays': 14, 'feeRateBps': 1000, 'gstRateBps': 1800, 'dailyRateBps': 100});
       expect((q.feeRateBps, q.gstRateBps, q.dailyRateBps, q.netPaise), (1000, 1800, 100, 74200));
     });
   });

@@ -185,7 +185,7 @@ class _ConsentScreenState extends State<ConsentScreen> with Busy {
   void initState() {
     super.initState();
     // The bureau-consent code goes to the mobile on file as the step opens; Resend covers a failure.
-    api.sendOtp(_mobile, consent: true).catchError((_) {});
+    api.sendOtp(_mobile, purpose: OtpFor.consent).catchError((_) {});
   }
 
   @override
@@ -204,7 +204,7 @@ class _ConsentScreenState extends State<ConsentScreen> with Busy {
     setState(() => _submitting = true);
     await run(() async {
       try {
-        await api.verifyOtp(_code.text, consent: true);
+        await api.verifyOtp(_code.text, purpose: OtpFor.consent);
         await api.submitApplication(dob: _dob);
       } on ApiException catch (e) {
         if (!mounted) return;
@@ -274,7 +274,7 @@ class _ConsentScreenState extends State<ConsentScreen> with Busy {
             _resend.view(
               sent: '',
               onResend: () => run(() async {
-                await api.sendOtp(_mobile, consent: true);
+                await api.sendOtp(_mobile, purpose: OtpFor.consent);
                 _resend.used();
               }),
             ),

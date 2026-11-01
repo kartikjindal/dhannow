@@ -134,7 +134,7 @@ void main() {
     expect(find.text('Set a new password'), findsOneWidget);
   });
 
-  testWidgets('reset password enforces the rule and the match, then goes to sign in', (t) async {
+  testWidgets('reset password enforces the rule and the match, then signs in to the journey', (t) async {
     await pumpAt(t, '/reset-password');
     await t.enterText(find.byType(TextField).at(0), 'abcdef');
     await t.tap(find.text('Update password'));
@@ -148,7 +148,7 @@ void main() {
     await t.enterText(find.byType(TextField).at(1), 'abc12!');
     await t.tap(find.text('Update password'));
     await t.pumpAndSettle();
-    expect(find.text('Welcome back'), findsOneWidget);
+    expect(find.text('route:/dashboard'), findsOneWidget);
   });
 
   test('password rule mirrors the server PasswordPolicy', () {

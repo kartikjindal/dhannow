@@ -91,11 +91,11 @@ class DemoApi extends Api {
   // ---- auth (S4–S6, A2, A3) ----
 
   @override
-  Future<void> sendOtp(String mobile, {bool consent = false}) => _call(() => _otpTries = 0);
+  Future<void> sendOtp(String mobile, {OtpFor purpose = OtpFor.signIn}) => _call(() => _otpTries = 0);
 
   /// Demo: any six digits pass except 000000. Five wrong tries lock (E7).
   @override
-  Future<void> verifyOtp(String code, {bool consent = false}) => _call(() {
+  Future<void> verifyOtp(String code, {OtpFor purpose = OtpFor.signIn}) => _call(() {
         if (_otpTries >= 5) throw const ApiException('OTP_LOCKED');
         if (code == '000000') {
           _otpTries++;
@@ -121,7 +121,12 @@ class DemoApi extends Api {
       });
 
   @override
-  Future<void> resetPassword(String password) => _call(() {});
+  Future<void> resetPassword(String password) => _call(() {
+        // Like the server: a reset signs the borrower in.
+        if (_scenario == Scenario.newUser) setScenario(Scenario.active);
+        _signedIn = true;
+        notifyListeners();
+      });
 
   @override
   Future<void> logout() => _call(() {
