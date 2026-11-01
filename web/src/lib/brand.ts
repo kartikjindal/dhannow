@@ -1,7 +1,8 @@
 /**
- * The one brand config for the staff console (PLAN Phase 10). Contacts mirror the backend
- * `navix.brand.*` / `navix.grievance.*` defaults; Phase 10a W5 generates both from `docs/brand.json`.
- * The lender of record is a backend config value and is never named here.
+ * GENERATED from docs/brand.json by site/build_brand.py (PLAN Phase 10a W5). Do not edit: change
+ * docs/brand.json, run `python site/build_brand.py`; `python site/check_brand.py` fails if this differs.
+ * The one brand config for the staff console. The lender of record is a backend config value and is
+ * never named here.
  */
 export const BRAND = {
   name: "DhanNow",

@@ -3,11 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="dn-doc-version" content="1">
 <title>Loan information &amp; repayment policy – DhanNow</title>
 <link rel="icon" href="logo.jpeg">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bebas+Neue&display=swap">
 <style>
-:root{--ink:#0B0B0C;--soft:#4A4D52;--line:#E5E7E8;--field:#EEF3FF;--cobalt:#1F5BDB;--cobalt-dark:#1A4BB8}
+:root{--ink:#0B0B0C;--soft:#4A4D52;--line:#E5E7E8;--field:#EEF3FF;--cobalt:#1F5BDB;--cobalt-dark:#1A4BB8;--warn:#8A6200;--warn-bg:#FEF6D8}
 *{box-sizing:border-box}
 body{margin:0;background:#F2F3F3;color:var(--ink);font:16px/1.65 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 a{color:var(--cobalt-dark);text-underline-offset:3px}
@@ -33,22 +34,23 @@ table{width:100%;border-collapse:collapse;font-size:15px}
 th,td{text-align:left;vertical-align:top;padding:10px 12px 10px 0;border-bottom:1px solid var(--line)}
 th{font-weight:600}
 .note{background:var(--field);border-radius:16px;padding:16px 20px;font-size:15px;margin-bottom:40px}
+.note.warn{background:var(--warn-bg);color:var(--warn);margin-bottom:24px}
 footer{background:#fff;border-top:1px solid var(--line);color:var(--soft);font-size:14px}
 footer div{max-width:1120px;margin:0 auto;padding:32px 20px}
 @media (max-width:560px){body{font-size:16px}article{margin:16px 12px;padding:32px 18px 48px}header .home{display:none}header .btn{margin-left:auto}}
 </style>
 </head>
 <body>
-<div class="bar">Our website is still being built. For now, apply in the DhanNow Android app. <a href="index.html#app">Get the app</a></div>
+<div class="bar">Our website is still being built. For now, apply in the DhanNow Android app. <a href="download.html">Get the app</a></div>
 <header><div>
   <a href="index.html" aria-label="DhanNow home"><img src="logo.jpeg" alt="DhanNow"></a>
   <a class="home" href="index.html">Home</a>
-  <a class="btn" href="index.html#app">Get the app</a>
+  <a class="btn" href="download.html">Get the app</a>
 </div></header>
 <main>
 <article>
 <h1>Loan information &amp; repayment policy</h1>
-<p class="note">This page is a draft and is being reviewed before publication. Questions? Call 92113 31169 or email <a href="mailto:support@dhannow.com">support@dhannow.com</a>.</p>
+<p class="note">This page is a draft and is being reviewed before publication. Questions? Call <a data-brand="support.phone" data-brand-href="support.phone" href="tel:+919211331169">92113 31169</a> or email <a data-brand="support.email" data-brand-href="support.email" href="mailto:support@dhannow.com">support@dhannow.com</a>.</p>
 <p>Effective Date: [Insert Date] Last Updated: [Insert Date]</p>
 <h2>1. PURPOSE OF THIS POLICY</h2>
 <p>This policy explains the loan amounts, eligibility conditions, pricing structure, disbursement process, repayment requirements, and available repayment arrangements associated with the DHAN NOW digital lending service.</p>
@@ -171,6 +173,28 @@ footer div{max-width:1120px;margin:0 auto;padding:32px 20px}
 <div class="tbl"><table><thead><tr><th>Applicable Principal</th><th>Processing Fee</th><th>GST</th><th>Interest for Additional 14 Days</th><th>Total Calculated Charges</th></tr></thead><tbody><tr><td>₹1,000</td><td>₹100</td><td>₹18</td><td>₹140</td><td>₹258</td></tr><tr><td>₹2,000</td><td>₹200</td><td>₹36</td><td>₹280</td><td>₹516</td></tr><tr><td>₹3,000</td><td>₹300</td><td>₹54</td><td>₹420</td><td>₹774</td></tr><tr><td>₹4,000</td><td>₹400</td><td>₹72</td><td>₹560</td><td>₹1,032</td></tr><tr><td>₹5,000</td><td>₹500</td><td>₹90</td><td>₹700</td><td>₹1,290</td></tr><tr><td>₹7,000</td><td>₹700</td><td>₹126</td><td>₹980</td><td>₹1,806</td></tr><tr><td>₹10,000</td><td>₹1,000</td><td>₹180</td><td>₹1,400</td><td>₹2,580</td></tr></tbody></table></div>
 <p>The actual extension offer must clearly state the amount payable, any applicable charges, the revised due date, and the total repayment obligation.</p>
 <p>The system must not treat an extension as accepted unless the applicable approval and customer acceptance requirements have been completed.</p>
+<h2 id="extending-your-loan">Extending your loan</h2>
+<p class="note warn">Pending Legal and tax sign-off. These details may change before they apply.</p>
+<p>If you can’t repay on your due date, our collections team may offer to extend your loan by 14 days. You can’t extend a loan yourself in the app, and an extension is never automatic.</p>
+<h3>How it works</h3>
+<ul>
+<li>A collections officer speaks to you and offers the extension.</li>
+<li>A Collection Head approves it.</li>
+<li>You confirm it in the DhanNow app with an OTP.</li>
+<li>You pay the extension charge in the app, or the officer records your payment.</li>
+<li>Our accounts team checks the payment. Your new due date then applies.</li>
+</ul>
+<h3>What it costs</h3>
+<p>The extension charge is the same as the charges on a new 14-day loan: the processing fee (10% of the loan), GST on the fee (18% of the fee) and 14 days of interest (1% a day). That is ₹258 for every ₹1,000 you borrowed.</p>
+<p>If your loan is already late, the late charge up to the day you pay is added: 2% of the loan amount for each day late, for at most 30 days. For example, on a ₹1,000 loan that is 3 days late you pay ₹258 + ₹60 = ₹318.</p>
+<p>The extension charge does not reduce your loan. You still repay the full loan amount on the new due date.</p>
+<div class="tbl"><table><thead><tr><th>Loan amount</th><th>Extension charge</th><th>Late charge per day</th><th>To extend when 3 days late</th></tr></thead><tbody><tr><td>₹1,000</td><td>₹258</td><td>₹20</td><td>₹318</td></tr><tr><td>₹2,000</td><td>₹516</td><td>₹40</td><td>₹636</td></tr><tr><td>₹3,000</td><td>₹774</td><td>₹60</td><td>₹954</td></tr><tr><td>₹4,000</td><td>₹1,032</td><td>₹80</td><td>₹1,272</td></tr><tr><td>₹5,000</td><td>₹1,290</td><td>₹100</td><td>₹1,590</td></tr><tr><td>₹7,000</td><td>₹1,806</td><td>₹140</td><td>₹2,226</td></tr><tr><td>₹10,000</td><td>₹2,580</td><td>₹200</td><td>₹3,180</td></tr></tbody></table></div>
+<h3>Good to know</h3>
+<ul>
+<li>Your new due date is your previous due date plus 14 days, not 14 days from the day you pay.</li>
+<li>A loan can be extended up to 3 times. The app shows how many you have used, for example “Extended 1 of 3”.</li>
+<li>Repaying an extended loan does not move you up to the next loan amount. You stay at the same level.</li>
+</ul>
 <h2>14. EMI CONVERSION — 20-DAY STRUCTURE</h2>
 <p>Where the 20-day EMI conversion option is available and approved, the stated calculation structure is:</p>
 <ul>
@@ -242,6 +266,6 @@ footer div{max-width:1120px;margin:0 auto;padding:32px 20px}
 <p>Changes affecting an existing loan must be handled in accordance with the applicable contract, consent requirements, and law.</p>
 </article>
 </main>
-<footer><div>DhanNow is the customer brand of NAVIX Finance Private Limited (CIN U64990HR2026PTC144926), Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001, India. <a href="index.html">Back to home</a></div></footer>
+<footer><div>DhanNow is the customer brand of <span data-brand="company.legalName">NAVIX Finance Private Limited</span> (CIN <span data-brand="company.cin">U64990HR2026PTC144926</span>), <span data-brand="company.registeredOffice">Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001</span>, India. <a href="index.html">Back to home</a></div></footer>
 </body>
 </html>
