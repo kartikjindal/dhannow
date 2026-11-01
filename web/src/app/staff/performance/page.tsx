@@ -316,7 +316,7 @@ function EntityView({
           <ExportMenu
             title={`Staff performance — ${entity.label}`}
             subtitle={periodLabel}
-            fileBase={`dhanboost-staff-performance-${entity.key.toLowerCase().replace(/_/g, "-")}`}
+            fileBase={`dhannow-staff-performance-${entity.key.toLowerCase().replace(/_/g, "-")}`}
             rows={sorted}
             meta={{
               periodLabel,

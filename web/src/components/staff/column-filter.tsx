@@ -55,7 +55,7 @@ export { BLANK } from "@/lib/staff/column-filter-match";
  *
  * `value` is the LABEL — exactly what the cell renders, because the dropdown lists what is on
  * screen. `raw` is the STORED value the filter actually carries, and it matters more than it looks:
- * almost every enum in this console renders through a label map (`T0_T7` → "1–7 DPD", settlements'
+ * almost every enum in this console renders through a label map (`D2_7` → "1–7 DPD", settlements'
  * `PROPOSED` → "Pending"), a label is not what a server can filter on, and at least one map is
  * **lossy** — the repayment queue renders both `BANK_TRANSFER` and `NACH` as "Bank transfer", so a
  * checklist keyed on the label would silently merge two different payment methods into one tick.

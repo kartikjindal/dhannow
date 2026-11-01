@@ -62,7 +62,7 @@ export default function AdminWaitlistPage() {
 
   const download = () =>
     exportCsv<WaitlistEntry>(
-      "dhanboost-onboarding-waitlist",
+      "dhannow-onboarding-waitlist",
       [
         { header: "Submitted", value: (r) => r.createdAt },
         { header: "Name", value: (r) => r.fullName },

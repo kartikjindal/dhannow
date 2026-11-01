@@ -666,7 +666,7 @@ export function LimitBasisBadge({
       variant={basis === "ADMIN_OVERRIDE" ? "warning" : "neutral"}
       size="sm"
       className={className}
-      title={basis === "ADMIN_OVERRIDE" ? "Set by an admin on this customer" : "25% of monthly salary"}
+      title={basis === "ADMIN_OVERRIDE" ? "Set by an admin on this customer" : "The customer's credit-ladder level"}
     >
       {LIMIT_BASIS_LABEL[basis]}
     </Badge>

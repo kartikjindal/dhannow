@@ -121,7 +121,7 @@ export function SanctionTab({ app, applicationId, detail, customerId }: TabCtx) 
             <Field label="Sanctioned amount" keyLabel tone="navy">{ceiling}</Field>
             <Field
               keyLabel label="Approved repayment date"
-              caption={app.salaryCreditDay != null ? `on the borrower's salary day (day ${app.salaryCreditDay})` : undefined}
+              caption="indicative: 14 days after the confirmed disbursal"
             >
               {repayDate}
             </Field>

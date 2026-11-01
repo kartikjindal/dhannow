@@ -77,6 +77,7 @@ const COUNTS: CustomerSummaryCounts = {
   review: 0,
   approved: 0,
   disbursementPending: 0,
+  awaitingConfirmation: 0,
   active: 0,
   overdue: 0,
   hold: 0,

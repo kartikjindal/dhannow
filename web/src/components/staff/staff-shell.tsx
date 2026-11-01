@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LogOut, ChevronRight } from "lucide-react";
-import { Brand } from "@/components/site/brand";
+import { Brand } from "@/components/staff/brand";
 import { NotificationBell } from "@/components/notifications/notification-bell";
 import { GlobalSearch } from "@/components/staff/global-search";
 import { Toaster } from "@/components/ui/toast";

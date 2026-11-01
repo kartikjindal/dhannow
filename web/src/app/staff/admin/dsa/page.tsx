@@ -377,7 +377,7 @@ function LeadsTab({ staffId, dsaOptions }: { staffId: string | undefined; dsaOpt
         <ExportMenu
           title="DSA lead register"
           subtitle={describeRegister(th) || undefined}
-          fileBase="dhanboost-dsa-leads"
+          fileBase="dhannow-dsa-leads"
           columns={[
             { header: "DSA", value: (l: AdminDsaLeadView) => dsaLabel(l) },
             { header: "Attribution", value: (l) => (l.owned ? "Entered" : "Uploaded") },
@@ -569,7 +569,7 @@ function CommissionsTab({ staffId, dsaOptions }: { staffId: string | undefined; 
         <ExportMenu
           title="DSA commission ledger"
           subtitle={describeRegister(th) || undefined}
-          fileBase="dhanboost-dsa-commissions"
+          fileBase="dhannow-dsa-commissions"
           columns={[
             { header: "DSA", value: (c: AdminDsaCommissionView) => c.dsaName ?? `#${c.dsaStaffId}` },
             { header: "PAN", value: (c) => c.pan ?? "" },

@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { ShieldCheck, Mail, CheckCircle2 } from "lucide-react";
-import { Brand } from "@/components/site/brand";
+import { Brand } from "@/components/staff/brand";
 import { Input, Turnstile } from "@/components/ui";
 import { config } from "@/lib/config";
 import { formatEnvelopeError, readEnvelopeError } from "@/lib/api/errors";

@@ -189,7 +189,7 @@ export default function AdminLeadsPage() {
         <ExportMenu
           title="Leads"
           subtitle={exportSubtitle}
-          fileBase="dhanboost-leads"
+          fileBase="dhannow-leads"
           columns={[
             { header: "Name", value: (r: LeadView) => r.name },
             { header: "Mobile", value: (r) => r.mobile },

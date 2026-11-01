@@ -14,12 +14,13 @@ describe("allowedViews", () => {
     expect(allowedViews("COLLECTION_HEAD")).toEqual(["COLLECTION_HEAD", "COLLECTION_EXECUTIVE"]);
   });
 
-  it("every other role gets only itself; DSA gets none", () => {
+  it("every other role gets only itself; DSA and the Phase 7 desk roles get none", () => {
+    const none = ["DSA", "RECOVERY", "SUPPORT", "FINANCE", "COMPLIANCE"];
     for (const r of STAFF_ROLES) {
-      if (r === "ADMIN" || r === "CREDIT_HEAD" || r === "COLLECTION_HEAD" || r === "DSA") continue;
+      if (r === "ADMIN" || r === "CREDIT_HEAD" || r === "COLLECTION_HEAD" || none.includes(r)) continue;
       expect(allowedViews(r)).toEqual([r]);
     }
-    expect(allowedViews("DSA")).toEqual([]);
+    for (const r of none) expect(allowedViews(r as (typeof STAFF_ROLES)[number])).toEqual([]);
   });
 
   it("the strip shows only where there is a choice", () => {

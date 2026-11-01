@@ -5,9 +5,10 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ShieldCheck, Lock, Mail } from "lucide-react";
-import { Brand } from "@/components/site/brand";
+import { Brand } from "@/components/staff/brand";
 import { Input, Dialog, DialogHeader, DialogTitle, DialogFooter, Turnstile } from "@/components/ui";
 import { loginStaff, StaffLoginError } from "@/lib/auth/staff-session";
+import { mfaApi } from "@/lib/api/staff-desks";
 import { config } from "@/lib/config";
 import { safeNextPath } from "@/lib/safe-redirect";
 
@@ -30,6 +31,11 @@ function LoginInner() {
   // The widget failed to load/render (usually a domain not on the site key's allowlist). Submit is
   // unblocked rather than leaving a dead button — the backend still decides.
   const [captchaBroken, setCaptchaBroken] = React.useState(false);
+  // Staff MFA (PLAN Phase 7): "code" once the backend asks for the authenticator code; "enrol" when this
+  // role must set one up first (ADMIN, FINANCE, CREDIT_HEAD, DISBURSEMENT_HEAD).
+  const [mfa, setMfa] = React.useState<null | "code" | "enrol">(null);
+  const [totp, setTotp] = React.useState("");
+  const [enrolment, setEnrolment] = React.useState<{ secret: string; otpauthUri: string } | null>(null);
 
   // captchaBroken must not outlive the challenge that tripped it — otherwise one stalled widget
   // (e.g. hidden behind the conflict dialog, see below) permanently downgrades every future submit
@@ -38,14 +44,42 @@ function LoginInner() {
 
   // Unset site key = no widget rendered, so the gate must not block dev / e2e / the demo stack.
   const captchaReady = !config.turnstileSiteKey || !!captcha || captchaBroken;
-  const canSubmit = email.trim().length > 0 && password.length > 0 && !busy && captchaReady;
+  const canSubmit =
+    email.trim().length > 0 && password.length > 0 && !busy && captchaReady && (mfa !== "code" || /^\d{6}$/.test(totp));
+
+  const startEnrol = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      setEnrolment(await mfaApi.enrol(email.trim(), password));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start the set-up.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const confirmEnrol = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await mfaApi.confirm(email.trim(), password, totp);
+      setEnrolment(null);
+      setMfa("code");
+      setTotp("");
+      setError("Authenticator set up. Enter a fresh code to sign in.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That code did not match.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const doLogin = async (force: boolean) => {
     setBusy(true);
     setError(undefined);
     try {
       // Authenticates against the backend; the JWT lands in the httpOnly navix_staff cookie.
-      await loginStaff(email.trim(), password, force, captcha);
+      await loginStaff(email.trim(), password, force, captcha, mfa === "code" && totp ? totp : undefined);
       router.push(redirect);
     } catch (err) {
       // Every outcome below re-challenges: the token just sent is spent, SESSION_CONFLICT included
@@ -55,6 +89,14 @@ function LoginInner() {
       setCaptchaKey((k) => k + 1);
       if (err instanceof StaffLoginError && err.code === "SESSION_CONFLICT") {
         setConflict(true);
+        setBusy(false);
+      } else if (err instanceof StaffLoginError && (err.code === "MFA_REQUIRED" || err.code === "INVALID_MFA_CODE")) {
+        setMfa("code");
+        setTotp("");
+        setError(err.code === "INVALID_MFA_CODE" ? err.message : undefined);
+        setBusy(false);
+      } else if (err instanceof StaffLoginError && err.code === "MFA_ENROLMENT_REQUIRED") {
+        setMfa("enrol");
         setBusy(false);
       } else {
         setError(err instanceof Error ? err.message : "Sign-in failed. Please try again.");
@@ -75,7 +117,7 @@ function LoginInner() {
         <div className="mb-6 text-center">
           <div className="mb-4 flex justify-center"><Brand href="/" tag="Staff Console" /></div>
           <h1 className="mb-1">Sign in to the console</h1>
-          <p className="text-muted">Internal DhanBoost back office. Authorised staff only.</p>
+          <p className="text-muted">Internal DhanNow back office. Authorised staff only.</p>
         </div>
 
         <form onSubmit={submit} className="form-card">
@@ -93,7 +135,7 @@ function LoginInner() {
             required
             value={email}
             onChange={(e) => { setEmail(e.target.value); setError(undefined); }}
-            placeholder="you@navix.example"
+            placeholder="you@dhannow.com"
             leftIcon={<Mail size={16} />}
             autoComplete="username"
           />
@@ -108,6 +150,43 @@ function LoginInner() {
             autoComplete="current-password"
             error={error}
           />
+          {mfa === "code" && (
+            <Input
+              label="Authenticator code"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={totp}
+              onChange={(e) => setTotp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              placeholder="6 digits"
+              helperText="From the authenticator app on your phone."
+            />
+          )}
+          {mfa === "enrol" && (
+            <div className="mb-3 rounded border border-line bg-grey-50 p-3 text-sm">
+              <p className="mb-2">Your role signs in with an authenticator app. Set it up once to continue.</p>
+              {!enrolment ? (
+                <button type="button" className="btn btn-sm btn-gold" disabled={busy || !password} onClick={() => void startEnrol()}>
+                  Set up authenticator
+                </button>
+              ) : (
+                <>
+                  <p className="mb-1 text-xs text-muted">Add this key in your authenticator app (or open the link on your phone):</p>
+                  <p className="mb-1 break-all font-mono text-sm text-ink">{enrolment.secret}</p>
+                  <a className="mb-2 block text-xs" href={enrolment.otpauthUri}>Open in authenticator app</a>
+                  <Input
+                    label="Code from the app"
+                    inputMode="numeric"
+                    value={totp}
+                    onChange={(e) => setTotp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="6 digits"
+                  />
+                  <button type="button" className="btn btn-sm btn-gold" disabled={busy || !/^\d{6}$/.test(totp)} onClick={() => void confirmEnrol()}>
+                    Confirm
+                  </button>
+                </>
+              )}
+            </div>
+          )}
           <div className="mb-3 text-right">
             <Link href="/staff/forgot-password" className="text-sm font-semibold text-navy hover:underline">
               Forgot password?
@@ -138,7 +217,7 @@ function LoginInner() {
         <DialogHeader>
           <DialogTitle id="session-conflict-title">You&apos;re signed in elsewhere</DialogTitle>
           <p className="text-sm text-muted">
-            Only one DhanBoost console session is allowed per account. Choose where you want to stay
+            Only one DhanNow console session is allowed per account. Choose where you want to stay
             signed in.
           </p>
         </DialogHeader>

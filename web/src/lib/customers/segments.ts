@@ -21,6 +21,7 @@ export type CustomerSegment =
   | "review"
   | "approved"
   | "disbursementPending"
+  | "awaitingConfirmation"
   | "active"
   | "overdue"
   | "hold"
@@ -38,6 +39,7 @@ export const SEGMENT_LABEL: Record<CustomerSegment, string> = {
   review: "Review",
   approved: "Approved",
   disbursementPending: "Disbursement Pending",
+  awaitingConfirmation: "Awaiting disbursal confirmation",
   active: "Active",
   overdue: "Overdue",
   hold: "Hold",
@@ -55,6 +57,7 @@ export const SEGMENTS: CustomerSegment[] = [
   "review",
   "approved",
   "disbursementPending",
+  "awaitingConfirmation",
   "active",
   "overdue",
   "hold",
@@ -98,6 +101,8 @@ export function segmentOf(
   if (loan && OVERDUE_LOAN.has(loan)) return "overdue";
   if (app && OVERDUE_APP.has(app)) return "overdue";
 
+  // PLAN Phase 10b: money sent with a UTR, waiting for the Accountant (mirrors CustomerSegments.java).
+  if (loan === "DISBURSING" || app === "DISBURSAL_CONFIRMATION_PENDING") return "awaitingConfirmation";
   if (loan && ACTIVE_LOAN.has(loan)) return "active";
   if (app && ACTIVE_APP.has(app)) return "active";
 
@@ -132,6 +137,7 @@ export function segmentCounts(rows: SegmentableCustomer[]): SegmentCounts {
     review: 0,
     approved: 0,
     disbursementPending: 0,
+    awaitingConfirmation: 0,
     active: 0,
     overdue: 0,
     hold: 0,

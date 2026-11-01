@@ -131,7 +131,7 @@ export default function AdminRejectionsPage() {
         <ExportMenu
           title="Rejections"
           subtitle="Rejection register"
-          fileBase="dhanboost-rejections"
+          fileBase="dhannow-rejections"
           columns={EXPORT_COLUMNS}
           rows={cr.rows}
           scope="all"

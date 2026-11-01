@@ -224,7 +224,7 @@ export default function CollectionsSettlementsPage() {
       >
         <ExportMenu
           title="Collections settlements"
-          fileBase="dhanboost-settlements"
+          fileBase="dhannow-settlements"
           columns={[
             { header: "Settlement", value: (s: SettlementView) => s.id },
             { header: "Case", value: (s) => s.collectionCaseId },

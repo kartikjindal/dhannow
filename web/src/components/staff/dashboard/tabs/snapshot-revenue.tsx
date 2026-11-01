@@ -100,7 +100,7 @@ export function Revenue(props: DashTabProps) {
       controls={
         t && (
           <>
-            <Chip color={SERIES.interest} label="Interest" value={formatInrCompact(t.interestPaise)} />
+            <Chip color={SERIES.interest} label="Interest earned upfront" value={formatInrCompact(t.interestPaise)} />
             <Chip color={SERIES.pf} label="PF" value={formatInrCompact(t.pfPaise)} />
             <Chip color={SERIES.penalty} label="Penalty" value={formatInrCompact(t.penaltyPaise)} />
           </>
@@ -129,7 +129,7 @@ export function Revenue(props: DashTabProps) {
               content={
                 <ChartTooltip
                   kinds={{ cumulative: "paise", interest: "paise", pf: "paise", penalty: "paise" }}
-                  labels={{ cumulative: "Cumulative revenue", interest: "Interest", pf: "Processing fee", penalty: "Penalty" }}
+                  labels={{ cumulative: "Cumulative revenue", interest: "Interest", pf: "Processing fee", penalty: "Late charges received" }}
                   title={(_l, row) => fmtDayLong(row?.date as string | undefined)}
                 />
               }
@@ -176,7 +176,7 @@ export function InterestPf(props: DashTabProps) {
   const labelled = data.length <= LABELS_MAX_BARS;
   return (
     <ChartCard
-      title="Interest & PF (daily)"
+      title="Interest & PF booked on confirmation (daily)"
       info="Per day: interest collected on loans closed that day (blue) and processing fee on loans disbursed that day (green). Click a day to see the loans disbursed."
       accent={SERIES.interest}
       loading={q.isLoading}

@@ -35,46 +35,39 @@ class DpdCalculatorTest {
     }
 
     @Test
-    void bucketMapsUpcomingForZeroOrNegative() {
+    void bucketsFollowTheSharedDefinitionAtEveryEdge() {
         assertThat(calc.bucket(-10)).isEqualTo(DpdBucket.UPCOMING);
-        assertThat(calc.bucket(0)).isEqualTo(DpdBucket.UPCOMING);
+        assertThat(calc.bucket(-1)).isEqualTo(DpdBucket.UPCOMING);
+        assertThat(calc.bucket(0)).isEqualTo(DpdBucket.DUE_TODAY);
+        assertThat(calc.bucket(1)).isEqualTo(DpdBucket.D1);
+        assertThat(calc.bucket(2)).isEqualTo(DpdBucket.D2_7);
+        assertThat(calc.bucket(7)).isEqualTo(DpdBucket.D2_7);
+        assertThat(calc.bucket(8)).isEqualTo(DpdBucket.REVIEW);
+        assertThat(calc.bucket(30)).isEqualTo(DpdBucket.REVIEW);
+        assertThat(calc.bucket(31)).isEqualTo(DpdBucket.D31_60);
+        assertThat(calc.bucket(60)).isEqualTo(DpdBucket.D31_60);
+        assertThat(calc.bucket(61)).isEqualTo(DpdBucket.D61_90);
+        assertThat(calc.bucket(90)).isEqualTo(DpdBucket.D61_90);
+        assertThat(calc.bucket(91)).isEqualTo(DpdBucket.D90_PLUS);
+        assertThat(calc.bucket(365)).isEqualTo(DpdBucket.D90_PLUS);
     }
 
     @Test
-    void bucketMapsT0T7BandInclusive() {
-        assertThat(calc.bucket(1)).isEqualTo(DpdBucket.T0_T7);
-        assertThat(calc.bucket(7)).isEqualTo(DpdBucket.T0_T7);
+    void bucketForUsesTheDueDateSoUpcomingAndDueTodayDiffer() {
+        assertThat(calc.bucketFor(DUE, DUE.minusDays(3))).isEqualTo(DpdBucket.UPCOMING);
+        assertThat(calc.bucketFor(DUE, DUE)).isEqualTo(DpdBucket.DUE_TODAY);
+        assertThat(calc.bucketFor(DUE, DUE.plusDays(5))).isEqualTo(DpdBucket.D2_7);
+        assertThat(calc.bucketFor(DUE, DUE.plusDays(20))).isEqualTo(DpdBucket.REVIEW);
+        assertThat(calc.bucketFor(DUE, DUE.plusDays(100))).isEqualTo(DpdBucket.D90_PLUS);
+        assertThat(calc.bucketFor(null, DUE)).isEqualTo(DpdBucket.UPCOMING);
     }
 
     @Test
-    void bucketMapsT8T30BandInclusive() {
-        assertThat(calc.bucket(8)).isEqualTo(DpdBucket.T8_T30);
-        assertThat(calc.bucket(30)).isEqualTo(DpdBucket.T8_T30);
-    }
-
-    @Test
-    void bucketMapsT30T60BandInclusive() {
-        assertThat(calc.bucket(31)).isEqualTo(DpdBucket.T30_T60);
-        assertThat(calc.bucket(60)).isEqualTo(DpdBucket.T30_T60);
-    }
-
-    @Test
-    void bucketMapsT60T90BandInclusive() {
-        assertThat(calc.bucket(61)).isEqualTo(DpdBucket.T60_T90);
-        assertThat(calc.bucket(90)).isEqualTo(DpdBucket.T60_T90);
-    }
-
-    @Test
-    void bucketMapsT90PlusAbove90() {
-        assertThat(calc.bucket(91)).isEqualTo(DpdBucket.T90_PLUS);
-        assertThat(calc.bucket(365)).isEqualTo(DpdBucket.T90_PLUS);
-    }
-
-    @Test
-    void bucketForComposesDaysAndBanding() {
-        assertThat(calc.bucketFor(DUE, DUE.minusDays(1))).isEqualTo(DpdBucket.UPCOMING);
-        assertThat(calc.bucketFor(DUE, DUE.plusDays(5))).isEqualTo(DpdBucket.T0_T7);
-        assertThat(calc.bucketFor(DUE, DUE.plusDays(20))).isEqualTo(DpdBucket.T8_T30);
-        assertThat(calc.bucketFor(DUE, DUE.plusDays(100))).isEqualTo(DpdBucket.T90_PLUS);
+    void theRbiClassesAreKeptAlongside() {
+        assertThat(DpdBucket.RbiClass.of(0)).isEqualTo(DpdBucket.RbiClass.RUNNING);
+        assertThat(DpdBucket.RbiClass.of(30)).isEqualTo(DpdBucket.RbiClass.D1_30);
+        assertThat(DpdBucket.RbiClass.of(91)).isEqualTo(DpdBucket.RbiClass.D90_PLUS);
+        assertThat(DpdBucket.RbiClass.sqlCase("x")).isEqualTo("case when x <= 0 then 'RUNNING' when x <= 30 then 'D1_30'"
+                + " when x <= 60 then 'D31_60' when x <= 90 then 'D61_90' else 'D90_PLUS' end");
     }
 }

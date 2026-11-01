@@ -16,8 +16,9 @@ import { errMessage } from "@/components/staff/live-pipeline";
 import { CasePaymentsCard, RecordPaymentCard } from "@/components/staff/collection-payments";
 import { LoanSelector, todayISO, useSelectedLoanId } from "@/components/staff/customer-360/loan-card";
 import type { TabCtx } from "@/components/staff/customer-360/types";
-import { bucketOf, dpdDays, loanCycle, ordinal } from "@/lib/calc/loan-kpis";
+import { bucketForLoan, dpdDays, loanCycle, ordinal } from "@/lib/calc/loan-kpis";
 import { COLLECTION_BUCKETS } from "@/lib/collection-buckets";
+import { EmiSection, ExtensionSection, HoldSection } from "@/components/staff/customer-360/loan-desk-sections";
 import { parsePositiveRupees, sanitizeRupeeInput } from "@/lib/collections/rupee-amount-input";
 import { useStaffSession } from "@/lib/auth/staff-session";
 import { can as rbacCan, type Permission } from "@/lib/auth/rbac";
@@ -38,7 +39,7 @@ const OUTCOMES = ["CONNECTED", "NO_ANSWER", "PROMISE_TO_PAY", "PAID", "DISPUTED"
 
 const bucketLabel = (b: DpdBucket) => COLLECTION_BUCKETS.find((x) => x.bucket === b)?.label ?? b;
 const bucketVariant = (b: DpdBucket) =>
-  b === "UPCOMING" ? "info" : b === "T0_T7" || b === "T8_T30" ? "warning" : "error";
+  b === "UPCOMING" || b === "DUE_TODAY" ? "info" : b === "D1" || b === "D2_7" || b === "REVIEW" ? "warning" : "error";
 
 /** The case for a loan plus its interactions; same query keys are shared with the Repayment tab. */
 export function useCollectionsCase(loanId: number | null) {
@@ -92,7 +93,7 @@ export function CollectionsTab(ctx: TabCtx) {
 
   // The server case dpd is measured to today even for a closed loan; a closed loan stops at closedOn.
   const dpd = loan.closedOn ? dpdDays(loan, istCalendarToday()) : (c?.dpd ?? dpdDays(loan, istCalendarToday()));
-  const bucket = (loan.closedOn ? null : c?.bucket) ?? (dpd != null ? bucketOf(dpd) : null);
+  const bucket = (loan.closedOn ? null : c?.bucket) ?? bucketForLoan(loan, istCalendarToday());
   const cycle = loanCycle(ctx.detail.loans, loan.id);
   const paidUp = loan.status === "CLOSED" || loan.status === "REPAID";
   const ptpOverdue = col.ptp != null && !paidUp && col.ptp < todayISO();
@@ -151,7 +152,9 @@ export function CollectionsTab(ctx: TabCtx) {
             onLogged={changed}
           />
           {canManage && <AssignSection caseId={c.id} currentOfficerName={c.assignedOfficerName} onAssigned={changed} />}
+          <ExtensionSection caseId={c.id} />
           {canInteract && <SettlementSection caseId={c.id} />}
+          <EmiSection loanId={loan.id} />
           <Section title="Payments">
             <div className="space-y-3">
               <CasePaymentsCard caseId={c.id} />
@@ -168,6 +171,7 @@ export function CollectionsTab(ctx: TabCtx) {
         </>
       )}
 
+      <HoldSection loanId={loan.id} hold={loan.holdStatus} />
       <CallsSection customerId={ctx.customerId} loanId={loan.id} />
     </div>
   );

@@ -193,7 +193,7 @@ export function RepaymentVerifyQueue() {
                       <span className="ml-1 rounded-full bg-gold-50 px-1.5 py-0.5 text-xs text-gold-dark">partial</span>
                     )}
                   </td>
-                  <td className="py-2.5 pr-3">{METHOD_LABEL[p.method] ?? p.method}</td>
+                  <td className="py-2.5 pr-3">{METHOD_LABEL[p.method] ?? p.method}{p.purpose === "EXTENSION" && <span className="ml-1 rounded bg-gold-50 px-1.5 py-0.5 text-[9px] font-semibold text-gold-dark">Extension charge</span>}</td>
                   <td className="py-2.5 pr-3 text-muted">{p.txnRef || "—"}</td>
                   <td className="py-2.5 pr-3">
                     <PaymentProofLink url={p.proofUrl} className="text-xs" />

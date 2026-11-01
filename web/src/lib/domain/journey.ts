@@ -122,6 +122,7 @@ export function stageOf(
       return { stage: "CREDIT_REVIEW", state: "done" };
     case "DISBURSEMENT_PENDING":
       return { stage: "DISBURSEMENT", state: "pending" };
+    case "DISBURSAL_CONFIRMATION_PENDING":
     case "ACCOUNTANT_PENDING":
       return { stage: "DISBURSEMENT", state: "in_progress" };
     case "DISBURSEMENT_FAILED":

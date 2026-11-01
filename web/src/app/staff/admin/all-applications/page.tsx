@@ -36,7 +36,7 @@ const QUERY_KEY = ["admin-all-applications"] as const;
 const STATUS_KEYS: Record<ApplicationStatus, true> = {
   DRAFT: true, KYC_PENDING: true, KYC_APPROVED: true, KYC_REJECTED: true, PRE_APPROVED: true,
   REVIEW_PENDING: true, CREDIT_EXEC_PENDING: true, CREDIT_EXEC_APPROVED: true, CREDIT_HEAD_PENDING: true,
-  CREDIT_HEAD_APPROVED: true, SANCTIONED: true, DISBURSEMENT_PENDING: true, ACCOUNTANT_PENDING: true,
+  CREDIT_HEAD_APPROVED: true, SANCTIONED: true, DISBURSEMENT_PENDING: true, DISBURSAL_CONFIRMATION_PENDING: true, ACCOUNTANT_PENDING: true,
   DISBURSEMENT_FAILED: true, DISBURSED: true, ACTIVE: true, OVERDUE: true, DEFAULTED: true, CLOSED: true,
   WRITTEN_OFF: true, REJECTED: true, CANCELLED: true,
 };
@@ -118,7 +118,6 @@ const EXPORT_COLUMNS: ExportColumn<AdminApplicationView>[] = [
   { header: "Amount requested (₹)", value: (a) => rupees(a.amountRequestedPaise) },
   { header: "Eligible limit (₹)", value: (a) => rupees(a.eligibleLimitPaise) },
   { header: "Purpose", value: (a) => a.purpose ?? "" },
-  { header: "Salary day", value: (a) => a.salaryCreditDay ?? "" },
   { header: "Loan ID", value: (a) => a.loanId ?? "" },
   { header: "Assigned exec", value: (a) => a.assignedExecutiveName ?? "" },
   { header: "Stage since", value: (a) => a.currentStageEnteredAt ?? "" },
@@ -254,7 +253,7 @@ function AllApplicationsRegister({ staffId }: { staffId: string }) {
           subtitle={["Full application register", filter !== "ALL" ? `Completeness: ${filter.toLowerCase()}` : "", describeRegister(th)]
             .filter(Boolean)
             .join(" · ")}
-          fileBase="dhanboost-all-applications"
+          fileBase="dhannow-all-applications"
           columns={EXPORT_COLUMNS}
           rows={pageRows}
           scope="page"

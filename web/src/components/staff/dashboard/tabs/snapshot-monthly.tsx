@@ -23,7 +23,6 @@ import { BAR, CURSOR, DeltaPill, GRID, PctChip, VALUE_LABEL, X_AXIS, Y_AXIS, act
 import { NAVY, PCT_TONE_COLOR, SERIES, TEXT, TONE_SOLID, WHITE, fmtPct, pctTone } from "../colors";
 import { fmtMonth, fmtMonthShort, monthRange, nf } from "../fmt";
 import { deltaPct } from "../kpi-card";
-import { Gauge } from "../gauge";
 import type { DashTabProps } from "../tab-props";
 import { TargetsDialog } from "../targets-dialog";
 import { useDashQuery } from "../use-dash-query";
@@ -40,7 +39,6 @@ export function SnapshotMonthly({ params, open, realAdmin, topOnly = false }: Da
   const months = q.data?.months ?? [];
   const latest = months[months.length - 1];
 
-  const [gaugeMonth, setGaugeMonth] = React.useState<string | undefined>();
   const [deficitMonth, setDeficitMonth] = React.useState<string | undefined>();
   const [targetMonth, setTargetMonth] = React.useState<string | undefined>();
   const [editTargets, setEditTargets] = React.useState(false);
@@ -176,26 +174,7 @@ export function SnapshotMonthly({ params, open, realAdmin, topOnly = false }: Da
           <Legend3 />
         </ChartCard>
 
-        {/* Pre-closure gauge ------------------------------------------- */}
-        <ChartCard
-          title={`Pre-Closure % (last ${MONTHS_BACK} months)`}
-          info="Loans due in the month that were closed BEFORE their due date, ÷ all loans due that month."
-          accent={SERIES.good}
-          {...shared}
-        >
-          <Gauge
-            months={months.map((m) => ({
-              key: m.month,
-              label: fmtMonthShort(m.month),
-              pct: m.preclosurePct,
-              loans: m.dueLoans,
-            }))}
-            selected={gaugeMonth ?? latest?.month}
-            onSelect={setGaugeMonth}
-            onOpen={(m) => openMonth(m, "Loans due (pre-closure base)")}
-            caption={`${nf(months.find((m) => m.month === (gaugeMonth ?? latest?.month))?.preclosedCount)} closed before due date`}
-          />
-        </ChartCard>
+        {/* Pre-closure gauge removed (PLAN Phase 10b): interest is prepaid, so paying early changes nothing. */}
 
         {/* Deficit ------------------------------------------------------- */}
         <ChartCard

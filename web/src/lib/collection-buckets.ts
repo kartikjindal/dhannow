@@ -1,22 +1,36 @@
 import type { DashTone, DpdBucket } from "@/lib/api/applications";
 
-export const COLLECTION_BUCKETS: ReadonlyArray<{ bucket: DpdBucket; label: string }> = [
-  { bucket: "UPCOMING", label: "Upcoming" },
-  { bucket: "T0_T7", label: "1–7 DPD" },
-  { bucket: "T8_T30", label: "8–30 DPD" },
-  { bucket: "T30_T60", label: "31–60 DPD" },
-  { bucket: "T60_T90", label: "61–90 DPD" },
-  { bucket: "T90_PLUS", label: "90+ DPD" },
+/**
+ * The collections DPD buckets: a mirror of the backend's one definition
+ * (`backend/navix-collections/.../domain/DpdBucket.java`, PLAN Phase 10b R10). `collection-buckets.test.ts`
+ * reads that file and fails if the names, order or labels drift.
+ */
+export const COLLECTION_BUCKETS: ReadonlyArray<{ bucket: DpdBucket; label: string; max: number }> = [
+  { bucket: "UPCOMING", label: "Upcoming", max: -1 },
+  { bucket: "DUE_TODAY", label: "Due today", max: 0 },
+  { bucket: "D1", label: "1 DPD", max: 1 },
+  { bucket: "D2_7", label: "2–7 DPD", max: 7 },
+  { bucket: "REVIEW", label: "Review 8–30 DPD", max: 30 },
+  { bucket: "D31_60", label: "31–60 DPD", max: 60 },
+  { bucket: "D61_90", label: "61–90 DPD", max: 90 },
+  { bucket: "D90_PLUS", label: "90+ DPD", max: Number.MAX_SAFE_INTEGER },
 ];
+
+/** The bucket for `today − due date` in IST days (negative = not yet due); the server's rule. */
+export function bucketOfDays(daysFromDue: number): DpdBucket {
+  return (COLLECTION_BUCKETS.find((b) => daysFromDue <= b.max) ?? COLLECTION_BUCKETS[COLLECTION_BUCKETS.length - 1]).bucket;
+}
 
 /** One colour per bucket, shared by the overview cards and the working page's bucket switcher. */
 export const BUCKET_TONE: Record<DpdBucket, DashTone> = {
   UPCOMING: "sky",
-  T0_T7: "amber",
-  T8_T30: "orange",
-  T30_T60: "red",
-  T60_T90: "violet",
-  T90_PLUS: "navy",
+  DUE_TODAY: "sky",
+  D1: "amber",
+  D2_7: "amber",
+  REVIEW: "orange",
+  D31_60: "red",
+  D61_90: "violet",
+  D90_PLUS: "navy",
 };
 
 /** Rows per bucket. Takes anything carrying a `bucket` — worklist rows today, cases historically. */

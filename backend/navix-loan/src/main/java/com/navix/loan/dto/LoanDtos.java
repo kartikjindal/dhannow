@@ -81,7 +81,9 @@ public final class LoanDtos {
             /** The extension open to the borrower (Head-approved, not yet active or ended); null when none. */
             PendingExtension pendingExtension,
             /** Every extension the borrower was shown, oldest first; null outside the borrower's loan read. */
-            java.util.List<ExtensionLine> extensions) {
+            java.util.List<ExtensionLine> extensions,
+            /** Phase 10b, additive: the interest deducted at disbursal (prepaid, never owed); null on navix terms. */
+            Long upfrontInterestPaise) {
 
         public static LoanView of(Loan l) {
             return of(l, l.getOutstanding(), l.getStatus());
@@ -91,7 +93,7 @@ public final class LoanDtos {
             return new LoanView(id, customerId, principalPaise, processingFeePaise, gstPaise, netDisbursedPaise,
                     dailyInterestRate, disbursedOn, dueDate, totalRepayablePaise, outstandingPaise, status,
                     disbursalTxnRef, closedOn, graceDays, lifecycleStatus, holdStatus, repaymentStatus,
-                    originalDueDate, extensionCount, pending, lines);
+                    originalDueDate, extensionCount, pending, lines, upfrontInterestPaise);
         }
 
         /**
@@ -105,7 +107,7 @@ public final class LoanDtos {
                     l.getDueDate(), l.getTotalRepayable(), outstandingPaise, status,
                     l.getDisbursalTxnRef(), l.getClosedOn(), l.getGraceDays(),
                     l.getLifecycleStatus(), l.getHoldStatus(), l.getRepaymentStatus(),
-                    l.getOriginalDueDate(), l.getExtensionCount(), null, null);
+                    l.getOriginalDueDate(), l.getExtensionCount(), null, null, l.getUpfrontInterestPaise());
         }
     }
 

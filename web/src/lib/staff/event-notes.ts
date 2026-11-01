@@ -3,8 +3,8 @@ import { formatDate } from "@/lib/utils";
 
 /**
  * Turns the machine-readable notes the flow service writes on an application event
- * ("amountPaise=500000 salaryCreditDay=30 projectedRepaymentDate=2026-11-30 — looks fine") into a
- * line a reviewer can read ("Amount ₹5,000 · Salary day 30 · Repayment date 30 Nov 2026 · looks
+ * ("amountPaise=500000 salaryCreditDay=null projectedRepaymentDate=2026-11-30 — looks fine") into a
+ * line a reviewer can read ("Amount ₹5,000 · Repayment date 30 Nov 2026 · looks
  * fine"). Keys it does not know are kept as written; free text after " — " is kept verbatim.
  * Mirrors the backend's DecisionNotes.parse, which only the My decisions page uses.
  */
@@ -33,7 +33,8 @@ export function formatEventNotes(notes: string | null | undefined): string | nul
         break;
       case "salaryCreditDay":
         anyKnown = true;
-        parts.push(`Salary day ${value}`);
+        // Navix terms only; DhanNow sanctions record null (the due date is disbursal + 14 days).
+        if (value !== "null") parts.push(`Salary credit day ${value}`);
         break;
       case "projectedRepaymentDate":
         anyKnown = true;

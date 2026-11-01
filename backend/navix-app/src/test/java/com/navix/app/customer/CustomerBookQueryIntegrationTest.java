@@ -75,7 +75,8 @@ class CustomerBookQueryIntegrationTest {
     private static String expectedSegment(String loan, String app) {
         if (loan != null && Set.of("OVERDUE", "IN_COLLECTIONS").contains(loan)) return "overdue";
         if (Set.of("OVERDUE", "DEFAULTED").contains(app)) return "overdue";
-        if (loan != null && Set.of("ACTIVE", "DISBURSING").contains(loan)) return "active";
+        if ("DISBURSING".equals(loan) || "DISBURSAL_CONFIRMATION_PENDING".equals(app)) return "awaitingConfirmation";
+        if (loan != null && "ACTIVE".equals(loan)) return "active";
         if (Set.of("DISBURSED", "ACTIVE").contains(app)) return "active";
         if (Set.of("REVIEW_PENDING", "CREDIT_EXEC_PENDING", "CREDIT_HEAD_PENDING").contains(app)) return "review";
         if (Set.of("KYC_APPROVED", "CREDIT_EXEC_APPROVED", "CREDIT_HEAD_APPROVED", "SANCTIONED").contains(app)) {

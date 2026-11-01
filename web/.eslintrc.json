@@ -8,6 +8,17 @@
         "varsIgnorePattern": "^_",
         "caughtErrorsIgnorePattern": "^_"
       }
+    ],
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": ["@/components/borrower", "@/components/borrower/*", "@/components/site", "@/components/site/*", "@/app/(borrower)/*", "@/app/(marketing)/*", "@/lib/borrower-*", "@/lib/onboarding*", "@/lib/api/live-journey", "@/stores/application-store"],
+            "message": "The staff console has no borrower web (PLAN Phase 10): borrowers use the Android app."
+          }
+        ]
+      }
     ]
   }
 }

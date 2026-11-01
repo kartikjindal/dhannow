@@ -14,6 +14,36 @@ const out = (over: Partial<OutstandingView> = {}): OutstandingView => ({
 });
 const row = (l: ReturnType<typeof buildLedger>, k: string) => l.rows.find((r) => r.key === k)!;
 
+/** The DhanNow ₹10,000 loan (PLAN Phase 10b): net ₹7,420, interest ₹1,400 prepaid, repay ₹10,000. */
+const dn = (over: Partial<LoanView> = {}): LoanView => loan({
+  principalPaise: 1_000_000, processingFeePaise: 100_000, gstPaise: 18_000, netDisbursedPaise: 742_000,
+  upfrontInterestPaise: 140_000, totalRepayablePaise: 1_000_000, outstandingPaise: 1_000_000,
+  disbursedOn: "2026-11-03", dueDate: "2026-11-17", ...over,
+});
+
+describe("buildLedger on DhanNow terms (R8)", () => {
+  it("shows interest as prepaid at disbursal and owes principal only", () => {
+    const l = buildLedger({
+      loan: dn(), outstanding: out({ outstandingPaise: 1_000_000, interestPaise: 0, interestPrepaidPaise: 140_000 }),
+      payments: [], today: new Date(2026, 10, 10),
+    });
+    expect(l.rows.map((r) => r.key)).toEqual(["principal", "penalty", "interest", "total"]);
+    expect(row(l, "interest")).toMatchObject({ prepaid: true, payablePaise: 140_000, dueTodayPaise: 0, outstandingPaise: 0, days: 14 });
+    expect(row(l, "total")).toMatchObject({ payablePaise: 1_000_000, dueTodayPaise: 1_000_000, outstandingPaise: 1_000_000 });
+  });
+
+  it("splits a payment late charge first, then principal", () => {
+    const l = buildLedger({
+      loan: dn({ status: "OVERDUE" }),
+      outstanding: out({ outstandingPaise: 660_000, interestPaise: 0, penaltyPaise: 60_000, penaltyDays: 3, verifiedPaise: 400_000 }),
+      payments: [], today: new Date(2026, 10, 20),
+    });
+    expect(row(l, "penalty")).toMatchObject({ dueTodayPaise: 60_000, receivedPaise: 60_000, outstandingPaise: 0 });
+    expect(row(l, "principal")).toMatchObject({ receivedPaise: 340_000, outstandingPaise: 660_000 });
+    expect(row(l, "total").outstandingPaise).toBe(660_000);
+  });
+});
+
 describe("buildLedger", () => {
   it("active, 1 day held", () => {
     const l = buildLedger({ loan: loan(), outstanding: out(), payments: [], today: new Date(2026, 9, 9) });

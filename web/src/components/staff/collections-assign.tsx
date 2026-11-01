@@ -7,7 +7,7 @@
  * queue or bucket row could see who was assigned and never change it. And it hung off a list of
  * *cases*, so a loan without one offered nothing at all. Here it takes a loan id, opens the case
  * behind the assign (idempotent server-side), and works the same whether or not one exists — which
- * is what makes chasing a borrower BEFORE their salary day possible: assigning a pre-due loan no
+ * is what makes chasing a borrower BEFORE their due date possible: assigning a pre-due loan no
  * longer flips it to IN_COLLECTIONS, so an on-time borrower is never branded delinquent.
  *
  * Three shapes of the same action live here — `WorklistAssignActions` (a button opening a dialog, for

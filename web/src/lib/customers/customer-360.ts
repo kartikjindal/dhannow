@@ -4,7 +4,6 @@
  * test and the page and the list dialog cannot compute them two different ways.
  */
 
-import { daysBetween } from "@/lib/calc/loan-math";
 import type { ActivityEntry, CustomerDetail } from "@/lib/api/applications";
 
 // ---------------------------------------------------------------------------
@@ -28,25 +27,6 @@ export function istCalendarToday(now: Date = new Date()): Date {
 }
 
 /**
- * The salary-linked due date must fall within this many days of disbursal (CLAUDE.md §9, backend
- * `LoanMath.MAX_TERM_DAYS`). Mirrored here because `loan-math.ts` keeps its copy private.
- */
-export const SALARY_DUE_MAX_DAYS = 40;
-
-/**
- * How far a projected due date sits from the disbursal it was projected from, and whether that
- * breaks the 40-day rule. Calendar days, time of day ignored.
- */
-export function salaryDueWindow(
-  disbursedOn: Date,
-  dueDate: Date,
-  maxDays: number = SALARY_DUE_MAX_DAYS,
-): { days: number; exceeds: boolean } {
-  const days = daysBetween(disbursedOn, dueDate);
-  return { days, exceeds: days > maxDays };
-}
-
-/**
  * A `yyyy-mm-dd` business date (a backend `LocalDate`) as a local-midnight `Date`, or null when the
  * string is not one. `new Date("2026-10-03")` parses as UTC midnight, which a browser west of UTC
  * then shows as the 2nd — this keeps the calendar day the backend meant.
@@ -59,19 +39,19 @@ export function isoDayToLocalDate(iso: string | null | undefined): Date | null {
 }
 
 // ---------------------------------------------------------------------------
-// Eligible-limit basis
+// Limit basis (R9: the credit ladder; an admin exception is the only other source)
 // ---------------------------------------------------------------------------
 
 export type LimitBasis = "ADMIN_OVERRIDE" | "SALARY_RULE";
 
 export const LIMIT_BASIS_LABEL: Record<LimitBasis, string> = {
-  ADMIN_OVERRIDE: "Admin override",
-  SALARY_RULE: "Salary rule",
+  ADMIN_OVERRIDE: "Admin exception",
+  SALARY_RULE: "Ladder level",
 };
 
 /**
- * Where a customer's eligible limit comes from: an ADMIN-set override when one is stored on the
- * customer (`limitOverridePaise`), otherwise the 25%-of-monthly-salary rule.
+ * Where a customer's limit comes from: an ADMIN-set exception when one is stored on the customer
+ * (`limitOverridePaise`), otherwise their credit-ladder level. (`SALARY_RULE` is the navix key, kept.)
  */
 export function limitBasisOf(overridePaise: number | null | undefined): LimitBasis {
   return overridePaise != null ? "ADMIN_OVERRIDE" : "SALARY_RULE";

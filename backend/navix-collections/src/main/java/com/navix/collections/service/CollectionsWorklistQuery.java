@@ -6,6 +6,7 @@ import static com.navix.common.query.ColumnFilter.Kind.NUM;
 import static com.navix.common.query.ColumnFilter.Kind.TEXT;
 import static com.navix.common.util.LikeEscape.escapeLike;
 
+import com.navix.collections.domain.DpdBucket;
 import com.navix.common.query.FilterColumns;
 import com.navix.common.query.FilterSpec;
 import com.navix.common.query.SqlFacets;
@@ -59,14 +60,8 @@ public class CollectionsWorklistQuery {
                 select l.id as loan_id, l.customer_id, l.due_date, l.principal,
                        cast(l.due_date as timestamp) at time zone 'Asia/Kolkata' as due_ts,
                        coalesce(greatest(0, cast(:today as date) - l.due_date), 0) as dpd,
-                       case
-                         when coalesce(cast(:today as date) - l.due_date, 0) <= 0 then 'UPCOMING'
-                         when cast(:today as date) - l.due_date <= 7 then 'T0_T7'
-                         when cast(:today as date) - l.due_date <= 30 then 'T8_T30'
-                         when cast(:today as date) - l.due_date <= 60 then 'T30_T60'
-                         when cast(:today as date) - l.due_date <= 90 then 'T60_T90'
-                         else 'T90_PLUS'
-                       end as bucket,
+                       """ + DpdBucket.sqlCase("coalesce(cast(:today as date) - l.due_date, 0)") + """
+                        as bucket,
                        p.full_name, p.pan_hash, p.mobile, p.employer, p.monthly_salary_paise as salary,
                        cc.assigned_officer_id as officer_id, su.name as officer_name,
                        (select e.status from loan_extension e where e.loan_id = l.id

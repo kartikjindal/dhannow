@@ -23,7 +23,7 @@ const loan = {
 } as LoanView;
 const CASE: CaseDetailView = {
   id: "case-77", loanId: 77, assignedOfficerId: 5, assignedOfficerName: "Officer",
-  createdAt: "2026-10-01T10:00:00Z", dpd: 4, bucket: "T0_T7", loan: null,
+  createdAt: "2026-10-01T10:00:00Z", dpd: 4, bucket: "D2_7", loan: null,
 };
 
 function renderTab(l: LoanView = loan) {
@@ -154,7 +154,7 @@ describe("Collections tab", () => {
   });
 
   it("closed loan: DPD stops at closedOn, not the server case dpd", async () => {
-    vi.spyOn(collectionsApi, "caseByLoan").mockResolvedValue({ ...CASE, dpd: 99, bucket: "T90_PLUS" });
+    vi.spyOn(collectionsApi, "caseByLoan").mockResolvedValue({ ...CASE, dpd: 99, bucket: "D90_PLUS" });
     renderTab({ ...loan, status: "CLOSED", closedOn: "2026-10-07" } as LoanView);
     expect(await screen.findByText(/2 days/)).toBeInTheDocument();
     expect(screen.queryByText(/99/)).toBeNull();

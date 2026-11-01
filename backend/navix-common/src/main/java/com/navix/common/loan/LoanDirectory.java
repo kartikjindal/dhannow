@@ -45,7 +45,7 @@ public interface LoanDirectory {
     /**
      * The collections worklist as of {@code asOf}: every live loan (ACTIVE / OVERDUE /
      * IN_COLLECTIONS) already past due, <b>plus</b> those falling due within the next
-     * {@link #PRE_DUE_WINDOW_DAYS} days so an officer can chase the borrower before salary day.
+     * {@link #PRE_DUE_WINDOW_DAYS} days so an officer can call the borrower before the due date.
      * Sorted by due date, soonest first.
      *
      * <p>Loans further out are excluded on purpose — without a window this returns the entire live
@@ -53,8 +53,8 @@ public interface LoanDirectory {
      */
     List<LoanSummary> listCollectible(LocalDate asOf);
 
-    /** How far ahead of the due date a loan becomes workable by collections. */
-    int PRE_DUE_WINDOW_DAYS = 7;
+    /** How far ahead of the due date a loan becomes workable by collections: 2 days for the 14-day tenure (PLAN Phase 10b). */
+    int PRE_DUE_WINDOW_DAYS = 2;
 
     /**
      * Live loans whose due date is still AHEAD of {@code asOf}, soonest first — the pre-due

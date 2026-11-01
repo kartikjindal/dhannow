@@ -8,7 +8,9 @@ describe("formatEventNotes", () => {
   it("labels loan ids and keeps a trailing remark", () => {
     expect(formatEventNotes("loanId=214")).toBe("Loan #214");
     expect(formatEventNotes("amountPaise=1000000 salaryCreditDay=30 projectedRepaymentDate=2026-11-30 — looks fine"))
-      .toBe("Amount ₹10,000 · Salary day 30 · Repayment date 30 Nov 2026 · looks fine");
+      .toBe("Amount ₹10,000 · Salary credit day 30 · Repayment date 30 Nov 2026 · looks fine");
+    expect(formatEventNotes("amountPaise=1000000 salaryCreditDay=null projectedRepaymentDate=2026-11-30"))
+      .toBe("Amount ₹10,000 · Repayment date 30 Nov 2026");
   });
   it("describes a reassignment", () => {
     expect(formatEventNotes("previousExecutiveId=4 newExecutiveId=9")).toBe("From executive #4 · To executive #9");

@@ -83,7 +83,11 @@ function Dashboard() {
 
   // DSA is a firewalled portal role with no dashboard permission at all; the backend is the real guard.
   if (realRole === "DSA" || !view || !params) {
-    return <NoAccessNotice message="DSAs use the leads and earnings pages — see the DSA menu." />;
+    return (
+      <NoAccessNotice
+        message={realRole === "DSA" ? "DSAs use the leads and earnings pages — see the DSA menu." : "Your desks are in the menu on the left."}
+      />
+    );
   }
 
   const periodLabel = `${fmtDayLong(params.from)} – ${fmtDayLong(params.to)}`;

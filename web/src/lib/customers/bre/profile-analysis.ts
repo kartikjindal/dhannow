@@ -18,7 +18,7 @@ import {
 export type ProfessionCategory = "SELF_EMPLOYED" | "ARMY" | "LAWYER" | "MHA";
 
 /**
- * The professions DhanBoost does not lend to. Matched as whole words against employer names,
+ * The professions DhanNow does not lend to. Matched as whole words against employer names,
  * occupations, email domains and bureau addresses. The Central Armed Police Forces, Assam Rifles and
  * the Intelligence Bureau are listed under the Ministry of Home Affairs because that is who employs
  * them. Edit here to change the policy — the BRE tab and the CRIF panel both read this list.

@@ -127,7 +127,7 @@ function AdminStaffPageInner() {
       >
         <ExportMenu
           title="Staff accounts"
-          fileBase="dhanboost-staff"
+          fileBase="dhannow-staff"
           columns={[
             { header: "ID", value: (s: StaffResponse) => s.id },
             { header: "Name", value: (s) => s.name },

@@ -185,7 +185,7 @@ class CollectionsServiceTest {
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).caseId()).isNull();
         assertThat(rows.get(0).assignedOfficerName()).isNull();
-        assertThat(rows.get(0).bucket()).isEqualTo(DpdBucket.T8_T30);
+        assertThat(rows.get(0).bucket()).isEqualTo(DpdBucket.REVIEW);
         assertThat(rows.get(0).dpd()).isEqualTo(9);
     }
 
@@ -259,7 +259,7 @@ class CollectionsServiceTest {
         CaseDetailView detail = service.getCaseDetail(caseId);
 
         assertThat(detail.dpd()).isEqualTo(10);
-        assertThat(detail.bucket()).isEqualTo(DpdBucket.T8_T30);
+        assertThat(detail.bucket()).isEqualTo(DpdBucket.REVIEW);
     }
 
     @Test

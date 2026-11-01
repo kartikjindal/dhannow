@@ -57,6 +57,7 @@ const APPLICATION: Record<ApplicationStatus, BadgeVariant> = {
   CREDIT_HEAD_APPROVED: "info",
   SANCTIONED: "info",
   DISBURSEMENT_PENDING: "warning",
+  DISBURSAL_CONFIRMATION_PENDING: "info",
   ACCOUNTANT_PENDING: "warning",
   DISBURSEMENT_FAILED: "error",
   DISBURSED: "info",

@@ -62,24 +62,6 @@ export async function loginStaff(page: Page, role: StaffRole): Promise<boolean> 
   return true;
 }
 
-/** Request a borrower OTP and return the dev-echo code (backend runs with dev-echo on). */
-export async function requestBorrowerOtp(page: Page, mobile: string): Promise<string> {
-  const res = await page.request.post("/api/auth/borrower/otp/request", { data: { mobile } });
-  const body = (await res.json()) as { devCode?: string };
-  if (!body?.devCode) {
-    throw new Error("No devCode returned — the backend must run with NAVIX_SMS_DEV_ECHO=true");
-  }
-  return body.devCode;
-}
-
-/** Log a borrower in via the BFF (OTP via dev-echo). Returns the applicantId. */
-export async function loginBorrower(page: Page, mobile: string, name = "E2E Tester"): Promise<number> {
-  const otp = await requestBorrowerOtp(page, mobile);
-  const res = await page.request.post("/api/auth/borrower/login", { data: { mobile, otp, name } });
-  const body = (await res.json()) as { applicantId: number };
-  return body.applicantId;
-}
-
 /** A unique-ish 10-digit Indian mobile per test run (avoids OTP-store collisions). */
 export function uniqueMobile(): string {
   const n = (Date.now() % 1_000_000).toString().padStart(6, "0");

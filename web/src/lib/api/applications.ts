@@ -1,5 +1,5 @@
 /**
- * Typed client for the DhanBoost backend application state-machine API.
+ * Typed client for the DhanNow backend application state-machine API.
  *
  * IMPORTANT: these functions call the Next.js BFF proxies, NOT the Spring
  * backend directly. Staff actions/queues go through `/api/staff/applications/*`
@@ -34,6 +34,8 @@ export type ApplicationStatus =
   // Credit has decided; the borrower is walking the post-approval journey (V45).
   | "SANCTIONED"
   | "DISBURSEMENT_PENDING"
+  // Phase 4: money sent with a UTR, waiting for the Accountant to confirm it was credited.
+  | "DISBURSAL_CONFIRMATION_PENDING"
   | "ACCOUNTANT_PENDING"
   | "DISBURSEMENT_FAILED"
   | "DISBURSED"
@@ -417,13 +419,22 @@ export interface LoanView {
   /** Penalty-free days after the due date this loan was written with (1 on legacy loans, 0 on new ones).
    *  Optional: an older backend omits it, and a missing value reads as 1 (`loanGraceDays`). */
   graceDays?: number;
+  /** DhanNow states (Phase 3, R5): use these, not the navix `status`. */
+  lifecycleStatus?: import("@/lib/domain/loan").LoanLifecycle | null;
+  holdStatus?: import("@/lib/domain/loan").LoanHold | null;
+  repaymentStatus?: import("@/lib/domain/loan").RepaymentStatus | null;
+  /** Phase 6b: the due date before any extension, and how many are active ("Extended n of 3"). */
+  originalDueDate?: string | null;
+  extensionCount?: number;
+  /** Interest deducted at disbursal (prepaid, never owed); null on navix terms (Phase 10b R4). */
+  upfrontInterestPaise?: number | null;
 }
 
 /** The loan's grace days, defaulting to the legacy 1 when the backend did not send the field. */
 export const loanGraceDays = (loan: { graceDays?: number } | null | undefined) => loan?.graceDays ?? 1;
 
 /**
- * The three balances the repay screen quotes together: as of the requested day, on the salary day
+ * The three balances the repay screen quotes together: as of the requested day, on the due date
  * the loan is due, and on its grace day after it. `due`/`grace` are null when the loan has no
  * due date yet; `grace` is also null when the loan carries no grace day. One call in place of three `outstanding` round trips for the same screen.
  */
@@ -450,6 +461,8 @@ export interface OutstandingView {
    *  of the loan's grace days and capped at 30 — so the UI can show "1%/day × 27 days". */
   interestDays?: number;
   penaltyDays?: number;
+  /** Interest deducted at disbursal: shown, never part of what is owed (R4). */
+  interestPrepaidPaise?: number;
 }
 
 export type PaymentMethodName = "UPI" | "BANK_TRANSFER" | "NACH";
@@ -466,6 +479,9 @@ export interface PaymentView {
   proofUrl: string | null;
   paidOn: string | null;
   partial: boolean;
+  /** Phase 6b: REPAYMENT or EXTENSION (an extension charge never reduces principal). */
+  purpose?: "REPAYMENT" | "EXTENSION";
+  extensionId?: string | null;
   /** Staff-only context populated by the accountant's pending-verification queue. */
   customerId?: number | null;
   customerName?: string | null;
@@ -612,7 +628,7 @@ export interface ProfileInput {
   salaryAccountNumber?: string;
   salaryIfsc?: string;
   salaryAccountMobile?: string;
-  /** Last salary credit date (ISO yyyy-mm-dd); the recurring salary day is derived from it. */
+  /** Last salary credit date (ISO yyyy-mm-dd); the recurring salary credit date is derived from it. */
   previousSalaryDate?: string;
   /** Self-employed declared annual income, in paise. */
   annualSalaryPaise?: number;
@@ -1283,7 +1299,7 @@ export class VerificationRetryTimeoutError extends Error {
 
 type Method = "GET" | "POST" | "PUT" | "DELETE";
 
-async function bff<T>(path: string, method: Method, body?: unknown): Promise<T> {
+export async function bff<T>(path: string, method: Method, body?: unknown): Promise<T> {
   const acting = currentActingRole();
   let res: Response;
   try {
@@ -1373,8 +1389,6 @@ async function putToPresignedUrl(url: string, body: Blob, contentType: string): 
 // Borrower client — routes under /api/borrower/*
 // ---------------------------------------------------------------------------
 
-const BORROWER_BASE = "/api/borrower/applications";
-const BORROWER_LOAN_BASE = "/api/borrower/loan";
 
 // --- Onboarding-paused waitlist (`/api/onboarding-waitlist`) ---------------------------------
 
@@ -1408,129 +1422,8 @@ export interface WaitlistEntry {
   createdAt: string;
 }
 
-export const publicApi = {
-  /** Anonymous: is new onboarding paused? Fails open (false) so a hiccup never blocks sign-in. */
-  onboardingPaused: async (): Promise<boolean> => {
-    try {
-      const res = await fetch("/api/auth/borrower/onboarding", { cache: "no-store" });
-      if (!res.ok) return false;
-      return !!((await res.json()) as { paused?: boolean }).paused;
-    } catch {
-      return false;
-    }
-  },
-};
 
-export const borrowerApi = {
-  /** Onboarding-paused gate for the signed-in borrower. */
-  onboardingGate: () => bff<OnboardingGate>("/api/borrower/onboarding-waitlist", "GET"),
-  submitWaitlist: (body: { fullName: string; email: string; mobile: string; pan: string; aadhaar: string }) =>
-    bff<WaitlistSubmission>("/api/borrower/onboarding-waitlist", "POST", body),
 
-  /** Create a DRAFT application for the given customer. */
-  create: (customerId: number) =>
-    bff<ApplicationView>(`${BORROWER_BASE}`, "POST", { customerId }),
-
-  /**
-   * Returning-borrower reborrow: start a new advance reusing the saved KYC profile (customerId is
-   * resolved server-side from the session). Returns PRE_APPROVED (good standing → choose amount) or
-   * REVIEW_PENDING (past delinquency → held for KYC review). Throws NO_PRIOR_LOAN / ACTIVE_LOAN.
-   */
-  reborrow: () => bff<ApplicationView>(`${BORROWER_BASE}/reborrow`, "POST"),
-
-  /** DRAFT -> KYC_PENDING. */
-  submitKyc: (id: number) =>
-    bff<ApplicationView>(`${BORROWER_BASE}/${id}/submit-kyc`, "POST"),
-
-  /** Borrower declared self-employed — auto-rejects and starts the 90-day cooling-off window. */
-  selfEmployed: (id: number) =>
-    bff<ApplicationView>(`${BORROWER_BASE}/${id}/self-employed`, "POST"),
-
-  /** Set amount/purpose/salary-day once KYC is approved (stays KYC_APPROVED). */
-  apply: (
-    id: number,
-    payload: {
-      amountPaise: number;
-      purpose?: string;
-      eligibleLimitPaise?: number;
-      salaryCreditDay?: number;
-    },
-  ) => bff<ApplicationView>(`${BORROWER_BASE}/${id}/apply`, "POST", payload),
-
-  /** Poll a single application. */
-  get: (id: number) => bff<ApplicationView>(`${BORROWER_BASE}/${id}`, "GET"),
-
-  /** The borrower's own applications, newest first (for "Past loans" / "Transactions"). */
-  myApplications: () => bff<ApplicationView[]>(`${BORROWER_BASE}/mine`, "GET"),
-
-  /** Event/audit trail for an application. */
-  events: (id: number) => bff<EventView[]>(`${BORROWER_BASE}/${id}/events`, "GET"),
-
-  /** Loan summary (net disbursed, due date, total repayable) once ACTIVE. */
-  loan: (loanId: number) => bff<LoanView>(`${BORROWER_LOAN_BASE}/${loanId}`, "GET"),
-
-  /** Prepayment-aware balance as of a date (interest only to the day paid). */
-  outstanding: (loanId: number, asOf?: string) =>
-    bff<OutstandingView>(
-      `${BORROWER_LOAN_BASE}/${loanId}/outstanding${asOf ? `?asOf=${encodeURIComponent(asOf)}` : ""}`,
-      "GET",
-    ),
-
-  /**
-   * The three balances the repay screen quotes together — today, on the salary day the loan is due,
-   * and on the one grace day after it — in one call instead of three `outstanding` round trips.
-   * Each field is the identical figure `outstanding` returns for that date.
-   */
-  outstandingSchedule: (loanId: number, asOf?: string) =>
-    bff<OutstandingScheduleView>(
-      `${BORROWER_LOAN_BASE}/${loanId}/outstanding/schedule${asOf ? `?asOf=${encodeURIComponent(asOf)}` : ""}`,
-      "GET",
-    ),
-
-  /** Record a (full / partial / prepayment) repayment with proof — lands PENDING_VERIFICATION. */
-  recordRepayment: (
-    loanId: number,
-    payload: { amountPaise: number; method: PaymentMethodName; txnRef?: string; proofUrl?: string; paidOn?: string },
-  ) => bff<PaymentView>(`${BORROWER_LOAN_BASE}/${loanId}/repayments`, "POST", payload),
-
-  /** Repayments recorded against this loan (the borrower's payment history). */
-  repayments: (loanId: number) => bff<PaymentView[]>(`${BORROWER_LOAN_BASE}/${loanId}/repayments`, "GET"),
-
-  /** Save/update the customer KYC details for this application. */
-  saveProfile: (id: number, profile: ProfileInput) =>
-    bff<ProfileView>(`${BORROWER_BASE}/${id}/profile`, "PUT", profile),
-
-  /** Self-edit own profile (non-identity fields); verification-linked edits reset the matching check. */
-  editProfile: (id: number, edit: EditProfileInput) =>
-    bff<ProfileView>(`${BORROWER_BASE}/${id}/profile/self`, "PUT", edit),
-
-  /** Read back the (masked) profile. */
-  getProfile: (id: number) => bff<ProfileView>(`${BORROWER_BASE}/${id}/profile`, "GET"),
-
-  /** The borrower's own eMandate (auto-repayment). Same view staff see; it is all their own data. */
-  mandate: (id: number) => bff<MandateView | null>(`${BORROWER_BASE}/${id}/mandate`, "GET"),
-
-  /** The borrower's notification preferences (server-persisted; honored by the engine). */
-  getPreferences: () => bff<BorrowerPreferences>(`/api/borrower/preferences`, "GET"),
-  updatePreferences: (prefs: BorrowerPreferences) =>
-    bff<BorrowerPreferences>(`/api/borrower/preferences`, "PUT", prefs),
-
-  /** Upload one document (bytes as base64). */
-  uploadDocument: (
-    id: number,
-    doc: { docType: string; fileName: string; contentType?: string; dataBase64: string },
-  ) => bff<DocumentView>(`${BORROWER_BASE}/${id}/documents`, "POST", doc),
-
-  /** List documents already uploaded for this application. */
-  documents: (id: number) => bff<DocumentView[]>(`${BORROWER_BASE}/${id}/documents`, "GET"),
-};
-
-/** Server-side onboarding position — what makes a second device resume mid-flow (revamp.md C1). */
-export const journeyApi = {
-  get: (id: number) => bff<JourneyView>(`${BORROWER_BASE}/${id}/journey`, "GET"),
-  advance: (id: number, step: string) =>
-    bff<JourneyView>(`${BORROWER_BASE}/${id}/journey/${step}`, "POST"),
-};
 
 // ---------------------------------------------------------------------------
 // Verification (P5 sequential onboarding) — routes under /api/borrower/applications/{id}/verify/*
@@ -1606,185 +1499,6 @@ export interface VerifyPresign {
 /** A single document version the borrower consents to (e.g. "loan-agreement@1"). */
 export type AgreementVersion = string;
 
-export const verificationApi = {
-  /** PAN identity match. */
-  pan: (id: number, pan: string) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/pan`, "POST", { pan }),
-
-  /** Official/work email → employer match. */
-  email: (id: number, officialEmail: string) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/email`, "POST", { officialEmail }),
-
-  /**
-   * Send the OTP proving the borrower controls their PERSONAL email — additive to (and separate
-   * from) the official-email deliverability check above. The address is resolved server-side from
-   * the saved profile, never passed by the client.
-   */
-  requestPersonalEmailOtp: (id: number) =>
-    bff<OtpRequestResult>(`${BORROWER_BASE}/${id}/verify/email/otp`, "POST"),
-
-  /** Confirm the personal-email OTP. */
-  confirmPersonalEmailOtp: (id: number, otp: string) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/email/otp/confirm`, "POST", { otp }),
-
-  /**
-   * Send the OTP proving the borrower controls their OFFICIAL/work email. Additive to `email` above:
-   * that call asks the provider whether the address is deliverable and matches the employer, this
-   * asks the borrower to open the inbox. Address resolved server-side, same as the personal one.
-   */
-  requestOfficialEmailOtp: (id: number) =>
-    bff<OtpRequestResult>(`${BORROWER_BASE}/${id}/verify/official-email/otp`, "POST"),
-
-  /** Confirm the official-email OTP. */
-  confirmOfficialEmailOtp: (id: number, otp: string) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/official-email/otp/confirm`, "POST", { otp }),
-
-  /** Address: either live geolocation (lat/long) or a typed manual address. */
-  address: (
-    id: number,
-    body: { latitude: number; longitude: number } | { manualAddress: string },
-  ) => bff<StepResult>(`${BORROWER_BASE}/${id}/verify/address`, "POST", body),
-
-  /** DigiLocker: start the consent flow (returns derived.clientId + derived.url). */
-  digilockerInit: (id: number, redirectUrl: string) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/digilocker/init`, "POST", { redirectUrl }),
-
-  /** DigiLocker: poll consent progress (derived.completed / .failed / .status). */
-  digilockerStatus: (id: number) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/digilocker/status`, "GET"),
-
-  /** DigiLocker: finalise once the consent flow reports completed. */
-  digilockerComplete: (id: number) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/digilocker/complete`, "POST"),
-
-  /**
-   * The DigiLocker fallback: confirms both an AADHAAR_FRONT and AADHAAR_BACK document already
-   * exist and records the AADHAAR row as REVIEW/MANUAL_PROOF for the Disbursement Head to judge —
-   * the identity twin of `offerApi.confirmDisbursalAccount`'s `useBankProof`. Errors
-   * `AADHAAR_PROOF_REQUIRED` if either side hasn't been uploaded yet.
-   */
-  aadhaarManual: (id: number) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/aadhaar-manual`, "POST"),
-
-  /**
-   * Credit bureau pull. `otp` is the already-verified bureau-consent code (see `bureauConsent` below)
-   * forwarded so it can be threaded into Digitap's Credit Analytics payload, which mandates it — omit
-   * it only for a staff-triggered manual retry. Score/category are never surfaced to the borrower.
-   */
-  bureau: (id: number, otp?: string) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/bureau`, "POST", otp ? { otp } : undefined),
-
-  /**
-   * Answer the bureau's knowledge-based-authentication question.
-   *
-   * `answer` MUST be one of `derived.bureauChallengeOptions` VERBATIM — CRIF returns them
-   * space-padded and compares literally, so never `.trim()` it here, in the component, or anywhere
-   * between. A trimmed answer is a wrong answer, and a wrong answer costs a billable re-mint.
-   */
-  bureauChallengeAnswer: (id: number, answer: string) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/bureau/challenge/answer`, "POST", { answer }),
-
-  /**
-   * Mint a fresh bureau question. The ONLY billable call the borrower can trigger — keep it bound to
-   * an explicit click, never a render or a poll.
-   */
-  bureauChallengeRefresh: (id: number) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/bureau/challenge/refresh`, "POST"),
-
-  /** Borrower recognises none of the options — flag it for the credit team and move on. */
-  bureauChallengeSkip: (id: number) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/bureau/challenge/skip`, "POST"),
-
-  /**
-   * EPFO/UAN employment lookup. Takes no body — every input (PAN, mobile, DOB, name, declared
-   * employer) is read off the stored profile, so it can only run once those are saved. Advisory:
-   * it never gates KYC, and a borrower with no EPFO record (a first job, a cash employer, a non-PF
-   * establishment) legitimately comes back REVIEW rather than PASS.
-   */
-  employment: (id: number) => bff<StepResult>(`${BORROWER_BASE}/${id}/verify/employment`, "POST"),
-
-  /**
-   * Declared salary + uploaded slip object keys (min 3 months). Optionally sets the salary-credit day
-   * (1–31) in the same call — used by the reborrow salary step so the customer confirms their salary
-   * day alongside re-verifying income; omitted on the first-time onboarding path (day set at apply).
-   * `filePassword` is the borrower's optional key for password-protected slip PDFs.
-   */
-  salary: (
-    id: number,
-    monthlySalaryPaise: number,
-    slipObjectKeys: string[],
-    salaryCreditDay?: number,
-    filePassword?: string,
-  ) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/salary`, "POST", {
-      monthlySalaryPaise,
-      slipObjectKeys,
-      salaryCreditDay,
-      filePassword,
-    }),
-
-  /** Penny-drop on the salary account → name match. */
-  pennyDrop: (id: number, accountNumber: string, ifsc: string) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/penny-drop`, "POST", { accountNumber, ifsc }),
-
-  /** Selfie liveness/face match against the uploaded selfie object key (Digitap fallback path). */
-  selfie: (id: number, selfieObjectKey: string) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/selfie`, "POST", { selfieObjectKey }),
-
-  /**
-   * Start the Signzy liveness video journey (primary selfie path). The result's
-   * `derived.videoUrl` is where to redirect the borrower; `derived.fallback === true` means Signzy
-   * liveness is unavailable and the caller should use the camera-capture + `selfie` fallback.
-   */
-  selfieLivenessInit: (id: number) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/selfie/liveness/init`, "POST"),
-
-  /** Poll the liveness journey result (PENDING until the borrower finishes; then PASS/REVIEW). */
-  selfieLivenessStatus: (id: number) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/selfie/liveness/status`, "GET"),
-
-  /** Record consent to the agreement document set. */
-  agreement: (id: number, versions: AgreementVersion[]) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/agreement`, "POST", { versions }),
-
-  /**
-   * Send the bureau-consent OTP — a purpose-dedicated code, isolated from the login OTP (a concurrent
-   * login OTP request can no longer clobber this one, or vice versa). Application-scoped: the mobile is
-   * resolved server-side from the profile, not passed by the client.
-   */
-  requestBureauConsentOtp: (id: number) =>
-    bff<OtpRequestResult>(`${BORROWER_BASE}/${id}/verify/bureau-consent/otp`, "POST"),
-
-  /**
-   * Record OTP-verified consent to the credit-bureau enquiry. Runs BEFORE the PAN fetch; the OTP is
-   * verified server-side against the mobile on file (never one supplied by the client).
-   */
-  bureauConsent: (id: number, otp: string, consentText: string) =>
-    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/bureau-consent`, "POST", { otp, consentText }),
-
-  /** The full verification status board for this application. */
-  summary: (id: number) => bff<StepResult[]>(`${BORROWER_BASE}/${id}/verify/summary`, "GET"),
-
-  /** Ask the app-scoped endpoint for a presigned PUT URL (echo `key` back on the verify call). */
-  presignUpload: (
-    id: number,
-    body: { docType: string; fileName: string; contentType: string },
-  ) => bff<VerifyPresign>(`${BORROWER_BASE}/${id}/verify/presign-upload`, "POST", body),
-
-  /** PUT raw bytes (File or Blob) straight to the presigned S3 URL — never through the BFF. */
-  putToPresignedUrl,
-
-  /**
-   * Persist already-uploaded S3 keys as `ApplicationDocument` rows under an arbitrary docType — the
-   * generic counterpart to `salary(...)`'s hardcoded SALARY_SLIP persistence. Used for the 6-month
-   * bank-statement upload on the bank-details page (docType "BANK_STATEMENT").
-   */
-  uploadedDocuments: (
-    id: number,
-    body: { docType: string; objectKeys: string[]; filePassword?: string },
-  ) =>
-    bff<void>(`${BORROWER_BASE}/${id}/verify/documents`, "POST", body),
-};
 
 // ---------------------------------------------------------------------------
 // Offer journey (revamp.md Phase 3) — what the borrower walks after credit sanctions their file.
@@ -1848,72 +1562,7 @@ export interface DisbursalAccountView {
   attemptsLeft: number;
 }
 
-const OFFER = (id: number) => `${BORROWER_BASE}/${id}/offer`;
 
-export const offerApi = {
-  /** Draw down an amount within the sanctioned ceiling. Stays SANCTIONED. */
-  chooseAmount: (id: number, amountPaise: number) =>
-    bff<ApplicationView>(`${OFFER(id)}/amount`, "POST", { amountPaise }),
-
-  references: (id: number) => bff<ReferenceView[]>(`${OFFER(id)}/references`, "GET"),
-
-  /** Both references at once — the backend rejects anything but two distinct, non-self contacts. */
-  saveReferences: (id: number, references: ReferenceInput[]) =>
-    bff<ReferenceView[]>(`${OFFER(id)}/references`, "POST", { references }),
-
-  summary: (id: number) => bff<OfferSummaryView>(`${OFFER(id)}/summary`, "GET"),
-
-  /** Renders the Key Fact Statement to S3 and returns a short-lived URL to read it. */
-  sanctionLetter: (id: number) =>
-    bff<SanctionLetterView>(`${OFFER(id)}/sanction-letter`, "POST"),
-
-  /**
-   * Start Aadhaar e-sign. `derived.url` is the provider page to send the borrower to;
-   * `derived.fallback === true` means the provider is unavailable and they should draw instead.
-   */
-  esignInit: (id: number, payload: { successRedirectUrl: string; failureRedirectUrl: string }) =>
-    bff<StepResult>(`${OFFER(id)}/esign/init`, "POST", payload),
-
-  /** Poll the Aadhaar e-sign session once the provider redirects the borrower back. */
-  esignStatus: (id: number) => bff<StepResult>(`${OFFER(id)}/esign/status`, "GET"),
-
-  /** Start the NACH eMandate. `derived.url` is the Digio page; `derived.bankUnsupported` is terminal. A retry calls this again. */
-  mandateInit: (id: number) => bff<StepResult>(`${OFFER(id)}/mandate/init`, "POST"),
-
-  /** Poll the mandate. PASS once usable (the backend has then already routed the file to disbursement). */
-  mandateStatus: (id: number) => bff<StepResult>(`${OFFER(id)}/mandate/status`, "GET"),
-
-  /**
-   * Fallback: record a drawn signature. Without a signature by one route or the other the
-   * application cannot reach disbursement.
-   */
-  esign: (id: number, payload: { signatureDataUrl: string; latitude?: number; longitude?: number; accuracyMeters?: number }) =>
-    bff<StepResult>(`${OFFER(id)}/esign`, "POST", payload),
-
-  disbursalAccount: (id: number) =>
-    bff<DisbursalAccountView>(`${OFFER(id)}/disbursal-account`, "GET"),
-
-  /**
-   * The last step: confirms where the money lands and hands the file to disbursement. A penny drop
-   * fires unless this exact account-number/IFSC pair already has a successful verification.
-   */
-  confirmDisbursalAccount: (
-    id: number,
-    payload: {
-      accountNumber: string;
-      ifsc: string;
-      holderName?: string;
-      bank?: string;
-      /**
-       * The bank-proof fallback: skips the penny drop entirely and leaves the account
-       * REVIEW-pending for the Disbursement Head to verify against an uploaded cheque/passbook.
-       * Only meaningful once a BANK_PROOF document already exists — the backend 400s
-       * (`BANK_PROOF_REQUIRED`) otherwise.
-       */
-      useBankProof?: boolean;
-    },
-  ) => bff<ApplicationView>(`${OFFER(id)}/disbursal-account`, "POST", payload),
-};
 
 // ---------------------------------------------------------------------------
 // Staff client — routes under /api/staff/*
@@ -2159,7 +1808,7 @@ export const staffApi = {
   /** "Accept lead" — the Credit Executive's FINAL decision (V45). No Head counter-approval. */
   sanction: (
     id: number,
-    payload: { sanctionedAmountPaise: number; salaryCreditDay: number; remarks?: string },
+    payload: { sanctionedAmountPaise: number; remarks?: string },
   ) => bff<ApplicationView>(`${STAFF_BASE}/${id}/sanction`, "POST", payload),
 
   /** "Reject lead" — the borrower is told nothing; the remarks go to the staff-only register. */
@@ -2437,6 +2086,7 @@ export type CustomerSummaryCounts = {
   review: number;
   approved: number;
   disbursementPending: number;
+  awaitingConfirmation?: number;
   active: number;
   overdue: number;
   hold: number;
@@ -4033,24 +3683,7 @@ export interface ReferralExpenseSummary {
   totalPaise: number;
 }
 
-const BORROWER_REFERRAL_BASE = "/api/borrower/referral";
 
-/** Borrower-facing referral client. */
-export const referralApi = {
-  /** The caller's own code + reward + earnings (code minted lazily on first read). */
-  me: () => bff<MyReferral>(`${BORROWER_REFERRAL_BASE}/me`, "GET"),
-
-  /** Apply a referral code to the calling borrower (best-effort from the signup UI). */
-  apply: (code: string) =>
-    bff<ApplyReferralResult>(`${BORROWER_REFERRAL_BASE}/apply`, "POST", { code }),
-
-  /** Preview a code for live signup feedback (never throws on a bad code; returns valid=false). */
-  validate: (code: string) =>
-    bff<ValidateReferralResult>(
-      `${BORROWER_REFERRAL_BASE}/validate?code=${encodeURIComponent(code)}`,
-      "GET",
-    ),
-};
 
 const STAFF_REFERRAL_BASE = "/api/staff/referral";
 
@@ -4155,7 +3788,8 @@ export const storageApi = {
 // Collections — cases, interactions, settlements (maker-checker), DPD helper
 // ---------------------------------------------------------------------------
 
-export type DpdBucket = "UPCOMING" | "T0_T7" | "T8_T30" | "T30_T60" | "T60_T90" | "T90_PLUS";
+/** Mirrors the backend `DpdBucket` (one definition, PLAN Phase 10b R10; see `lib/collection-buckets.ts`). */
+export type DpdBucket = "UPCOMING" | "DUE_TODAY" | "D1" | "D2_7" | "REVIEW" | "D31_60" | "D61_90" | "D90_PLUS";
 
 /** Real loan + borrower snapshot surfaced to collections (mirrors backend LoanSummary). */
 export interface LoanSummary {
@@ -4302,7 +3936,8 @@ export interface SettlementView {
  * part of the debt, so it takes an extra hop through the Collection Head; part and full payments go
  * straight to the Accountant.
  */
-export type CollectionPaymentKind = "PART_PAYMENT" | "FULL_PAYMENT" | "SETTLEMENT";
+/** EXTENSION (Phase 6b): the extension charge, exactly the quote, against the case's ACCEPTED extension. */
+export type CollectionPaymentKind = "PART_PAYMENT" | "FULL_PAYMENT" | "SETTLEMENT" | "EXTENSION";
 
 export const COLLECTION_PAYMENT_KINDS: Array<{ value: CollectionPaymentKind; label: string; hint: string }> = [
   { value: "PART_PAYMENT", label: "Part payment", hint: "Some of the balance; the rest is still owed." },
@@ -4311,6 +3946,11 @@ export const COLLECTION_PAYMENT_KINDS: Array<{ value: CollectionPaymentKind; lab
     value: "SETTLEMENT",
     label: "Settlement",
     hint: "Full & final for less than the balance — needs a settlement open on the case, and the Collection Head's approval.",
+  },
+  {
+    value: "EXTENSION",
+    label: "Extension charge",
+    hint: "Only when the borrower confirmed an extension in the app. The amount is locked to today's quote; the transaction id is required.",
   },
 ];
 
@@ -4483,6 +4123,7 @@ export const collectionsApi = {
       amountPaise: number;
       paidOn?: string;
       txnRef?: string;
+      extensionId?: string;
       proofRef?: string;
       settlementId?: string;
     },
@@ -4561,7 +4202,6 @@ function makeNotificationsApi(base: string) {
 
 export type NotificationsApi = ReturnType<typeof makeNotificationsApi>;
 
-export const borrowerNotificationsApi = makeNotificationsApi("/api/borrower/notifications");
 export const staffNotificationsApi = makeNotificationsApi("/api/staff/notifications");
 
 export type ProviderApiField = { key: string; label: string; type: string; required: boolean };
@@ -4588,8 +4228,8 @@ export const providerApi = {
 };
 
 /** Pick the right notifications client for a scope. */
-export function notificationsApiFor(scope: NotificationScope): NotificationsApi {
-  return scope === "staff" ? staffNotificationsApi : borrowerNotificationsApi;
+export function notificationsApiFor(_scope: NotificationScope): NotificationsApi {
+  return staffNotificationsApi; // the borrower web is gone (Phase 10); the app reads its own notifications
 }
 
 // ---------------------------------------------------------------------------

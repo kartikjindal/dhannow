@@ -34,14 +34,13 @@ function renderLoan(d: Partial<CustomerDetail>, onTabChange = vi.fn()) {
 }
 
 describe("Loan tab", () => {
-  it("active loan: strip shows the amount due; no Pay early hint here", () => {
+  it("active loan: strip shows the amount due", () => {
     renderLoan({
       loans: [loan("ACTIVE")],
       outstandingByLoanId: { "208": { loanId: 208, asOf: "2026-10-09", outstandingPaise: 505_000, interestPaise: 5_000, penaltyPaise: 0, interestDays: 1 } },
     });
     expect(screen.getAllByText("Amount due today")[0].nextSibling).toHaveTextContent("₹5,050");
-    expect(screen.getAllByText("1 day × 1%").length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Pay early/)).not.toBeInTheDocument();
+    expect(screen.getAllByText("prepaid at disbursal, not owed").length).toBeGreaterThan(0);
   });
 
   it("closed loan: ₹0 due and no overdue chip", () => {

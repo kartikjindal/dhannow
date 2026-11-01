@@ -177,8 +177,8 @@ public class ReportService {
 
             new ReportDef("fee-income", FINANCE, "Processing fee and GST register",
                     "Per loan paid out: processing fee earned and the GST collected on it, for tax filing.", "Disbursal date"),
-            new ReportDef("income-realised", FINANCE, "Interest and penalty income received",
-                    "For loans closed in the period: principal recovered and interest/penalty actually earned.", "Closure date"),
+            new ReportDef("income-realised", FINANCE, "Fee and interest income",
+                    "Fee and upfront interest booked on the disbursal-confirmation date, GST payable, and late and extension charges received.", "Confirmation date"),
             new ReportDef("expenses", FINANCE, "Company expense register",
                     "Expenses recorded by admin: what was paid, to whom, how much and whether a receipt is attached.", "Expense date"),
 
@@ -373,19 +373,18 @@ public class ReportService {
                 Column.text("detail", "How it works"), Column.number("live", "Live count"));
         List<List<Object>> rows = new ArrayList<>();
         String p = "Product";
-        rows.add(row(p, "What it is", "A salary-linked short advance. A salaried customer borrows against the next "
-                + "salary and repays it in a single payment on or after salary day.", null));
-        rows.add(row(p, "Eligible limit", "25% of monthly salary, rounded down to the nearest Rs. 100. Minimum loan Rs. 1,000.", null));
-        rows.add(row(p, "Processing fee", "10% of the principal, taken upfront from the amount disbursed.", null));
-        rows.add(row(p, "GST", "18% on the processing fee, also taken upfront.", null));
-        rows.add(row(p, "Amount received", "Principal minus fee minus GST. Example: Rs. 10,000 loan -> Rs. 8,820 received.", null));
-        rows.add(row(p, "Interest", "1% of principal per day for the days the money is held.", null));
-        rows.add(row(p, "Due date", "The customer's next salary day, no later than 40 days after disbursal.", null));
-        rows.add(row(p, "Repayment", "One payment of principal + interest. Paying early only charges interest to the day paid.", null));
-        rows.add(row(p, "Late penalty", "2% of principal per day after the due date (after the one grace day on older loans), capped at 30 days.", null));
-        rows.add(row(p, "Repeat loans", "A customer who repaid on time can borrow again with a shortened journey; "
-                + "KYC and details are carried over.", null));
-
+        rows.add(row(p, "What it is", "A short-term personal loan for 14 days, applied for in the Android app.", null));
+        rows.add(row(p, "Loan amounts", "A credit ladder: Rs. 1,000, 2,000, 3,000, 4,000, 5,000, 7,000, 10,000. The first loan "
+                + "is level 1; a full on-time repayment moves the customer up one level, anything late keeps the level.", null));
+        rows.add(row(p, "Processing fee", "10% of the principal, deducted at disbursal.", null));
+        rows.add(row(p, "GST", "18% on the processing fee, also deducted at disbursal.", null));
+        rows.add(row(p, "Interest", "1% of principal per day for the 14-day tenure, deducted upfront at disbursal.", null));
+        rows.add(row(p, "Amount received", "Principal minus fee, GST and interest. Example: Rs. 10,000 loan -> Rs. 7,420 received.", null));
+        rows.add(row(p, "Due date", "14 days after the accountant confirms the disbursal, at 23:59 IST. No holiday shift.", null));
+        rows.add(row(p, "Repayment", "One payment of the principal. Example: Rs. 10,000 loan -> repay Rs. 10,000.", null));
+        rows.add(row(p, "Late charge", "2% of principal per day after the due date, capped at 30 days.", null));
+        rows.add(row(p, "Extension", "Offered by collections only: 14 more days for fee + GST + 14 days of interest plus the late "
+                + "charge to date; at most 3 per loan.", null));
         String l = "Lifecycle";
         Map<String, Long> byStatus = new HashMap<>();
         jdbc.query("select status, count(*) n from loan_application group by status", Map.of(),
@@ -394,12 +393,13 @@ public class ReportService {
                 {"DRAFT", "Sign-up: mobile OTP, employment, employer, email, bank, payslips, Aadhaar and PAN cards, consent."},
                 {"KYC_PENDING", "Submitted; waiting for the credit team to pick the file up."},
                 {"CREDIT_EXEC_PENDING", "With a credit executive, who sanctions, rejects or parks the file for a document."},
-                {"SANCTIONED", "Approved amount and date; the customer completes the offer journey and eSigns the agreement."},
+                {"SANCTIONED", "Approved ladder amount; the customer reads the KFS and eSigns the agreement."},
                 {"DISBURSEMENT_PENDING", "Agreement signed; waiting for the disbursement head to transfer the money."},
-                {"ACTIVE", "Money sent; loan running until salary day."},
+                {"DISBURSAL_CONFIRMATION_PENDING", "Money sent with a UTR; waiting for an accountant to confirm it was credited."},
+                {"ACTIVE", "Disbursal confirmed; day 0 is the confirmation date and the loan runs 14 days."},
                 {"OVERDUE", "Past due date and unpaid; with collections."},
                 {"CLOSED", "Fully repaid (or settled)."},
-                {"REJECTED", "Turned down; the customer is blocked from re-applying for a cooling-off period."},
+                {"REJECTED", "Turned down; the customer may re-apply after the waiting period."},
                 {"CANCELLED", "Withdrawn before disbursal."},
         };
         for (String[] s : stages) {
@@ -414,12 +414,16 @@ public class ReportService {
                 {"ADMIN", "Oversight of the whole platform: staff, settings, corrections, reports."},
                 {"CREDIT_HEAD", "Assigns credit files to executives; may reject leads."},
                 {"CREDIT_EXECUTIVE", "Makes the credit decision: sanction, reject or park."},
-                {"DISBURSEMENT_HEAD", "Transfers the money and records the transfer reference; pays referral rewards."},
-                {"ACCOUNTANT", "Verifies or rejects repayments customers report; keeps the transactions ledger."},
+                {"DISBURSEMENT_HEAD", "Transfers the money and records the transfer reference (UTR); pays referral rewards."},
+                {"ACCOUNTANT", "Confirms disbursals, verifies or rejects repayments, keeps the transactions ledger."},
                 {"COLLECTION_HEAD", "Runs collections: assigns cases, approves settlements and payments."},
                 {"COLLECTION_EXECUTIVE", "Calls overdue customers, logs interactions, records payments, proposes settlements."},
                 {"TELECALLER", "Calls leads and logs outcomes; no say in loan decisions."},
                 {"DSA", "External agent who brings leads and earns 3.5% of net disbursed on a lead's first repaid loan."},
+                {"RECOVERY", "Works long-overdue loans."},
+                {"SUPPORT", "Handles complaints and disputes; no money or due-date rights."},
+                {"FINANCE", "Refunds, payment reversals, pricing approvals and finance reports."},
+                {"COMPLIANCE", "Read-only review of the console, complaints and the adjustment log."},
         };
         for (String[] s : roles) {
             rows.add(row(r, s[0].replace('_', ' '), s[1], byRole.getOrDefault(s[0], 0L)));
@@ -1413,33 +1417,38 @@ public class ReportService {
                 List.of("A loan counts for the officer on its most recent collection case."));
     }
 
+    /**
+     * Revenue recognition (PLAN Phase 10b): fee and upfront interest are income on the disbursal-confirmation
+     * date (day 0, {@code loan.disbursed_on} once the loan left DISBURSEMENT_PENDING); GST is payable, not income;
+     * late charges are income when received; extension charges are their own line.
+     */
     private Table incomeRealised(Period p) {
         List<Column> cols = List.of(Column.id("loanId", "Loan ID"), Column.text("name", "Customer"),
-                Column.date("closedOn", "Closed on"), Column.money("principal", "Principal (Rs.)"),
-                Column.money("paid", "Total received (Rs.)"), Column.money("recovered", "Principal recovered (Rs.)"),
-                Column.money("income", "Interest & penalty earned (Rs.)"), Column.money("shortfall", "Principal lost (Rs.)"),
-                Column.money("fee", "Upfront fee earned (Rs.)"), Column.money("extension", "Extension charges (Rs.)"));
-        // Repayments recover principal; extension charges are their own income line (PLAN Phase 6, item 10).
+                Column.date("confirmedOn", "Disbursal confirmed on"), Column.money("principal", "Principal (Rs.)"),
+                Column.money("fee", "Processing fee income (Rs.)"), Column.money("gst", "GST payable (Rs.)"),
+                Column.money("interest", "Interest income, upfront (Rs.)"), Column.money("net", "Net disbursed (Rs.)"));
         String sql = "with " + PROF_CTE + """
-                , pd as (select loan_id, sum(amount) amt from payment where status = 'VERIFIED' and purpose = 'REPAYMENT'
-                         group by loan_id),
-                  ex as (select loan_id, sum(amount) amt from payment where status = 'VERIFIED' and purpose = 'EXTENSION'
-                         group by loan_id)
-                select l.id, pr.full_name, l.closed_on, l.principal, coalesce(pd.amt, 0),
-                       least(coalesce(pd.amt, 0), l.principal), greatest(coalesce(pd.amt, 0) - l.principal, 0),
-                       greatest(l.principal - coalesce(pd.amt, 0), 0), coalesce(l.processing_fee, 0), coalesce(ex.amt, 0)
+                select l.id, pr.full_name, l.disbursed_on, l.principal, coalesce(l.processing_fee, 0), coalesce(l.gst, 0),
+                       coalesce(l.upfront_interest_paise, 0), coalesce(l.net_disbursed, 0)
                 from loan l left join prof pr on pr.customer_id = l.customer_id
-                left join pd on pd.loan_id = l.id left join ex on ex.loan_id = l.id
-                where l.closed_on is not null and %s
-                order by l.closed_on desc, l.id desc
-                """.formatted(p.on("l.closed_on"));
+                where l.disbursed_on is not null and l.lifecycle_status <> 'DISBURSEMENT_PENDING' and %s
+                order by l.disbursed_on desc, l.id desc
+                """.formatted(p.on("l.disbursed_on"));
         List<List<Object>> rows = query(sql, p.params());
-        return totalled(cols, rows, List.of(new Fact("Loans closed", (long) rows.size(), ColumnType.NUMBER),
-                new Fact("Interest & penalty earned", sum(rows, 6), ColumnType.MONEY),
-                new Fact("Upfront fee earned", sum(rows, 8), ColumnType.MONEY),
-                new Fact("Principal lost", sum(rows, 7), ColumnType.MONEY),
-                new Fact("Extension charges", sum(rows, 9), ColumnType.MONEY)),
-                List.of("Interest & penalty earned is everything repaid above the principal (any overpayment is included and is owed back)."));
+        long penal = pair("select count(*), coalesce(sum(pa.amount_paise), 0) from payment_allocation pa"
+                + " join payment p on p.id = pa.payment_id where pa.component = 'PENAL' and p.status = 'VERIFIED'"
+                + " and p.purpose = 'REPAYMENT' and " + p.on("p.paid_on"), p.params())[1];
+        long extension = pair("select count(*), coalesce(sum(p.amount), 0) from payment p where p.status = 'VERIFIED'"
+                + " and p.purpose = 'EXTENSION' and " + p.on("p.paid_on"), p.params())[1];
+        return totalled(cols, rows, List.of(new Fact("Loans confirmed", (long) rows.size(), ColumnType.NUMBER),
+                new Fact("Processing fee income", sum(rows, 4), ColumnType.MONEY),
+                new Fact("Interest income (upfront)", sum(rows, 6), ColumnType.MONEY),
+                new Fact("GST payable", sum(rows, 5), ColumnType.MONEY),
+                new Fact("Late charges received", penal, ColumnType.MONEY),
+                new Fact("Extension charges received", extension, ColumnType.MONEY)),
+                List.of("Fee and interest are booked on the disbursal-confirmation date; GST is payable, not income.",
+                        "Late charges are booked when received (bank date); extension charges are a separate line.",
+                        "Every row reconciles: principal = net disbursed + fee + GST + interest."));
     }
 
     private Table auditTrail(Period p) {
@@ -1621,11 +1630,7 @@ public class ReportService {
     }
 
     private static String bucket(long dpd) {
-        if (dpd <= 0) return "Current";
-        if (dpd <= 30) return "1-30";
-        if (dpd <= 60) return "31-60";
-        if (dpd <= 90) return "61-90";
-        return "90+";
+        return com.navix.collections.domain.DpdBucket.RbiClass.of(dpd).label();
     }
 
     private static long sum(List<List<Object>> rows, int col) {

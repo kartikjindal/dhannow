@@ -72,7 +72,7 @@ function row(loanId: number, dpd: number, bucket: WorklistRow["bucket"], dueDate
 const ROWS: WorklistRow[] = [
   row(10, 0, "UPCOMING", "2026-10-11", true),
   row(11, 0, "UPCOMING", "2026-10-06", false),
-  row(12, 3, "T0_T7", "2026-10-03", false),
+  row(12, 3, "D2_7", "2026-10-03", false),
 ];
 
 function renderPage() {
@@ -100,7 +100,7 @@ beforeEach(() => {
   vi.spyOn(collectionsApi, "worklist").mockResolvedValue(ROWS);
   vi.spyOn(collectionsApi, "worklistSummary").mockResolvedValue([
     { bucket: "UPCOMING", n: 2, outstandingPaise: 2_540_000 },
-    { bucket: "T0_T7", n: 1, outstandingPaise: 1_270_000 },
+    { bucket: "D2_7", n: 1, outstandingPaise: 1_270_000 },
   ]);
   vi.spyOn(collectionsApi, "worklistPage").mockImplementation(async (p) => {
     const rows = ROWS.filter((r) => !p.extra?.bucket || r.bucket === p.extra.bucket);
@@ -121,7 +121,7 @@ describe("CollectionsBucketPage", () => {
     // filters AND an open `?open=`/`?tab=` deep link. The register's own effect put its params back
     // a tick later, so the URL briefly described a view nobody was looking at — and the pushed
     // history entry kept that wrong URL for good.
-    search = "f.bucket=in%3AT0_T7&sort=dpd&dir=desc&open=12&tab=repayments";
+    search = "f.bucket=in%3AD2_7&sort=dpd&dir=desc&open=12&tab=repayments";
     push.mockClear();
     renderPage();
     await screen.findByRole("table", { name: /Collections worklist/ });
@@ -129,9 +129,9 @@ describe("CollectionsBucketPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /31–60 DPD/ }));
 
     const url = push.mock.calls.at(-1)?.[0] as string;
-    // The card reads "31–60 DPD"; the stored enum is T30_T60 — the whole reason `raw` exists.
-    expect(url).toContain("bucket=T30_T60");
-    expect(url).toContain("f.bucket=in%3AT0_T7");
+    // The card reads "31–60 DPD"; the stored enum is D31_60 — the whole reason `raw` exists.
+    expect(url).toContain("bucket=D31_60");
+    expect(url).toContain("f.bucket=in%3AD2_7");
     expect(url).toContain("sort=dpd");
     expect(url).toContain("open=12");
     expect(url).toContain("tab=repayments");
@@ -147,9 +147,9 @@ describe("CollectionsBucketPage", () => {
   });
 
   it("marks an overdue row on its leading cell and keeps the DPD count", async () => {
-    search = "bucket=T0_T7";
+    search = "bucket=D2_7";
     renderPage();
-    await screen.findByRole("table", { name: "Collections worklist · 1–7 DPD" });
+    await screen.findByRole("table", { name: "Collections worklist · 2–7 DPD" });
     const tr = bodyRow(12);
     expect(tr.cells[0].className).toContain("shadow-[inset_3px_0_0_0_theme(colors.error.600)]");
     const dpd = within(tr).getByText("3");
@@ -184,14 +184,14 @@ describe("CollectionsBucketPage", () => {
   it("asks the server for the saved view and renders exactly the page it returns", async () => {
     // A saved view travels as the URL's own params: search, sort, column filters — the register owns
     // them, the server applies them, and the page does not re-filter what comes back.
-    search = "bucket=T0_T7&q=asha&sort=principalPaise&dir=asc&f.dpd=num%3A1..&page=1";
+    search = "bucket=D2_7&q=asha&sort=principalPaise&dir=asc&f.dpd=num%3A1..&page=1";
     const page = vi.spyOn(collectionsApi, "worklistPage").mockResolvedValue({ rows: [ROWS[2]], page: 1, size: 25, total: 41 });
     renderPage();
-    await screen.findByRole("table", { name: "Collections worklist · 1–7 DPD" });
+    await screen.findByRole("table", { name: "Collections worklist · 2–7 DPD" });
 
     const call = page.mock.calls[0][0];
     expect(call.filters).toMatchObject({ q: "asha", sort: "principalPaise", dir: "asc", "f.dpd": "num:1.." });
-    expect(call.extra).toEqual({ bucket: "T0_T7" });
+    expect(call.extra).toEqual({ bucket: "D2_7" });
     expect(call.page).toBe(1);
     // One row on screen, and the count is the SERVER's total across pages, not rows.length.
     expect(screen.getAllByRole("checkbox", { name: /Select loan #/ })).toHaveLength(1);
@@ -212,7 +212,7 @@ describe("CollectionsBucketPage", () => {
 
     // 3 live loans in total on the worklist (2 upcoming + 1 in 1–7), whatever the register shows.
     expect(screen.getByRole("button", { name: /All loans/ })).toHaveTextContent("3");
-    expect(screen.getByRole("button", { name: /1–7 DPD/ })).toHaveTextContent("1");
+    expect(screen.getByRole("button", { name: /2–7 DPD/ })).toHaveTextContent("1");
   });
 
   it("Clear filters drops the column filters but leaves the search term alone", async () => {
@@ -246,7 +246,7 @@ describe("CollectionsBucketPage", () => {
     await waitFor(() => expect(page.mock.calls.at(-1)![0].filters?.["f.dpd"]).toBeUndefined());
 
     expect(screen.getByRole("button", { name: /All loans/ })).toHaveTextContent("3");
-    expect(screen.getByRole("button", { name: /1–7 DPD/ })).toHaveTextContent("1");
+    expect(screen.getByRole("button", { name: /2–7 DPD/ })).toHaveTextContent("1");
     expect(collectionsApi.worklistSummary).toHaveBeenCalledTimes(summaryCalls);
   });
 

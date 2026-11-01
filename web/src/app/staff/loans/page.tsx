@@ -345,7 +345,7 @@ function LoansPageInner() {
           subtitle={[seg === "all" ? "All loans" : SEGMENT_LABEL[seg], describeRegister(th)]
             .filter(Boolean)
             .join(" · ")}
-          fileBase="dhanboost-loans"
+          fileBase="dhannow-loans"
           columns={[
             { header: "Loan #", value: (l: LoanRegisterRow) => l.loanId },
             { header: "Borrower", value: (l) => l.borrowerName },

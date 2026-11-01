@@ -1,8 +1,8 @@
 /**
  * `/staff/customers/[customerId]` admin cards (Phase 2 polish):
- *  - limit + approved-amount cards carry a basis badge (Admin override vs Salary rule);
- *  - the salary inputs show a ₹ prefix and a live grouped preview, without changing the payload;
- *  - the salary-day card warns when its projected due date breaks the 40-day rule.
+ *  - the credit-level card replaces the navix limit and salary-day cards (PLAN Phase 10b);
+ *  - the mobile number cannot be changed (CC-24), so there is no mobile-change card;
+ *  - the salary inputs show a ₹ prefix and a live grouped preview, without changing the payload.
  *
  * The tabs, dialogs and the credit gauge have their own tests; they are stubbed here.
  */
@@ -10,20 +10,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { customersApi, type ApplicationView, type CustomerDetail } from "@/lib/api/applications";
+import { creditLevelApi } from "@/lib/api/staff-desks";
 import CustomerDetailPage from "@/app/staff/customers/[customerId]/page";
 
-const loanMath = vi.hoisted(() => ({
-  override: null as null | ((p: { disbursedOn: Date; salaryDay: number }) => Date),
-}));
-
-vi.mock("@/lib/calc/loan-math", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/calc/loan-math")>();
-  return {
-    ...actual,
-    dueDateFromSalary: (p: { disbursedOn: Date; salaryDay: number }) =>
-      loanMath.override ? loanMath.override(p) : actual.dueDateFromSalary(p),
-  };
-});
 vi.mock("next/navigation", () => ({
   useParams: () => ({ customerId: "42" }),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), back: vi.fn(), prefetch: vi.fn() }),
@@ -40,7 +29,7 @@ vi.mock("@/components/staff/application-detail-dialog", () => ({ ApplicationDeta
 vi.mock("@/components/staff/credit-score-gauge", () => ({ CreditScoreGauge: () => null }));
 
 afterEach(() => {
-  loanMath.override = null;
+  vi.restoreAllMocks();
 });
 
 const SANCTIONED = {
@@ -66,35 +55,31 @@ function detail(overrides: Partial<CustomerDetail> = {}): CustomerDetail {
 
 async function renderPage(d: CustomerDetail) {
   vi.spyOn(customersApi, "get").mockResolvedValue(d);
+  vi.spyOn(creditLevelApi, "get").mockResolvedValue({
+    current: { level: 2, maxPaise: 200_000, nextLevelPaise: 300_000, ladder: [100_000, 200_000, 300_000, 400_000, 500_000, 700_000, 1_000_000] },
+    history: [{ fromLevel: 1, toLevel: 2, reason: "ON_TIME_REPAID", loanId: 7, reasonCode: null, approvedByName: null, at: "2026-10-20T10:00:00Z", reversedAt: null }],
+    quotes: [],
+  });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
       <CustomerDetailPage />
     </QueryClientProvider>,
   );
-  await screen.findByText("Maximum loan amount (admin)");
+  await screen.findByText("Edit KYC / salary (admin)");
 }
 
-describe("limit basis badge", () => {
-  it("reads Salary rule on both the limit and approved-amount cards when no override is set", async () => {
+describe("credit level and locked details", () => {
+  it("shows the ladder level and its history instead of the salary limit and salary-day cards", async () => {
     await renderPage(detail());
-    expect(screen.getAllByText("Salary rule")).toHaveLength(2);
-    expect(screen.queryByText("Admin override")).not.toBeInTheDocument();
+    expect(await screen.findByText(/Repaid on time: up one level/)).toBeInTheDocument();
+    expect(screen.getByText("Credit level")).toBeInTheDocument();
+    expect(screen.queryByText(/Salary credit day/)).not.toBeInTheDocument();
   });
 
-  it("reads Admin override on both cards when an override is stored", async () => {
-    await renderPage(detail({ limitOverridePaise: 7_500_000 }));
-    expect(screen.getAllByText("Admin override")).toHaveLength(2);
-    expect(screen.queryByText("Salary rule")).not.toBeInTheDocument();
-  });
-
-  it("leaves the approved-amount card's limit line out when no limit is on file", async () => {
-    await renderPage(
-      detail({ applications: [{ ...SANCTIONED, eligibleLimitPaise: null } as ApplicationView] }),
-    );
-    expect(screen.queryByText("Eligible limit:")).not.toBeInTheDocument();
-    // Only the limit card's own badge remains.
-    expect(screen.getAllByText("Salary rule")).toHaveLength(1);
+  it("offers no mobile-number change (CC-24)", async () => {
+    await renderPage(detail());
+    expect(screen.queryByText(/Correct mobile number/)).not.toBeInTheDocument();
   });
 });
 
@@ -110,32 +95,5 @@ describe("salary inputs", () => {
     fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
     await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(update.mock.calls[0][1]).toMatchObject({ monthlySalaryPaise: 12_500_000 });
-  });
-});
-
-describe("salary-day 40-day note", () => {
-  it("stays hidden for a projection inside the window, with its live region already mounted", async () => {
-    await renderPage(detail());
-    expect(screen.queryByText(/beyond the 40-day/)).not.toBeInTheDocument();
-    // The region exists before the note does, so the note is announced when it appears.
-    expect(screen.getByRole("status")).toBeEmptyDOMElement();
-  });
-
-  it("announces the note in the already-mounted region when a day change pushes past 40 days", async () => {
-    await renderPage(detail());
-    const region = screen.getByRole("status");
-    loanMath.override = ({ disbursedOn }) =>
-      new Date(disbursedOn.getFullYear(), disbursedOn.getMonth(), disbursedOn.getDate() + 41);
-    fireEvent.change(screen.getByLabelText("Salary credit day"), { target: { value: "5" } });
-    expect(region).toHaveTextContent("That due date is 41 days after a disbursal today");
-  });
-
-  it("appears when the projected due date is more than 40 days after a disbursal today", async () => {
-    loanMath.override = ({ disbursedOn }) =>
-      new Date(disbursedOn.getFullYear(), disbursedOn.getMonth(), disbursedOn.getDate() + 45);
-    await renderPage(detail());
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "That due date is 45 days after a disbursal today — beyond the 40-day limit.",
-    );
   });
 });

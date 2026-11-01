@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { creditLevelApi } from "@/lib/api/staff-desks";
 import { useQuery } from "@tanstack/react-query";
 import { BadgeCheck, Banknote, Landmark, XCircle } from "lucide-react";
 import { Badge, EmptyState } from "@/components/ui";
@@ -10,7 +11,6 @@ import { stageActionFor, stageActionTab } from "@/components/staff/customer-360/
 import type { TabCtx } from "@/components/staff/customer-360/types";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import { staffApi, paiseToINR, type ApplicationView, type LoanView } from "@/lib/api/applications";
-import { gstOnFee, netDisbursed, processingFee } from "@/lib/calc/loan-math";
 
 const NOTE = "mt-3 rounded border border-warning-100 bg-warning-50 px-3 py-2 text-[10.4px] text-warning-800";
 
@@ -135,13 +135,21 @@ export function DisbursalTab({ app, applicationId, detail }: TabCtx) {
   );
 }
 
-/** What leaves the bank (principal less fee and GST) and the sanction ceiling, first, so the
- *  Disbursement Head never sends the principal by mistake. */
+/** What leaves the bank (principal less fee, GST and upfront interest) and the sanction ceiling, first, so
+ *  the Disbursement Head never sends the principal by mistake. Figures come from the backend (R7): the loan
+ *  row once it exists, else the backend's quote for the chosen ladder amount. */
 function DisbursalAmounts({ app, loan }: { app: ApplicationView; loan?: LoanView }) {
   const principal = loan?.principalPaise ?? app.amountRequestedPaise;
-  const fee = loan?.processingFeePaise ?? (principal != null ? processingFee(principal) : null);
-  const gst = loan?.gstPaise ?? (fee != null ? gstOnFee(fee) : null);
-  const net = loan?.netDisbursedPaise ?? (principal != null ? netDisbursed(principal) : null);
+  const quotes = useQuery({
+    queryKey: ["credit-level", app.customerId],
+    queryFn: () => creditLevelApi.get(app.customerId),
+    enabled: !loan && principal != null,
+  });
+  const quote = quotes.data?.quotes.find((q) => q.principalPaise === principal);
+  const fee = loan?.processingFeePaise ?? quote?.feePaise ?? null;
+  const gst = loan?.gstPaise ?? quote?.gstPaise ?? null;
+  const net = loan?.netDisbursedPaise ?? quote?.netPaise ?? null;
+  const interest = loan?.upfrontInterestPaise ?? quote?.interestPaise ?? null;
   return (
     <div className="grid gap-2 sm:grid-cols-2" aria-label="Disbursal amounts">
       <div className="rounded border-2 border-success-600 bg-success-50 px-4 py-3">
@@ -153,7 +161,7 @@ function DisbursalAmounts({ app, loan }: { app: ApplicationView; loan?: LoanView
         </div>
         <div className="text-[10.4px] text-ink">
           {principal != null && fee != null && gst != null
-            ? `Loan ${paiseToINR(principal)} − fee ${paiseToINR(fee)} − GST ${paiseToINR(gst)}`
+            ? `Loan ${paiseToINR(principal)} − fee ${paiseToINR(fee)} − GST ${paiseToINR(gst)}${interest != null ? ` − interest ${paiseToINR(interest)}` : ""}`
             : "The borrower has not chosen an amount yet."}
         </div>
       </div>

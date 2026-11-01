@@ -22,7 +22,7 @@ function caseFor(loanId: number): CaseDetailView {
     assignedOfficerName: null,
     createdAt: "2026-10-01T10:00:00Z",
     dpd: 3,
-    bucket: "T0_T7",
+    bucket: "D2_7",
     loan: null,
   };
 }

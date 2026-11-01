@@ -370,7 +370,7 @@ function CollectionExecutiveDesk() {
           <RepaymentColumn
             title="Overdue"
             tone="error"
-            note="Your loans past the due date — the 2%/day late penalty is accruing (capped at 30 days; older loans had a 1-day grace)."
+            note="Your loans past the due date — the 2%/day late charge applies (capped at 30 days)."
             apps={overdueApps}
             isLoading={isLoading}
             emptyText="Nothing overdue in your book."
@@ -382,7 +382,7 @@ function CollectionExecutiveDesk() {
           <RepaymentColumn
             title="Active"
             tone="navy"
-            note="Your loans disbursed and still inside the due date. Interest is accruing at 1%/day; no penalty yet."
+            note="Your loans disbursed and still inside the due date. Interest was deducted at disbursal; no late charge yet."
             apps={activeApps}
             isLoading={isLoading}
             emptyText="No active loans in your book."
@@ -497,7 +497,7 @@ function AwaitingRepaymentPanel() {
         <RepaymentColumn
           title="Overdue"
           tone="error"
-          note="Past the due date — the 2%/day late penalty is accruing (capped at 30 days; older loans had a 1-day grace). Put a collections executive on these."
+          note="Past the due date — the 2%/day late charge applies (capped at 30 days). Put a collections executive on these."
           apps={overdueApps}
           isLoading={isLoading}
           emptyText="Nothing overdue."
@@ -505,7 +505,7 @@ function AwaitingRepaymentPanel() {
         <RepaymentColumn
           title="Active"
           tone="navy"
-          note="Disbursed and still inside the due date. Interest is accruing at 1%/day; no penalty yet."
+          note="Disbursed and still inside the due date. Interest was deducted at disbursal; no late charge yet."
           apps={activeApps}
           isLoading={isLoading}
           emptyText="No active loans."

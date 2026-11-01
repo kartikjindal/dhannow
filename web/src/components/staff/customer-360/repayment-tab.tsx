@@ -4,13 +4,15 @@
 
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronUp, Loader2, Plus, Sparkles, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Loader2, Plus, X } from "lucide-react";
 import { Badge, EmptyState, StatusBadge } from "@/components/ui";
 import { Field, FieldGrid } from "@/components/ui/field-grid";
 import { PaymentProofLink } from "@/components/ui/payment-proof-link";
 import { Section } from "@/components/staff/detail-parts";
 import { AdminLogPaymentButton } from "@/components/staff/admin-log-payment";
 import { RejectDialog } from "@/components/staff/repayment-verify-queue";
+import { ActionButton } from "@/components/staff/desk-kit";
+import { reversePayment } from "@/lib/api/staff-desks";
 import { PostVerifyBlockDialog, type PostVerifyTarget } from "@/components/staff/post-verify-block-dialog";
 import {
   FinancialSummaryStrip,
@@ -23,7 +25,7 @@ import {
 import type { TabCtx } from "@/components/staff/customer-360/types";
 import { buildLedger, type LedgerRow } from "@/lib/calc/loan-ledger";
 import { daysBetween } from "@/lib/calc/loan-math";
-import { bucketOf, collectedPct, dpdDays, lastVerifiedPayment, penaltyHeadroom, recoveredVsDisbursed } from "@/lib/calc/loan-kpis";
+import { bucketForLoan, collectedPct, dpdDays, lastVerifiedPayment, penaltyHeadroom, recoveredVsDisbursed } from "@/lib/calc/loan-kpis";
 import { useCollectionsCase } from "@/components/staff/customer-360/collections-tab";
 import { COLLECTION_BUCKETS } from "@/lib/collection-buckets";
 import { useStaffSession } from "@/lib/auth/staff-session";
@@ -83,7 +85,7 @@ function RepaymentDate({ loan }: { loan: LoanView }) {
         {due ? formatDate(due) : "—"}
       </div>
       <div className="text-[10.4px] text-ink">
-        On the borrower&apos;s salary day
+        14 days after the confirmed disbursal, 23:59 IST{loan.extensionCount ? ` · extended ${loan.extensionCount} of 3` : ""}
         {loan.status === "CLOSED" || days == null
           ? ""
           : overdue
@@ -102,6 +104,7 @@ function PaymentsPanel({ ctx, loan }: { ctx: TabCtx; loan: LoanView }) {
   const role = sess?.role;
   const can = (p: Permission) => rbacCan(sess?.realRole, role, p);
   const canVerify = role != null && can("loan:activate");
+  const canReverse = role != null && can("refunds:manage");
   const canRecord = role != null && can("customer:manage");
   const [addOpen, setAddOpen] = React.useState(false);
   const [rejectTarget, setRejectTarget] = React.useState<PaymentView | null>(null);
@@ -117,7 +120,6 @@ function PaymentsPanel({ ctx, loan }: { ctx: TabCtx; loan: LoanView }) {
   });
   const payments = paymentsQ.data ?? ctx.detail.payments.filter((p) => p.loanId === loan.id);
   const ledger = buildLedger({ loan, outstanding, payments, today: istCalendarToday() });
-  const total = ledger.rows.find((r) => r.key === "total")!;
 
   const done = () => {
     qc.invalidateQueries({ queryKey: ["staff-repayments"] });
@@ -186,27 +188,17 @@ function PaymentsPanel({ ctx, loan }: { ctx: TabCtx; loan: LoanView }) {
           </Field>
           {ledger.graceDay && <Field label="Grace day" caption="no penalty">{formatDate(ledger.graceDay)}</Field>}
         </FieldGrid>
-        {loan.status === "ACTIVE" && !ledger.isOverdue && settled == null && (
-          <div className="mt-3 flex items-start gap-2 rounded bg-success-50 px-3 py-2 text-[10.4px] text-success-700">
-            <Sparkles size={14} className="mt-0.5 shrink-0" />
-            <p>
-              <span className="font-bold">Pay early &amp; save</span> — Paying today costs {paiseToINR(total.outstandingPaise)};
-              waiting until the due date costs {paiseToINR(Math.max(0, total.payablePaise - total.receivedPaise))} — interest
-              stops on the day it is paid.
-            </p>
-          </div>
-        )}
       </Section>
 
       <BusinessFigures loan={loan} payments={payments} ledger={ledger} outstanding={outstanding} />
 
       <FieldGrid cols={7} className="border-y border-line py-2.5">
         <Field label="Loan number" keyLabel>#{loan.id}</Field>
-        <Field label="Max eligible">{inr(app?.eligibleLimitPaise)}</Field>
+        <Field label="Interest (prepaid)">{inr(loan.upfrontInterestPaise)}</Field>
         <Field label="Requested">{inr(app?.amountRequestedPaise)}</Field>
         <Field label="Sanctioned on">{app?.sanctionedAt ? formatDate(app.sanctionedAt) : null}</Field>
-        <Field label="Disbursed on" keyLabel>{loan.disbursedOn ? formatDate(loan.disbursedOn) : null}</Field>
-        <Field label="Repayment date" keyLabel tone={ledger.isOverdue ? "error" : "ink"} caption="salary day">
+        <Field label="Disbursal confirmed" keyLabel>{loan.disbursedOn ? formatDate(loan.disbursedOn) : null}</Field>
+        <Field label="Repayment date" keyLabel tone={ledger.isOverdue ? "error" : "ink"} caption="23:59 IST">
           {due ? formatDate(due) : null}
         </Field>
         <Field label="Tenure" tone="warning">{due && disbursed ? `${daysBetween(disbursed, due)} days` : null}</Field>
@@ -275,6 +267,17 @@ function PaymentsPanel({ ctx, loan }: { ctx: TabCtx; loan: LoanView }) {
                             </button>
                           </div>
                         )}
+                        {/* CC-10: a verified repayment that bounced is reversed (never by its recorder or verifier). */}
+                        {p.status === "VERIFIED" && p.purpose !== "EXTENSION" && canReverse && (
+                          <ActionButton
+                            label="Reverse"
+                            fields={[{ name: "reason", label: "Why (bounced, reversed by the bank…)", required: true }]}
+                            confirm="The payment stops counting. A closed loan reopens and any level it gave is taken back."
+                            run={(v) => reversePayment(loan.id, p.id, v.reason)}
+                            invalidate={["staff-repayments"]}
+                            success="Payment reversed"
+                          />
+                        )}
                       </td>
                     </tr>
                   );
@@ -336,7 +339,7 @@ function BusinessFigures({
   const col = useCollectionsCase(loan.id);
   // A closed loan stops at closedOn; the server case dpd runs to today.
   const dpd = loan.closedOn ? dpdDays(loan, istCalendarToday()) : (col.case?.dpd ?? dpdDays(loan, istCalendarToday()));
-  const bucket = (loan.closedOn ? null : col.case?.bucket) ?? (dpd != null ? bucketOf(dpd) : null);
+  const bucket = (loan.closedOn ? null : col.case?.bucket) ?? bucketForLoan(loan, istCalendarToday());
   const head = penaltyHeadroom(loan.principalPaise, outstanding?.penaltyDays ?? 0);
   const last = lastVerifiedPayment(payments, loan.id);
   const collected = ledger.rows.find((r) => r.key === "total")!.receivedPaise;

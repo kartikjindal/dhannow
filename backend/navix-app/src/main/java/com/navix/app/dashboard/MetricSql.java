@@ -91,10 +91,8 @@ public final class MetricSql {
             + " " + ist("e.at") + " as day"
             + " from application_event e where e.action in ('ASSIGN', 'REASSIGN')";
 
-    private static final String BUCKET = "case when (cast(:to as date) - l.due_date) <= 0 then 'RUNNING'"
-            + " when (cast(:to as date) - l.due_date) <= 30 then 'D1_30'"
-            + " when (cast(:to as date) - l.due_date) <= 60 then 'D31_60'"
-            + " when (cast(:to as date) - l.due_date) <= 90 then 'D61_90' else 'D90_PLUS' end";
+    /** RBI-style ageing class of a loan as of {@code :to}: the shared definition (PLAN Phase 10b, R10). */
+    private static final String BUCKET = com.navix.collections.domain.DpdBucket.RbiClass.sqlCase("(cast(:to as date) - l.due_date)");
 
     private static String sel(String amount, String grp, String extra) {
         return "select a.application_id, a.loan_id, a.segment, " + amount + " as amount, "

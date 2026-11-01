@@ -119,7 +119,23 @@ export type Permission =
   | "loan:register"
   // Read-only all-DPD-buckets overview. COLLECTION_HEAD + ADMIN (also as working-role Admin, which
   // otherwise holds no collections:* token).
-  | "collections:overview";
+  | "collections:overview"
+  // PLAN Phase 10 desks; each mirrors a backend role allowlist (the backend still decides).
+  | "complaints:view"
+  | "complaints:work"
+  | "holds:manage"
+  | "refunds:view"
+  | "refunds:manage"
+  | "selfie:review"
+  | "emi:approve"
+  | "extension:offer"
+  | "extension:approve"
+  | "collections:extension-override"
+  | "config:view"
+  | "config:manage"
+  | "adjustments:view"
+  | "holidays:manage"
+  | "finance:view";
 
 /** Static role -> permission mapping. TODO: confirm against backend authz. */
 const ROLE_PERMISSIONS: Record<StaffRole, Permission[]> = {
@@ -203,12 +219,28 @@ const ROLE_PERMISSIONS: Record<StaffRole, Permission[]> = {
     "dsa:manage",
     "leads:import",
   ],
+  // RECOVERY has no backend rights of its own yet (Phase 7), so it only reads customers.
   RECOVERY: ["customer:view"],
-  SUPPORT: ["customer:view"],
-  FINANCE: ["customer:view"],
+  SUPPORT: ["customer:view", "customer:view:all", "complaints:view", "complaints:work", "holds:manage"],
+  FINANCE: ["customer:view", "refunds:view", "refunds:manage", "config:view", "config:manage", "adjustments:view", "finance:view"],
   // Read-only: the backend refuses every write from this role (403 READ_ONLY_ROLE).
-  COMPLIANCE: ["customer:view"],
+  // Read-only everywhere: the backend refuses every write with READ_ONLY_ROLE.
+  COMPLIANCE: ["customer:view", "customer:view:all", "complaints:view", "refunds:view", "config:view", "adjustments:view", "finance:view"],
 };
+
+/** PLAN Phase 10 desks for the navix roles, added on top of the lists above. */
+const DESK_PERMISSIONS: Partial<Record<StaffRole, Permission[]>> = {
+  CREDIT_EXECUTIVE: ["selfie:review"],
+  CREDIT_HEAD: ["selfie:review"],
+  ACCOUNTANT: ["refunds:view", "refunds:manage", "adjustments:view", "finance:view"],
+  COLLECTION_HEAD: ["extension:offer", "extension:approve", "holds:manage", "adjustments:view"],
+  COLLECTION_EXECUTIVE: ["extension:offer"],
+  ADMIN: [
+    "complaints:view", "complaints:work", "holds:manage", "refunds:view", "refunds:manage", "selfie:review", "emi:approve",
+    "collections:extension-override", "config:view", "config:manage", "adjustments:view", "holidays:manage", "finance:view",
+  ],
+};
+for (const [role, extra] of Object.entries(DESK_PERMISSIONS)) ROLE_PERMISSIONS[role as StaffRole].push(...extra);
 
 /** Returns true when the role grants the given permission. */
 export function hasPermission(role: StaffRole, permission: Permission): boolean {
@@ -274,6 +306,7 @@ const ADMIN_ROLE_PERMISSIONS: Permission[] = [
   // Admin view showed the tab with every button missing, including on the Mandates & debits console.
   "mandate:override",
   "mandate:debit",
+  ...(DESK_PERMISSIONS.ADMIN ?? []).filter((p) => p !== "selfie:review"),
 ];
 
 /** Each working role carries only its own permissions; `real` is kept for call-site symmetry. */

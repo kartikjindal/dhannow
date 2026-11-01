@@ -1,13 +1,14 @@
 /**
- * Client-side exporters for staff dashboards: a plain CSV writer and a DhanBoost-branded PDF built with
+ * Client-side exporters for staff dashboards: a plain CSV writer and a DhanNow-branded PDF built with
  * jsPDF + jspdf-autotable. Both take the same column model (a header + an accessor) so a page can
- * declare its columns once and offer both formats. The PDF carries the DhanBoost wordmark, the document
+ * declare its columns once and offer both formats. The PDF carries the DhanNow wordmark, the document
  * title, a "Downloaded by …" provenance line, and a per-page confidential footer.
  */
 
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { NAVIX_MARK_PNG } from "./brand-mark";
+import { BRAND } from "@/lib/brand";
 
 /** A column: a header label and an accessor that pulls a cell value from a row. */
 export interface ExportColumn<Row> {
@@ -34,11 +35,11 @@ export interface ExportMeta {
   timezone?: string;
 }
 
-// DhanBoost design tokens, mirrored from src/styles/theme.css (jsPDF needs raw RGB): ink
-// --c-navy-800 · ember accent --c-gold-500 (token still named GOLD) · zebra --c-grey-50.
+// DhanNow design tokens, mirrored from src/styles/theme.css (jsPDF needs raw RGB): ink
+// --c-navy-800 · cobalt accent --c-gold-500 (token still named GOLD) · zebra --c-grey-50.
 // Keeps branded PDFs aligned with the re-skinned UI.
 const NAVY: [number, number, number] = [11, 11, 12];
-const GOLD: [number, number, number] = [255, 91, 55];
+const GOLD: [number, number, number] = [31, 91, 219];
 const ROW_ALT: [number, number, number] = [247, 248, 248];
 
 function cell(v: string | number | null | undefined): string {
@@ -100,7 +101,7 @@ export function exportCsvText(fileBase: string, csv: string): void {
 /** Height of the navy header band plus its gold rule, below which a page's content starts. */
 const PDF_HEADER_BOTTOM = 61;
 
-/** The DhanBoost header band — emblem, wordmark, document title/subtitle — on the current page. */
+/** The DhanNow header band — emblem, wordmark, document title/subtitle — on the current page. */
 function drawPdfHeader(doc: jsPDF, title: string, subtitle?: string): void {
   const pageWidth = doc.internal.pageSize.getWidth();
 
@@ -120,7 +121,7 @@ function drawPdfHeader(doc: jsPDF, title: string, subtitle?: string): void {
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(20);
-  doc.text("DhanBoost", 82, 30);
+  doc.text(BRAND.wordmark, 82, 30);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(GOLD[0], GOLD[1], GOLD[2]);
@@ -138,7 +139,7 @@ function drawPdfHeader(doc: jsPDF, title: string, subtitle?: string): void {
   }
 }
 
-/** "DhanBoost · Confidential" + "Page i of n" on every page of the document. */
+/** "DhanNow · Confidential" + "Page i of n" on every page of the document. */
 function drawPdfFooter(doc: jsPDF): void {
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -148,7 +149,7 @@ function drawPdfFooter(doc: jsPDF): void {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.5);
     doc.setTextColor(130, 130, 130);
-    doc.text("DhanBoost · Confidential", 40, pageHeight - 18);
+    doc.text(`${BRAND.name} · Confidential`, 40, pageHeight - 18);
     doc.text(`Page ${i} of ${pageCount}`, pageWidth - 40, pageHeight - 18, { align: "right" });
   }
 }
@@ -195,7 +196,7 @@ function sizeColumns(
 }
 
 /**
- * Write rows to a DhanBoost-branded PDF download (landscape A4), stamped with who downloaded it. Wide
+ * Write rows to a DhanNow-branded PDF download (landscape A4), stamped with who downloaded it. Wide
  * column sets paginate horizontally (key column repeated) instead of being crushed into one page.
  */
 export function exportPdf<Row>(opts: {
@@ -276,7 +277,7 @@ export interface PdfSection {
 }
 
 /**
- * Write several titled tables to one DhanBoost-branded PDF download (portrait A4) — the shape a
+ * Write several titled tables to one DhanNow-branded PDF download (portrait A4) — the shape a
  * single customer's full profile takes: profile, applications, loans, repayments, verifications,
  * documents, each under its own heading. Same header band, provenance line and per-page footer as
  * `exportPdf`; a section that would start within a few lines of the page foot moves to a new page
@@ -369,7 +370,7 @@ export interface PdfReport {
 }
 
 /**
- * A DhanBoost-branded report PDF: header band, provenance, a short description, the period, a row of
+ * A DhanNow-branded report PDF: header band, provenance, a short description, the period, a row of
  * headline-figure tiles, the full table (with a totals foot), and the report's notes. Narrow tables
  * print portrait; wide ones landscape, paginating horizontally like {@link exportPdf} when even that
  * is too narrow. It carries exactly the rows and figures the matching CSV carries.

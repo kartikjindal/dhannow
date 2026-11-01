@@ -101,13 +101,13 @@ export function BusinessSnapshot(props: DashTabProps) {
           {(
             [
               ["Principal disbursed", "navy", Banknote, pos.principalPaise, "POSITION_PRINCIPAL", "Loan amount given out",
-                "The full loan amount on these loans. Customers repay all of it, plus interest."],
+                "The full loan amount on these loans. Customers repay exactly this on day 14."],
               ["Net disbursed", "teal", Landmark, pos.netDisbursedPaise, "POSITION_NET", "Cash sent to customers' banks",
-                "Loan amount minus the 10% processing fee and 18% GST on that fee: a ₹100 loan puts ₹88.20 in the customer's account."],
-              ["Net receivable", "violet", Receipt, pos.receivablePaise, "POSITION_RECEIVABLE", "Principal + interest so far",
-                "What customers owe before late fees: the loan amount plus 1% a day interest from disbursal to the due date (plus 1 grace day on older loans). Interest stops there; late fees take over."],
+                "Loan amount minus the processing fee, GST on the fee and the 14 days of interest, all deducted at disbursal: a ₹100 loan puts ₹74.20 in the customer's account."],
+              ["Net receivable", "violet", Receipt, pos.receivablePaise, "POSITION_RECEIVABLE", "Principal",
+                "What customers owe before late charges: the principal. Interest was deducted upfront at disbursal and is booked as income on the disbursal-confirmation date."],
               ["Total penalty", "red", TriangleAlert, pos.penaltyPaise, "POSITION_PENALTY", "Late fees",
-                "2% a day on the loan amount once a loan is past its due date (and its grace day, on older loans), capped at 30 days."],
+                "2% a day on the loan amount once a loan is past its due date (23:59 IST on day 14), capped at 30 days."],
               ["Net received", "emerald", CheckCircle2, pos.receivedPaise, "POSITION_RECEIVED", "Repayments verified",
                 "Money customers have paid back on these loans and the accountant has verified, whenever it was paid."],
               ["Outstanding", "orange", Hourglass, pos.pendingPaise, "POSITION_PENDING",

@@ -193,7 +193,9 @@ public final class CustomerDtos {
             /** Overlay like {@code unallocated}: customers whose latest file is a reloan. */
             long reloan,
             /** Overlay like {@code unallocated}: customers with a live block on their mobile. */
-            long blocked) {
+            long blocked,
+            /** Money sent with a UTR, waiting for the Accountant's confirmation (PLAN Phase 10b). */
+            long awaitingConfirmation) {
     }
 
     /** How many of the caller's loans sit in each days-past-due band. Counts of loans, not money. */

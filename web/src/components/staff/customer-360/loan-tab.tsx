@@ -16,6 +16,7 @@ import {
 } from "@/components/staff/customer-360/loan-card";
 import type { TabCtx } from "@/components/staff/customer-360/types";
 import { daysBetween } from "@/lib/calc/loan-math";
+import { HOLD_LABEL, LIFECYCLE_TONE, lifecycleLabel } from "@/lib/domain/loan";
 import { isoDayToLocalDate, istCalendarToday } from "@/lib/customers/customer-360";
 import { customerEarnings } from "@/lib/customers/customer-earnings";
 import { formatDate, formatDateTime } from "@/lib/utils";
@@ -135,13 +136,17 @@ function LoanFacts({ ctx, loanId }: { ctx: TabCtx; loanId: number }) {
   const overdue = loan.status === "OVERDUE";
   const tenure = loanApp?.sanctionTenureDays ?? (due && disbursed ? daysBetween(disbursed, due) : null);
   const daysLate = overdue && due ? Math.max(0, daysBetween(due, istCalendarToday())) : 0;
-  const salaryDay = loanApp?.salaryCreditDay;
   return (
     <>
       <FieldGrid cols={4} className="border-y border-line py-2.5">
         <Field label="Loan number" keyLabel>#{loan.id}</Field>
         <Field label="Customer no" keyLabel>#{detail.customerId}</Field>
-        <Field label="Max eligible">{inr(loanApp?.eligibleLimitPaise)}</Field>
+        <Field label="Status" keyLabel>
+          {loan.lifecycleStatus ? (
+            <Badge variant={LIFECYCLE_TONE[loan.lifecycleStatus] ?? "neutral"}>{lifecycleLabel(loan.lifecycleStatus)}</Badge>
+          ) : loan.status}
+          {loan.holdStatus && loan.holdStatus !== "NONE" && <Badge variant="error" className="ml-1">{HOLD_LABEL[loan.holdStatus]}</Badge>}
+        </Field>
         <Field label="Requested amount" keyLabel>{inr(loanApp?.amountRequestedPaise)}</Field>
       </FieldGrid>
 
@@ -149,25 +154,24 @@ function LoanFacts({ ctx, loanId }: { ctx: TabCtx; loanId: number }) {
       <FieldGrid cols={6}>
         <Field label="Net disbursed" keyLabel>{inr(loan.netDisbursedPaise)}</Field>
         <Field label="Sanctioned on">{loanApp?.sanctionedAt ? formatDate(loanApp.sanctionedAt) : null}</Field>
-        <Field label="Interest rate">1% / day</Field>
-        <Field label="Processing fee" caption="(10%)">{inr(loan.processingFeePaise)}</Field>
-        <Field label="GST on fee" caption="(18%)">{inr(loan.gstPaise)}</Field>
-        <Field label="Contracted repayable" keyLabel tone="navy">{inr(loan.totalRepayablePaise)}</Field>
+        <Field label="Interest" caption="prepaid at disbursal">{inr(loan.upfrontInterestPaise)}</Field>
+        <Field label="Processing fee">{inr(loan.processingFeePaise)}</Field>
+        <Field label="GST on fee">{inr(loan.gstPaise)}</Field>
+        <Field label="Repayable (principal)" keyLabel tone="navy">{inr(loan.totalRepayablePaise)}</Field>
         <Field
           keyLabel label="Repayment date"
           tone={overdue ? "error" : "ink"}
-          caption={salaryDay ? `on the borrower's salary day (day ${salaryDay})` : "on the borrower's salary day"}
+          caption={loan.extensionCount ? `extended ${loan.extensionCount} of 3` : "14 days after confirmed disbursal, 23:59 IST"}
         >
           {due ? formatDate(due) : null}
           {overdue && daysLate > 0 && <Badge variant="error" className="ml-1">+{daysLate}d</Badge>}
         </Field>
         <Field label="Tenure" tone="warning">{tenure != null ? `${tenure} days` : null}</Field>
-        <Field label="Interest at term" keyLabel tone="warning">{inr(loan.totalRepayablePaise - loan.principalPaise)}</Field>
+        <Field label="Original due date">{loan.originalDueDate ? formatDate(loan.originalDueDate) : null}</Field>
         <Field label="Sanctioned amount" keyLabel>{inr(loanApp?.sanctionedAmountPaise)}</Field>
         <Field label="Sanctioned by">{loanApp?.creditDecidedByName}</Field>
-        <Field label="Total deductions">{inr(loan.processingFeePaise + loan.gstPaise)}</Field>
+        <Field label="Total deductions">{inr(loan.processingFeePaise + loan.gstPaise + (loan.upfrontInterestPaise ?? 0))}</Field>
         <Field label="Purpose">{loanApp?.purpose}</Field>
-        <Field label="Salary day">{salaryDay ? `Day ${salaryDay}` : null}</Field>
         <Field label="Decided at">{loanApp?.sanctionedAt ? formatDateTime(loanApp.sanctionedAt) : null}</Field>
         <Field label="Remarks">{loanApp?.sanctionRemarks}</Field>
         <Field label="Risk category">{detail.profile?.riskCategory}</Field>
@@ -175,7 +179,7 @@ function LoanFacts({ ctx, loanId }: { ctx: TabCtx; loanId: number }) {
 
       <h4 className="text-[9.6px] font-bold text-ink">Disbursal details</h4>
       <FieldGrid cols={7}>
-        <Field label="Disbursed on" keyLabel>{loan.disbursedOn ? formatDate(loan.disbursedOn) : null}</Field>
+        <Field label="Disbursal confirmed" keyLabel>{loan.disbursedOn ? formatDate(loan.disbursedOn) : null}</Field>
         <Field label="Txn ref" keyLabel mono>{loan.disbursalTxnRef}</Field>
         <Field label="Payable account" mono caption={loanApp?.disbursalBank ?? undefined}>
           {loanApp?.disbursalAccountNumber}

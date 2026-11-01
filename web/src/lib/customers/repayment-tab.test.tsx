@@ -43,17 +43,16 @@ describe("Repayment tab", () => {
     role = "ADMIN";
   });
 
-  it("grand total row sums principal and interest", () => {
+  it("total row sums principal and interest (navix terms)", () => {
     renderRepay("ACTIVE");
-    const row = screen.getByText("Grand total").closest("tr")!;
+    const row = screen.getByText("Total owed").closest("tr")!;
     expect(row).toHaveTextContent("₹6,650");
     expect(row).toHaveTextContent("₹5,050");
-    expect(screen.getByText(/Pay early/)).toBeInTheDocument();
   });
 
   it("Verify is hidden in the Admin role (it is the Accountant's step)", async () => {
     renderRepay("ACTIVE", [pending]);
-    await screen.findByText("Grand total");
+    await screen.findByText("Total owed");
     expect(screen.queryByRole("button", { name: /Verify/ })).not.toBeInTheDocument();
   });
 
@@ -63,17 +62,15 @@ describe("Repayment tab", () => {
     expect(await screen.findByRole("button", { name: /Verify/ })).toBeInTheDocument();
   });
 
-  it("overdue: penalty row shows, Pay early hidden", () => {
+  it("overdue: late charge row shows", () => {
     renderRepay("OVERDUE", [], "2026-10-01", { penaltyPaise: 90_000, penaltyDays: 3, outstandingPaise: 595_000 });
-    expect(screen.getByText(/Late penalty .2%/).closest("tr")).toHaveTextContent("₹900");
-    expect(screen.queryByText(/Pay early/)).not.toBeInTheDocument();
+    expect(screen.getAllByText("Late charge").map((e) => e.closest("tr")).find(Boolean)).toHaveTextContent("₹900");
   });
 
   it("settled: per-row outstanding is a dash, note shown, hint hidden", () => {
     renderRepay("ACTIVE", [], undefined, { settledAmountPaise: 400_000, outstandingPaise: 400_000 });
     expect(screen.getByText(/Settlement \(approved\)/)).toBeInTheDocument();
     expect(screen.getByText("Principal").closest("tr")).toHaveTextContent("—");
-    expect(screen.queryByText(/Pay early/)).not.toBeInTheDocument();
   });
 
   it("Verify is hidden for a TELECALLER", async () => {
@@ -81,11 +78,6 @@ describe("Repayment tab", () => {
     renderRepay("ACTIVE", [pending]);
     expect(await screen.findByText("UPI1")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Verify/ })).not.toBeInTheDocument();
-  });
-
-  it("closed loan hides the Pay early hint", () => {
-    renderRepay("CLOSED");
-    expect(screen.queryByText(/Pay early/)).not.toBeInTheDocument();
   });
 
   it("rejected payments show the reason and note; partial gets a badge", async () => {
@@ -156,6 +148,6 @@ describe("Repayment tab - payment amount colours", () => {
     renderRepay("ACTIVE", [], "2026-10-01");
     const top = screen.getByLabelText("Repayment date");
     expect(top).toHaveTextContent(formatDate(new Date(2026, 9, 1)));
-    expect(top).toHaveTextContent(/salary day · \d+ days? overdue/);
+    expect(top).toHaveTextContent(/23:59 IST · \d+ days? overdue/);
   });
 });

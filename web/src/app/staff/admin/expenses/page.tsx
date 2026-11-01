@@ -154,7 +154,7 @@ export default function AdminExpensesPage() {
         <ExportMenu
           title="Company expenses"
           subtitle="Operational expense ledger"
-          fileBase="dhanboost-expenses"
+          fileBase="dhannow-expenses"
           columns={[
             { header: "Date", value: (e: ExpenseResponse) => e.expenseDate },
             { header: "Description", value: (e) => e.description },

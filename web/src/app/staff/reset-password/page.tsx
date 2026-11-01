@@ -5,7 +5,7 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { ShieldCheck, Lock, CheckCircle2 } from "lucide-react";
-import { Brand } from "@/components/site/brand";
+import { Brand } from "@/components/staff/brand";
 import { Input } from "@/components/ui";
 import { readEnvelopeError, formatEnvelopeError } from "@/lib/api/errors";
 import { passwordOk, PASSWORD_HINT } from "@/lib/password";

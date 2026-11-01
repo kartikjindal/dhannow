@@ -3,7 +3,7 @@
  *
  * The server's `dpd` floors at 0 (`LoanMath.daysPastDue`), so a loan falling due today and one due
  * next week both arrive as 0 — and the worklist deliberately lists loans up to a week BEFORE they
- * fall due, so an officer can call ahead of salary day. Telling those apart needs the due date
+ * fall due, so an officer can call ahead of the due date. Telling those apart needs the due date
  * measured against TODAY IN IST: the backend derives business dates from `LocalDate.now(IST)`, and a
  * staffer's browser zone is not a business date.
  */

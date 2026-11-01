@@ -225,7 +225,7 @@ export default function TransactionsPage() {
         <ExportMenu
           title="Transactions ledger"
           subtitle={exportSubtitle}
-          fileBase="dhanboost-transactions"
+          fileBase="dhannow-transactions"
           columns={[
             { header: "Date", value: (t: TransactionView) => (t.date ? formatDate(t.date) : "") },
             { header: "Repayment date", value: (t) => (t.repaymentDate ? formatDate(t.repaymentDate) : "") },

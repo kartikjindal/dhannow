@@ -65,13 +65,13 @@ describe("report export", () => {
     expect(periodLine(report)).toBe("01 Oct 2026 – 23 Oct 2026 (by disbursal date)");
     expect(periodLine({ ...report, from: null, to: null })).toBe("All time (by disbursal date)");
     expect(periodLine({ ...report, dateBasis: null })).toMatch(/Live snapshot/);
-    expect(reportFileBase(report)).toBe("dhanboost-report-customers-overpaid-2026-10-01-to-2026-10-23");
-    expect(reportFileBase({ ...report, dateBasis: null })).toBe("dhanboost-report-customers-overpaid-snapshot");
+    expect(reportFileBase(report)).toBe("dhannow-report-customers-overpaid-2026-10-01-to-2026-10-23");
+    expect(reportFileBase({ ...report, dateBasis: null })).toBe("dhannow-report-customers-overpaid-snapshot");
   });
 
   it("writes the CSV with the same rows, figures and notes the PDF gets", () => {
     const csv = buildReportCsv(report, actor, "23 Oct 2026, 3:30 pm").split("\n");
-    expect(csv[0]).toBe("DhanBoost report,Customers who overpaid");
+    expect(csv[0]).toBe("DhanNow report,Customers who overpaid");
     expect(csv).toContain("Downloaded by,Meera Krishnan (Admin)");
     expect(csv).toContain("Excess to refund (Rs.),100.50");
     expect(csv).toContain("Loan ID,Customer,Disbursed on,\"Paid, verified (Rs.)\",Excess paid (Rs.),Part payment");

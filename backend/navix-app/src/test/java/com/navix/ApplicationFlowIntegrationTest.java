@@ -157,6 +157,74 @@ class ApplicationFlowIntegrationTest {
                 .andExpect(jsonPath("$.data.level").value(2));
     }
 
+    @Autowired
+    private com.navix.scheduler.ReconciliationCheck reconciliation;
+
+    /**
+     * PLAN Phase 10b revenue recognition: fee and upfront interest are booked on the disbursal-confirmation day,
+     * and every loan reconciles (principal = net + fee + GST + interest); a broken row is reported.
+     */
+    @Test
+    void revenue_feeAndInterestAreBookedOnTheConfirmationDayAndTheBookReconciles() throws Exception {
+        long loanId = loanIdOf(walkToActive(9171L));
+        var loan = jdbc.queryForMap("select principal, net_disbursed, processing_fee, gst, upfront_interest_paise, disbursed_on"
+                + " from loan where id = ?", loanId);
+        assertThat(loan).containsEntry("principal", 100000L).containsEntry("net_disbursed", 74200L)
+                .containsEntry("processing_fee", 10000L).containsEntry("gst", 1800L).containsEntry("upfront_interest_paise", 14000L);
+        assertThat(reconciliation.check()).isEmpty();
+
+        String day = loan.get("disbursed_on").toString();
+        Long fee = jdbc.queryForObject("select sum(processing_fee) from loan where disbursed_on = cast(? as date)"
+                + " and lifecycle_status <> 'DISBURSEMENT_PENDING'", Long.class, day);
+        Long interest = jdbc.queryForObject("select sum(upfront_interest_paise) from loan where disbursed_on = cast(? as date)"
+                + " and lifecycle_status <> 'DISBURSEMENT_PENDING'", Long.class, day);
+        mvc.perform(get("/api/dashboard/daily").param("view", "ADMIN").param("from", day).param("to", day)
+                        .header("Authorization", bearer("1", "ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totals.pfPaise").value(fee))
+                .andExpect(jsonPath("$.data.totals.interestPaise").value(interest));
+
+        jdbc.update("update loan set net_disbursed = net_disbursed - 1 where id = ?", loanId);
+        assertThat(reconciliation.check()).contains(loanId);
+        jdbc.update("update loan set net_disbursed = net_disbursed + 1 where id = ?", loanId);
+    }
+
+    /** PLAN Phase 10: the staff reads (credit level, adjustment log) and the pricing maker-checker. */
+    @Test
+    void staffDesk_creditLevelAdjustmentLogAndPricingMakerChecker() throws Exception {
+        walkToActive(9172L);
+        mvc.perform(get("/api/staff/customers/{id}/credit-level", 9172L).header("Authorization", bearer("4", "CREDIT_HEAD")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.current.level").value(1))
+                .andExpect(jsonPath("$.data.history[0].reason").value("FIRST_LOAN"))
+                .andExpect(jsonPath("$.data.quotes[6].principalPaise").value(1000000))
+                .andExpect(jsonPath("$.data.quotes[6].netPaise").value(742000))
+                .andExpect(jsonPath("$.data.quotes[6].repayPaise").value(1000000));
+        mvc.perform(get("/api/staff/balance-adjustments").header("Authorization", bearer("8", "COMPLIANCE")))
+                .andExpect(status().isOk());
+        mvc.perform(get("/api/staff/balance-adjustments").header("Authorization", bearer("8", "SUPPORT")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("FORBIDDEN_ROLE"));
+
+        MvcResult drafted = mvc.perform(post("/api/staff/config/pricing").header("Authorization", bearer("9173", "FINANCE"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"penalCapDays\": 30}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.pricing[0].status").value("DRAFT"))
+                .andReturn();
+        long draftId = data(drafted).get("pricing").get(0).get("id").asLong();
+        expectSod(post("/api/staff/config/pricing/{id}/approve", draftId), "9173", "FINANCE", null);
+        mvc.perform(post("/api/staff/config/pricing/{id}/approve", draftId).header("Authorization", bearer("1", "ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.pricing[0].status").value("ACTIVE"))
+                .andExpect(jsonPath("$.data.pricing[1].status").value("RETIRED"));
+        mvc.perform(post("/api/staff/config/pricing").header("Authorization", bearer("8", "COMPLIANCE"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isForbidden());
+        // Put the seed version back for the other tests (a status change is allowed; terms never change).
+        jdbc.update("update pricing_config set status = 'RETIRED' where id = ?", draftId);
+        jdbc.update("update pricing_config set status = 'ACTIVE' where version = 1");
+    }
+
     /**
      * R4 / CC-19: a loan 40 days late owes principal + the late charge capped at 30 days, never the prepaid
      * interest. CC-08: paying more than that closes the loan, splits penal → principal and opens a refund

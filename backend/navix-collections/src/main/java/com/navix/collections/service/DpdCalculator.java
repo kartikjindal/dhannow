@@ -10,9 +10,7 @@ import java.time.temporal.ChronoUnit;
  * Computes the live DPD bucket from a loan's due date. Days-past-due and the
  * bucket are ALWAYS derived on read and NEVER stored as the source of truth.
  *
- * <p>Bucket mapping: {@code <=0 -> UPCOMING}, {@code 1-7 -> T0_T7},
- * {@code 8-30 -> T8_T30}, {@code 31-60 -> T30_T60}, {@code 61-90 -> T60_T90},
- * {@code >90 -> T90_PLUS}. Pure logic — has no dependencies and is unit-tested
+ * <p>Bucket mapping: the shared {@link DpdBucket} definition (PLAN Phase 10b, R10). Pure logic — has no dependencies and is unit-tested
  * directly with {@code new DpdCalculator()}.
  */
 @Service
@@ -40,22 +38,7 @@ public class DpdCalculator {
      * @return the live DPD bucket
      */
     public DpdBucket bucket(int dpd) {
-        if (dpd <= 0) {
-            return DpdBucket.UPCOMING;
-        }
-        if (dpd <= 7) {
-            return DpdBucket.T0_T7;
-        }
-        if (dpd <= 30) {
-            return DpdBucket.T8_T30;
-        }
-        if (dpd <= 60) {
-            return DpdBucket.T30_T60;
-        }
-        if (dpd <= 90) {
-            return DpdBucket.T60_T90;
-        }
-        return DpdBucket.T90_PLUS;
+        return DpdBucket.of(dpd);
     }
 
     /**
@@ -66,6 +49,6 @@ public class DpdCalculator {
      * @return the live DPD bucket
      */
     public DpdBucket bucketFor(LocalDate dueDate, LocalDate asOf) {
-        return bucket(daysPastDue(dueDate, asOf));
+        return dueDate == null || asOf == null ? DpdBucket.UPCOMING : DpdBucket.of(ChronoUnit.DAYS.between(dueDate, asOf));
     }
 }

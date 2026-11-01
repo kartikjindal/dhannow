@@ -177,20 +177,20 @@ class CollectionsWorklistPageTest {
     @Test
     void theBucketSummaryCountsFromSqlAndSumsTheDerivedBalanceIgnoringEveryFilter() {
         java.util.Map<Long, String> buckets = new java.util.LinkedHashMap<>();
-        buckets.put(1L, "T0_T7");
-        buckets.put(2L, "T0_T7");
-        buckets.put(3L, "T90_PLUS");
+        buckets.put(1L, "D2_7");
+        buckets.put(2L, "D2_7");
+        buckets.put(3L, "D90_PLUS");
         when(query.bucketsInScope(any())).thenReturn(buckets);
         when(loanDirectory.findLoans(buckets.keySet())).thenReturn(Map.of(
                 1L, loan(1, 100_000), 2L, loan(2, 250_000), 3L, loan(3, 40_000)));
 
         var rows = service.worklistSummary(null);
 
-        assertThat(rows).hasSize(6); // one row per bucket, empty ones included
-        var t0 = rows.stream().filter(r -> r.bucket().equals("T0_T7")).findFirst().orElseThrow();
+        assertThat(rows).hasSize(com.navix.collections.domain.DpdBucket.values().length); // one row per bucket, empty ones included
+        var t0 = rows.stream().filter(r -> r.bucket().equals("D2_7")).findFirst().orElseThrow();
         assertThat(t0.n()).isEqualTo(2);
         assertThat(t0.outstandingPaise()).isEqualTo(350_000L);
-        assertThat(rows.stream().filter(r -> r.bucket().equals("T60_T90")).findFirst().orElseThrow().n()).isZero();
+        assertThat(rows.stream().filter(r -> r.bucket().equals("D61_90")).findFirst().orElseThrow().n()).isZero();
         ArgumentCaptor<WorklistFilter> f = ArgumentCaptor.forClass(WorklistFilter.class);
         verify(query).bucketsInScope(f.capture());
         assertThat(f.getValue().needle()).isNull();

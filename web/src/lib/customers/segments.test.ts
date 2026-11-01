@@ -46,6 +46,11 @@ describe("segmentOf", () => {
 
   // DISBURSEMENT_PENDING gets its own segment, distinct from "approved" — sanctioned but money not
   // yet released is a different staff action than a still-undecided or already-active customer.
+  it("money sent, not yet confirmed → awaitingConfirmation (PLAN Phase 10b)", () => {
+    expect(segmentOf({ loanStatus: null, latestStatus: "DISBURSAL_CONFIRMATION_PENDING" })).toBe("awaitingConfirmation");
+    expect(segmentOf({ loanStatus: "DISBURSING", latestStatus: "DISBURSAL_CONFIRMATION_PENDING" })).toBe("awaitingConfirmation");
+  });
+
   it("DISBURSEMENT_PENDING → disbursementPending, not approved", () => {
     expect(segmentOf({ loanStatus: null, latestStatus: "DISBURSEMENT_PENDING" })).toBe("disbursementPending");
   });

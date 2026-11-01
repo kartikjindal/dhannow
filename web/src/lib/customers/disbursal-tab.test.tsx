@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { staffApi, type ApplicationView, type CustomerDetail, type StepResult } from "@/lib/api/applications";
 import { CustomerTabBody } from "@/components/staff/customer-tabs";
+import { creditLevelApi } from "@/lib/api/staff-desks";
 
 vi.mock("@/lib/auth/staff-session", () => ({
   useStaffSession: () => ({ session: { role: "ADMIN" }, loading: false }),
@@ -75,12 +76,17 @@ describe("Disbursal tab", () => {
     expect(screen.getByText(/Manually overridden by Credit Reviewer/)).toBeInTheDocument();
   });
 
-  it("leads with the net amount to send and the sanctioned ceiling before disbursal", async () => {
+  it("leads with the backend's net amount to send (₹10,000 → ₹7,420) and the sanctioned ceiling before disbursal", async () => {
+    vi.spyOn(creditLevelApi, "get").mockResolvedValue({
+      current: { level: 7, maxPaise: 1_000_000, nextLevelPaise: null, ladder: [1_000_000] },
+      history: [],
+      quotes: [{ principalPaise: 1_000_000, feePaise: 100_000, gstPaise: 18_000, interestPaise: 140_000, netPaise: 742_000, repayPaise: 1_000_000, tenureDays: 14 }],
+    });
     renderTab("DISBURSEMENT_PENDING", [], { amountRequestedPaise: 1_000_000, sanctionedAmountPaise: 1_500_000 });
     const top = await screen.findByLabelText("Disbursal amounts");
     expect(top).toHaveTextContent("Amount to be disbursed");
-    expect(top).toHaveTextContent("₹8,820");
-    expect(top).toHaveTextContent("Loan ₹10,000 − fee ₹1,000 − GST ₹180");
+    expect(await screen.findByText("₹7,420")).toBeInTheDocument();
+    expect(top).toHaveTextContent("Loan ₹10,000 − fee ₹1,000 − GST ₹180 − interest ₹1,400");
     expect(top).toHaveTextContent("Sanctioned amount₹15,000");
   });
 

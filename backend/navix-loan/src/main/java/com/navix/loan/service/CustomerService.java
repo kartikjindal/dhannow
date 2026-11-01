@@ -783,7 +783,8 @@ public class CustomerService {
                 bySegment.getOrDefault("closed", 0L),
                 unallocated,
                 reloan,
-                blocked);
+                blocked,
+                bySegment.getOrDefault("awaitingConfirmation", 0L));
     }
 
     private CustomerBookQuery.BookFilter bookFilter(String q, LocalDate from, LocalDate to, String seg,

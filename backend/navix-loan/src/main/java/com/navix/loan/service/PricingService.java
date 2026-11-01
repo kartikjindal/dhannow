@@ -111,4 +111,16 @@ public class PricingService {
             throw new BusinessException("AMOUNT_NOT_ALLOWED", "Choose one of the loan amounts on offer");
         }
     }
+
+    /** One ladder amount priced on the ACTIVE version, for staff screens (PLAN Phase 10b: figures come from here, not the web). */
+    public record Quote(long principalPaise, long feePaise, long gstPaise, long interestPaise, long netPaise,
+                        long repayPaise, int tenureDays) {
+    }
+
+    public java.util.List<Quote> quotes(java.util.List<Long> amountsPaise) {
+        PricingSnapshot p = activePricing();
+        LoanMath m = new LoanMath(p);
+        return amountsPaise.stream().map(a -> new Quote(a, m.processingFeePaise(a), m.gstPaise(a), m.upfrontInterestPaise(a),
+                m.netDisbursedPaise(a), m.totalRepayablePaise(a, p.tenureDays()), p.tenureDays())).toList();
+    }
 }

@@ -98,7 +98,6 @@ export function collectionHandoverColumns<Row extends { applicationId: number | 
     sanction: [
       a("Sanctioned amount (₹)", "sanctionedAmountPaise", "rupees"),
       a("Tenure (days)", "sanctionTenureDays"),
-      a("Salary day", "salaryCreditDay"),
       a("Purpose", "purpose"),
     ] as Col[],
     bank: [

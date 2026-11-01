@@ -954,6 +954,44 @@ The web side has three parts:
   - Update `staff-nav.ts` and `rbac.ts`.
 - Split `lib/api/applications.ts` (4,906 lines) only where new code touches it. No big refactor.
 
+**Status (2026-11-02): done (with the gaps listed).** Web: `tsc --noEmit` and `next lint` are clean, 885 vitest tests are green (911 before; the deleted borrower and marketing tests went with their code), and `next build` passes. Backend changes for 10/10b: `mvn verify` is green (about 2,015 unit; the bucket tests were rewritten) and `mvn verify -Pit` is green (151 integration, up from 149). No migration was needed (V115 is still free).
+
+Code:
+- **Strip.** Deleted `(borrower)`, `(marketing)`, `sample`, the borrower BFF (`api/borrower/*`, `api/auth/borrower/*`), `api/contact`, `components/borrower`, `components/site`, the borrower parts of `components/app`, the borrower-only `lib` modules (onboarding, offer, journey client, borrower flow, application store, domain types) and the borrower namespaces of `lib/api/applications.ts` (`publicApi`, `borrowerApi`, `journeyApi`, `verificationApi`, `offerApi`, `referralApi`, borrower notifications). Found with an import-reachability pass: only modules reachable from the borrower roots and not from any staff root were removed. `/` redirects to `/staff/dashboard`; every other non-staff path redirects to `/staff` (`next.config.mjs`); robots disallow everything; GA, the Signzy frame and camera/geolocation permissions are gone from the CSP. Three borrower Playwright specs and the borrower fixtures went; `auth.spec.ts` now asserts the borrower routes are gone.
+- **Guards.** eslint `no-restricted-imports` blocks `@/components/borrower|site`, `@/lib/borrower-*`, `@/lib/onboarding*`, the journey client and the application store. `src/lib/copy-guard.test.ts` fails on "per day for the days held", "salary day", "25% of", "pay early", "save interest" or "DhanBoost" anywhere in `web/src` or `web/e2e` (allow-list empty) and if a borrower folder comes back.
+- **Brand.** `lib/brand.ts` is the console's one brand config (DHAN NOW, support and grievance contacts as in CLAUDE.md, no legal name, no lender, no NBFC names). `components/staff/brand.tsx` shows the emblem cut from `docs/brand/dhannow-logo.jpeg` (`public/dhannow-mark.png`, app icons, the PDF-export header). Export file names `dhannow-*`, PDF footer and report header from `BRAND`.
+- **Theme.** `styles/theme.css` keeps the app_navix Monochrome tokens; the accent ("gold" token names kept) is cobalt `#1F5BDB` / pressed `#1A4BB8` / tint `#EEF3FF`; PDF exports and two dashboard series follow.
+- **RBAC and nav.** New permissions in `rbac.ts` for the desks (`complaints:view|work`, `holds:manage`, `refunds:view|manage`, `selfie:review`, `emi:approve`, `extension:offer|approve`, `collections:extension-override`, `config:view|manage`, `adjustments:view`, `holidays:manage`, `finance:view`), added for the navix roles through one `DESK_PERMISSIONS` overlay; SUPPORT, FINANCE, COMPLIANCE and RECOVERY get their desks. `staff-nav.ts` adds Selfie review, Complaints, Extension approvals (worklist filtered on `extState=OFFERED`, flag `loan-extension`), Restructure approvals (flag `emi-conversion`), Disbursal confirmation, Adjustment log, Pricing and product, Holiday calendar; Refunds owed and Transactions open to the finance roles. The four new roles have no dashboard view yet and land on a "your desks are in the menu" notice.
+- **Desks** (`lib/api/staff-desks.ts`, one allowlisted proxy `/api/staff/desk/*`, `components/staff/desk-kit.tsx`):
+  - Disbursal confirmation (`/staff/accounting/disbursals`, Accountant): net amount + UTR per file, Confirm, Return to Head with a reason.
+  - Refund cases on Refunds owed: Mark refunded (UTR + bank date), Cancel with a reason; the NACH register stays below for collections.
+  - Reverse on a verified repayment (Repayment tab; ACCOUNTANT/FINANCE/ADMIN, not for extension charges).
+  - Loan extension in the Collections tab (G1 offer with pay-by, call note, recording id and the ADMIN cap override; G2 approve/reject; cancel; resend; history) and kind "Extension charge" in Record a payment, locked to `quoteForToday` with the UTR required (G4 hand-off); the Accountant's verify queue badges extension payments.
+  - Hold and dispute (raise, release, history) and the recovery EMI request in the Collections tab; Restructure approvals page for the ADMIN.
+  - Complaints (`/staff/support/complaints`) with status/category/SLA-missed filters, the next SLA date, acknowledge, start review, resolve and escalate (notes required).
+  - Selfie review (`/staff/credit/selfie-reviews`) with the three frames, approve, reject with a reason.
+  - Credit level card on the customer page (level, maximum, next step, history; ADMIN exception with a reason code). The navix limit-override, salary-day and mobile-change cards are gone (CC-24).
+  - Pricing and product (`/staff/admin/config`): versions, a DRAFT (blank fields copy the ACTIVE version), approve or discard; maker ≠ checker.
+  - Adjustment log (`/staff/compliance/adjustments`), Holiday calendar (`/staff/admin/holidays`).
+  - Staff MFA on the login page: the code step on `MFA_REQUIRED`/`INVALID_MFA_CODE`, and enrolment (secret + `otpauth` link, confirm with a code) on `MFA_ENROLMENT_REQUIRED`.
+- **Backend for the desks** (`StaffDeskController`, navix-app): `GET /api/staff/customers/{id}/credit-level` (level, history and every ladder amount priced on the ACTIVE terms, `PricingService.quotes`), `GET /api/staff/balance-adjustments?loanId&customerId&kind` (ADMIN, FINANCE, COMPLIANCE, ACCOUNTANT, COLLECTION_HEAD), `GET /api/staff/config`, `POST /api/staff/config/{pricing|product}` (DRAFT; one open draft), `POST …/{id}/approve` (retires the ACTIVE version; the approver is not the maker, `SOD_VIOLATION`), `POST …/{id}/discard`. `SanctionRequest.salaryCreditDay` is optional on DhanNow (UPFRONT) terms. `LoanView` gains `upfrontInterestPaise`.
+
+Tests: `copy-guard.test.ts`, `collection-buckets.test.ts` (parity with `DpdBucket.java`, every edge), `domain/loan.test.ts` (parity with `LoanLifecycle`/`LoanHold`/`RepaymentStatus`), `loan-math.test.ts` (IST days), `loan-ledger.test.ts` (the ₹10,000 DhanNow loan: interest prepaid, penal before principal), `desks.test.tsx` (new roles' permissions and nav; sanction dialog chips ≤ level with net ₹7,420 / repay ₹10,000, no salary day), updated customer-360, disbursal, repayment, loan, segments, views and worklist tests; backend `ApplicationFlowIntegrationTest.staffDesk_creditLevelAdjustmentLogAndPricingMakerChecker`.
+
+Deviations:
+- **Routes stay under `/staff`.** "The staff middleware becomes the root" is met by redirecting `/` and every non-staff path to `/staff`; moving 40 pages to the root was not worth the churn.
+- **One desk proxy.** The new backend paths go through `/api/staff/desk/*` with a path allowlist rather than one BFF route each.
+- **Config endpoints** live in navix-app over JDBC (the tables, triggers and snapshot freezing already existed); the draft copies every column of the ACTIVE version except identity and audit columns.
+- **Brand config** is a TS constant mirroring the backend defaults until Phase 10a W5 generates both from `docs/brand.json`.
+- **MFA enrolment** shows the secret and an `otpauth://` link, not a QR code (no QR library added).
+- **`applications.ts`** was only trimmed (borrower namespaces); the new clients are in `staff-desks.ts`.
+
+Not done (Phase 10):
+- Dashboard role views and scorecards for RECOVERY, SUPPORT, FINANCE, COMPLIANCE (`views.ts`, `DashboardScope`); RECOVERY has no backend rights yet.
+- Complaint assign and staff-filed complaints UI, complaint attachments; ADMIN "reset MFA" button on the staff list (the client call exists).
+- EXT-14 "Treat as extension payment" and EXT-18 "Re-open for this payment" (backend + G4), and the G5 extension block on the Repayment tab (the history is on the Collections tab).
+- The borrower-session helpers in `bff-session.ts` and the marketing CSS in `globals.css` are dead code, left for a later sweep.
+
 ### Phase 10a: Website ↔ app wiring (`site/` = today's `dhannow/website`, weeks 9–10)
 
 The 24 static pages move into the monorepo as `site/`, unchanged except for the items below. Hosting: S3 + CloudFront on `dhannow.com`, HTTPS, deployed by CI.
@@ -1021,6 +1059,33 @@ The audit found about 120 places where staff screens, queries and exports encode
 
 **Guard test:** a repo-wide test fails the build if any staff or borrower source contains "per day for the days held", "salary day", "25% of", "pay early", "save interest" or "DhanBoost" outside an allow-listed legacy folder.
 - **Tests:** vitest for new components; Playwright e2e for borrower happy path + staff sanction → disburse → confirm → verify repayment, run in CI against docker-compose.
+
+**Status (2026-11-02): shared roots and revenue recognition done; per-surface work partly done.** Gates as in Phase 10 above.
+
+Code:
+- **R4.** Every staff money figure is the backend's: `LoanBreakdown`, the loan card and the Repayment tab show interest as "prepaid at disbursal" (`upfrontInterestPaise` / `interestPrepaidPaise`) and owed = principal + late charge − paid.
+- **R5.** `web/src/lib/domain/loan.ts` mirrors `LoanLifecycle`, `LoanHold` and `RepaymentStatus` exactly (a test reads the Java files) with labels and badge tones; the loan tab shows the lifecycle badge and the hold.
+- **R6.** Disbursal confirmation queue (Phase 10 above) and the "Awaiting disbursal confirmation" customer segment, front and back (`CustomerSegments`, `CustomerBookQuery`, `CustomerSummaryCounts.awaitingConfirmation`, `segments.ts`): a DISBURSING loan or a DISBURSAL_CONFIRMATION_PENDING file is no longer counted as active.
+- **R7.** `lib/calc/loan-math.ts` has no rates, no `dueDateFromSalary` and no fee/interest maths left: only IST date helpers. The sanction dialog, the projected breakdown and the pre-disbursal amounts read the backend's ladder quotes; the 40-day salary window and its test are gone.
+- **R8.** `loan-ledger.ts`: rows principal, late charge, interest ("prepaid at disbursal", outside the totals); received money settles the late charge, then principal.
+- **R9.** The customer page shows the credit level and history; the limit basis reads "Ladder level" / "Admin exception"; `SalaryDayCard` and `LimitOverrideCard` are deleted from the console.
+- **R10.** One definition: `DpdBucket` (navix-collections) carries UPCOMING, DUE_TODAY, D1, D2_7, REVIEW 8–30, D31_60, D61_90, D90_PLUS with their labels and bounds, `DpdBucket.of` and `DpdBucket.sqlCase`; the RBI SMA/NPA classes are `DpdBucket.RbiClass` (RUNNING, D1_30, D31_60, D61_90, D90_PLUS). `DpdCalculator`, `CollectionsWorklistQuery`, `MetricSql`, `DashboardService` and `ReportService` use it; a loan is bucketed from its due date (UPCOMING before the day, DUE_TODAY on it). `web/lib/collection-buckets.ts` mirrors it and `collection-buckets.test.ts` parses the Java file. The pre-due window is 2 days (`LoanDirectory.PRE_DUE_WINDOW_DAYS`).
+- **R11.** `daysBetween` and `istDate` count Asia/Kolkata calendar days.
+- **Revenue recognition.** `DashboardService.daily` books the processing fee and the upfront interest on the disbursal-confirmation day (`BusinessQueries.feeAndInterestByDay`, unconfirmed loans excluded) and late charges on receipt (`penalReceivedByDay`: PENAL allocations of verified repayments by `paid_on`); interest on navix (ACCRUED) terms is still booked at closure. The "income-realised" report is now "Fee and interest income": per loan confirmed in the period, principal, fee income, GST payable, upfront interest income and net, with late and extension charges received as facts. `ReconciliationCheck` (navix-app, 02:15 IST, `scheduler_lock`) logs `RECONCILIATION_MISMATCH` at ERROR for any loan where principal ≠ net + fee + GST + upfront interest; `ApplicationFlowIntegrationTest.revenue_feeAndInterestAreBookedOnTheConfirmationDayAndTheBookReconciles` checks the ₹1,000 loan (₹742 / ₹100 / ₹18 / ₹140), the daily totals and that a broken row is reported.
+- **Per surface.** Sanction dialog (ladder chips ≤ level, backend breakdown, "due 14 days after confirmed disbursal, 23:59 IST", no salary day); loan breakdown, stage pop-up and loan/repayment/customer/sanction tabs (no "1% per day", "interest accrued", salary day or "pay early"; "Disbursal confirmed", "Extended n of 3"); business snapshot copy (₹100 → ₹74.20 in hand, receivable = principal, interest booked on confirmation), revenue chart labels ("Interest earned upfront", "Late charges received"), the pre-closure gauge removed; report guide and lifecycle text rewritten for DhanNow (ladder, 14 days, extension, new roles, the confirmation step); salary-day columns removed from the all-applications export and the collection hand-over export; the DSA invite SMS no longer promises a salary-linked advance.
+
+Deviations:
+- **Receivable and settlements unchanged in code.** On DhanNow terms `loan.total_repayable` is the principal and the breakdown's accrued interest is 0, so the `total_repayable` sums, `POSITION_RECEIVABLE`, `LoanDues.grossDuePaise` and the collection-efficiency denominator already equal principal (+ penal); they were left as they are.
+- **Pre-due window** is a constant (2 days), not a config value.
+- **Bucket names changed** on the wire (`T0_T7`… → `D2_7`…); nothing persists them (`collection_case.current_bucket` is unused).
+
+Not done (10b, in priority order):
+1. Loans register columns (fee, GST, interest, net, confirmed on/by, lifecycle, hold) and its new filters/segments (Due today, D1, Overdue review, Restructure, On hold); repayment-book columns on the pipeline; "My decisions" column change.
+2. Accounting transactions ledger row types (FEE income, GST payable, INTEREST income at confirmation, PENAL, REFUND) and a confirmation-status column; FINANCE/COMPLIANCE report categories (reports are still ADMIN-only on the backend).
+3. Finance views: GST payable register, net-disbursal reconciliation view, credit-ladder distribution (the income report covers fee, GST and upfront interest).
+4. Staff "View KFS / sanction / agreement" from the stored `loan_document` PDFs (the proxy path is allowlisted; no screen yet) and the screen/PDF/ledger equality test.
+5. Exports: ladder level in `customer-export.ts` and the `ExportMenu` columns; collections settlements copy.
+6. Playwright: the ₹10,000 assertions per surface and the staff sanction → disburse → confirm → verify path (CI, Phase 12).
 
 ## Phase 11: Flutter app (`app/`, weeks 5–12, parallel from Phase 5)
 
@@ -1090,6 +1155,198 @@ app/lib/
 - Upload key in GitHub secrets, Play App Signing, internal → closed → production tracks.
 - Crash reporting via Firebase Crashlytics (only on top of `firebase_core`).
 - `assetlinks.json` SHA-256 from the Play signing key.
+
+**Status (2026-11-02): API layer switched to the real backend; uploads, provider hand-offs and push not done.** `flutter analyze` is clean. `flutter test` is green with 316 tests, up from 302: the 14 new ones are `test/client_test.dart`. `tool/screens_test.dart` still renders all 82 screens on the demo server. The APK was not built here.
+
+Packages added:
+- `dio`
+- `flutter_secure_storage`
+- `url_launcher`
+- `package_info_plus`, which is not in the list above. It supplies the installed version for the `minVersion` force update and for the device record. A `--dart-define` would drift from `pubspec.yaml`.
+
+Builds talk to the backend by default. They take two defines:
+- `--dart-define=API_BASE=<url>`, default `https://api.dhannow.com`.
+- `--dart-define=DEMO=true`, which runs the in-memory server.
+
+Demo controls (`/demo`, `/kit`, the Settings row, the Welcome long-press) exist only on the demo server. A deep link to them in a real build lands on the journey.
+
+Code:
+- **`core/api/`**
+  - `api.dart`: the abstract `Api` that screens call, with the same method signatures as before plus a few new methods. It also holds the `api` global, set by `DEMO`.
+  - `http_api.dart`: `HttpApi`, the real client, plus hand-written decoders for `LoanView`, `pendingExtension`, `OfferSummaryView`, `BorrowerEmiView` and `ProfileView`.
+  - `client.dart`: `ApiClient`, built on `dio`.
+  - `demo_api.dart`: `DemoApi`, the old demo server. Its extension offer now rides on `loan.pendingExtension`, as on the server.
+  - `test/flutter_test_config.dart` puts every widget test on `DemoApi`.
+- **`ApiClient`**
+  - Unwraps the `ApiResponse` envelope and maps `error.code` into `ApiException`, keeping the server message for logs only.
+  - Errors: no connection → OFFLINE (E3); 5xx → SERVER_ERROR with `X-Request-Id`, which the shared action handlers open as E4.
+  - Headers: `X-Client: android` on every call; `X-Integrity-Token` is left out while `play-integrity` is OFF.
+  - Tokens: the access token stays in memory, and the refresh token and a once-generated `deviceId` go to `flutter_secure_storage`.
+  - A 401 triggers one single-flight refresh (`POST /api/auth/borrower/refresh {refreshToken, deviceId}`), then a retry.
+  - A refused refresh (`REFRESH_INVALID` or `REFRESH_REUSED`) ends the session: the app opens E5 and an OTP is sent to the stored mobile. A network blip during refresh is OFFLINE, not a sign-out.
+- **Auth**
+  - `otp/request {mobile, deviceId}`, `login` and `password-login` each send `{…, deviceId, deviceName, appVersion}`.
+  - Then `set-password`, and `logout {refreshToken}`.
+  - S5 forgot-password is an OTP sign-in followed by `set-password`, because the backend reset is an emailed link.
+- **Journey (E6)**
+  - `GET /api/applications/mine` (newest), then `GET /api/applications/{id}/journey`. The `stepKey` maps to routes: `signup.*` → `/resume` (the next step comes from `completed`) and `offer.x` → `/loan/x`.
+  - Application status maps to `Stage`. An unknown status reads as "with the credit team".
+  - The open loan is `GET /api/loan/{id}` plus `/outstanding` (late charge and verified repaid).
+  - Refetch happens on app resume (`AppLifecycleListener`) and on pull-to-refresh (dashboard, Repay, Loans), through `api.refresh()`.
+- **Sign-up**
+  - Steps save through `PUT /api/applications/{id}/profile` and `POST …/journey/{STEP}`. A draft is created with `POST /api/applications {customerId}` after the OTP sign-in.
+  - Self-employed calls `…/self-employed`.
+  - A11 consent sends its code with `verify/bureau-consent/otp` when the step opens. On submit it calls, in order: `bureau-consent {otp, consentText}`, `verify/pan`, `verify/email`, `verify/bureau`, `verify/employment`, journey CONSENT, `submit-kyc`, then SUBMITTED. A bureau challenge goes to A13 (`verify/bureau/challenge/answer`).
+  - PAN and work email wait in the keystore until consent, then are cleared.
+- **Offer**
+  - `offer/amount`, `offer/summary` (the quote), `offer/kfs` then `offer/kfs/ack`, `offer/references` (relation upper-cased), `verify/address {manualAddress}`.
+  - `GET` then `POST offer/disbursal-account` (the account on file, sent back unchanged).
+- **Loan**
+  - `GET /api/loan/{id}/repayments` for transactions, `GET /api/loans/{id}/documents` and `…/{docId}/url` (the 5-minute link opens in the browser), `GET /api/payment-settings` (pay to), `GET /api/notifications`.
+  - `POST /api/loan/{id}/repayments {amountPaise, method UPI, txnRef, paidOn, purpose REPAYMENT|EXTENSION, extensionId}` with one `Idempotency-Key` per pending submit. A retry of the same payment reuses the key; it is dropped on success.
+- **Extension**
+  - The screens render from `loan.pendingExtension.status` only. Server APPROVED shows as offered, ACCEPTED as confirmed (pay), PAYMENT_PENDING as checking, ACTIVE as verified. EXPIRED, CANCELLED, DECLINED and REJECTED show as ended; an unknown status gets a safe "being updated" banner.
+  - Calls:
+    - `…/seen` once per offer;
+    - `…/otp` when C12 opens and on Resend;
+    - `…/accept {otp, consentVersion, version}`;
+    - `…/decline {DID_NOT_ASK, version}` from "Didn't ask for this?";
+    - payment with `purpose=EXTENSION` and `quoteForToday.totalPaise`.
+- **EMI**: `GET /api/loans/{id}/emi`, shown only when APPROVED. C13 now sends the code with `…/emi/{id}/otp` and accepts with `…/accept {otp, consentVersion, version}`.
+- **Account**
+  - `GET` and `POST /api/complaints {category, body, loanId}`, using an `Idempotency-Key` per submit that is reused on retry. The D5 categories map to the backend enum.
+  - `GET /api/devices/me`, `DELETE /api/devices/me/{deviceId}`, `POST /api/me/account-deletion` (`LOAN_OPEN` → blocked).
+- **`GET /api/app/config`**
+  - Read at launch before sign-in; `core/brand.dart` is the fallback.
+  - It drives every support and grievance contact on screen and the legal links (`core/links.dart`, opened with `url_launcher`). Website pages use the config URL when it lists the page.
+  - It also drives `minVersion`: below it, the app opens the new force-update screen `/update` (EXT-24).
+- **Android**: `INTERNET` permission in the main manifest (release had none), and `<queries>` for tel, mailto and https.
+
+Tests (`test/client_test.dart`):
+- Envelope unwrap and `error.code` with the request id.
+- 5xx → SERVER_ERROR with its id; socket error → OFFLINE.
+- Two parallel 401s → exactly one refresh, both retried with the new token.
+- Refused refresh → SESSION_EXPIRED, the hook fires and the token is forgotten; offline refresh keeps the token.
+- `deviceId` matches the server pattern and is stable.
+- A complaint retried after a network failure reuses its Idempotency-Key, and the next one gets a new key.
+- Journey: signed out → `/intro`; `offer.kfs` → `/loan/kfs`.
+- `loanOf` with unknown lifecycle and repayment enums decodes to `unknown`, money as sent.
+- `pendingExtension` keeps id, version and status; unknown extension and EMI states decode to `unknown`.
+- An unknown extension state renders the safe banner without throwing.
+- `versionBelow`.
+- Quote rates read back.
+
+Deviations:
+- **Interface changes, not a codegen client.** Screens still call one `Api`. These members changed: `sendOtp`/`verifyOtp` gain `consent:`; `submitApplication(dob:)`; `raiseComplaint(loan:)`; `signOutDevice(Device)`. These are new: `sendExtensionOtp`, `declineExtension`, `sendEmiOtp`, `acceptEmi`, `documentUrl`, `simulate`, `refresh`, `config`. The OpenAPI generator (`tool/gen_api.dart`) and its contract test are not built; decoders are hand-written in `http_api.dart`.
+- **B1 offers one amount.** No borrower endpoint prices an arbitrary amount (`offer/summary` prices only the saved drawdown). `quotes()` returns that one quote, so B1 shows a single amount until a per-amount quote endpoint exists.
+- **Disclosure rates.** `OfferSummaryView` has no rates, so fee, GST and daily bps are read back from the server's own paise in the decoder (exact on ladder amounts).
+- **Loan interest.** `LoanView` has no interest figure, so it is principal − fee − GST − net. All money still comes from the server.
+- **Loan number.** `LoanView` has no borrower-facing account number, so the loan id stands in for `DNL…`.
+- **Extension history amounts.** `extensions[]` lines carry no charge, so history rows show dates without an amount.
+- **No officer name.** `pendingExtension` names no officer, so C12 says "our collections team".
+- **"Not now" on C12** only leaves the screen. It does not decline, because DECLINED is terminal.
+
+Not done (updated by 11b below):
+- **A1b onboarding-paused form.** The server wants the full Aadhaar number; the board asks for the last 4.
+- **B7 "Use my location".** Needs `geolocator`. The typed address works.
+- **Other phase items:**
+  - FCM push (`PUT /api/devices/me` with a token);
+  - Play Integrity (`X-Integrity-Token`);
+  - `local_auth`, riverpod, l10n/ARB, Crashlytics;
+  - the `maintenance` banner;
+  - referral code;
+  - document share.
+- **Release APK size** not measured here; the coordinator builds it.
+
+**Status (2026-11-02): 11b done. Uploads, guided selfie, provider hand-offs, email codes, the A13 question and re-borrow are wired to the real API.** `flutter analyze` is clean and `flutter test` is green with 323 tests, up from 316: six client tests and one C6 widget test are new. `tool/screens_test.dart` still renders all 82 screens on the demo server, which has a stand-in for every new method. Nothing was built here.
+
+Packages added:
+- **`image_picker`** for the camera: document photos, the payment screenshot from the gallery, and the three selfie frames.
+  - It hands off to the phone's own camera app through an intent, so the app declares no `CAMERA` permission and needs no preview code.
+  - On Android 13+ the gallery is the system photo picker (CC-56).
+  - Photos are scaled to 1,800 px and quality 75 on the phone (CC-49).
+- **`file_picker`** for PDFs (statements, payslips, card scans, cheque or passbook). `image_picker` cannot pick documents.
+- **No `camera` or `app_links`.** A live selfie preview is not needed for staff review in v1. The callback app link only has to bring the app forward; the app then reads status from the server.
+- **Size impact:** both plugins are thin Android wrappers over AndroidX libraries that are mostly already present (core, activity, annotation; plus `exifinterface` and `lifecycle-runtime`). No Tika or other heavy library is pulled in. Expected cost is roughly 0.2–0.4 MB per ABI after R8; not measured.
+
+Android:
+- An `autoVerify` app-link intent filter for `https://dhannow.com/app/cb/*`, the backend's `redirect-allowlist`. The site publishes `assetlinks.json`.
+- `launchMode` is now `singleTask`, so the callback closes the Custom Tab and resumes the activity rather than stacking a second one.
+- `flutter_deeplinking_enabled=false`, so the callback path is not pushed as a route.
+- `<queries>` for `CustomTabsService` and `IMAGE_CAPTURE`.
+- `MainActivity` has a one-method channel, `dhannow/system`, with `openAppSettings`, for E9 "Open settings". No permission plugin was needed.
+
+Code:
+- **`core/files.dart`**: `pickFile(context, PickFrom.camera|selfie|files|images)` returns a `PickedFile` with bytes.
+  - It enforces the server's rule on the phone: PDF, JPG or PNG, at most 5 MB.
+  - A file over 5 MB is refused before it is read into memory.
+  - A denied camera opens E9.
+  - The demo returns named stand-ins, so widget tests need no plugin.
+  - The old `PickedFile`/`uploadError` in `onboarding/common.dart` are replaced. HEIC is no longer offered.
+- **Upload flow** (`HttpApi`):
+  - Application documents: `POST /api/applications/{id}/verify/presign-upload {docType, fileName, contentType}` → `PUT` to the presigned URL (plain dio, no `Authorization`, same `Content-Type`) → key → `POST …/verify/documents {docType, objectKeys, filePassword}`.
+  - Payment screenshot: `POST /api/storage/presign-upload {category: REPAYMENT_PROOF, filename, contentType}`, which answers without the envelope (the client now passes such bodies through) → `PUT` → `proofUrl`.
+  - Each picked screenshot is uploaded once, so a retry sends the same proof under the same `Idempotency-Key`.
+- **Uploads by step:**
+  - A7: `BANK_STATEMENT` + journey BANK.
+  - A8: three `SALARY_SLIP` → `verify/salary {monthlySalaryPaise, slipObjectKeys, filePassword}`. FAIL shows "couldn't read these salary slips". The salary is kept from A5 or read from the profile.
+  - A9: `AADHAAR_CARD_FRONT`/`_BACK`.
+  - A10: `PAN_CARD_FRONT`/`_BACK`.
+  - A12: address proof is uploaded, and the UAN goes through `profile/self` + `verify/employment`.
+  - E10: `AADHAAR_FRONT`/`_BACK` + `verify/aadhaar-manual` + journey OFFER_DIGILOCKER.
+  - B10/B10b: a typed account and an optional `BANK_PROOF` (`useBankProof`).
+  - C6/C12b: the screenshot is now required in `PaidForm` ("Attach the screenshot of your payment").
+- **B6b guided selfie:**
+  - Each "Capture" takes one front-camera photo: straight, right, left.
+  - Three `SELFIE` uploads, then `verify/selfie/frames {straightKey, rightKey, leftKey}`, then journey OFFER_SELFIE.
+  - REVIEW shows "Photos sent. Our team will check them" and carries on.
+  - `SELFIE_ATTEMPTS_EXCEEDED` shows the server's "Our team will check your photos" and carries on.
+  - A failed send keeps the frames, and "Try again" resends them.
+- **Hand-offs** (`openInCustomTab`, `url_launcher` `LaunchMode.inAppBrowserView`, no new package):
+  - It returns when the app resumes (via the callback link or the tab closing), then reads status from the server, polling up to 3 times, 2 s apart. Nothing is read from the callback URL.
+  - B3 DigiLocker: `verify/digilocker/init {redirectUrl: https://dhannow.com/app/cb/digilocker}` → tab → `digilocker/status` → `complete` → journey. Exhausted sessions or three failures open E10.
+  - B8 e-sign: `offer/sanction-letter` → `offer/esign/init {success/failureRedirectUrl}` → tab → `offer/esign/status` PASS. `derived.fallback` opens B8b.
+  - B8b drawn signature: the strokes are rendered to a white-background PNG on the phone (`signaturePng`), then sent as `offer/esign {signatureDataUrl}`.
+  - B11 eNACH: `offer/mandate/init` → tab → `offer/mandate/status`.
+- **A6**: `sendEmailCode` saves the address on the profile, then calls `verify/email/otp` or `verify/official-email/otp`. A `sent:false` on the work address marks it undeliverable. `verifyEmailCode` calls `…/otp/confirm {otp}`.
+- **A13:**
+  - The question and options come from the BUREAU row of `verify/summary` (`derived.bureauChallengeQuestion/Options`).
+  - Answers go to `challenge/answer`; a question still open afterwards shows "That answer wasn't accepted". "I don't recognise any of these" calls `challenge/skip`. Then `submit-kyc`.
+  - The question stage now comes back after a restart: DRAFT at `signup.submitted` with an open challenge.
+- **C10**: "Borrow again" calls `POST /api/applications/reborrow`. SANCTIONED walks the offer journey, and a legacy PRE_APPROVED sends B1's amount to `POST …/apply`. A REJECTED result (past delinquency) opens A14.
+
+Tests (`test/client_test.dart`):
+- A payment presigns once.
+- The PUT carries the `Content-Type` and no token.
+- A retry after a network failure reuses the proof key and the `Idempotency-Key`.
+- No screenshot, or a file over 5 MB, is refused before any call.
+- Selfie: three SELFIE presigns, then frames with the three keys, giving REVIEW.
+- DigiLocker:
+  - opens the provider URL;
+  - the return URL is on the allowlist;
+  - a lagging status is read again;
+  - the journey advances.
+- A13 reads the question from the summary, and a refused answer stays open.
+- The drawn signature is a PNG.
+
+In `money_test`, the payment flows attach a screenshot, and a new test shows a payment without one is refused.
+
+Deviations:
+- **Selfie through the system camera app.** Guidance is the on-screen prompt per pose, not a live oval over a preview.
+- **Address proof (A12) is uploaded but not filed.** `verify/documents` does not allow ELECTRICITY_BILL/GAS_BILL/RENT_AGREEMENT, as on the web.
+
+Not done:
+- **A1b onboarding-paused form.** The server wants the full Aadhaar number; the board asks for the last 4.
+- **B7 "Use my location".** Needs `geolocator`.
+- **Selfie liveness provider path** (`selfie/liveness/init`). v1 is manual review.
+- **Other phase items:** FCM push, Play Integrity, `local_auth`, riverpod, l10n, Crashlytics, the maintenance banner, referral code, document share.
+- **The release APK size** was not measured.
+
+Backend gaps:
+- `verify/documents` should accept the address-proof doc types.
+- The legacy PRE_APPROVED re-borrow `apply` fast-tracks to disbursal without the KFS or a signature.
+- `/api/storage/presign-upload` returns a bare body, not `ApiResponse`.
+- Neither presign path enforces a size or type limit server-side; only the app does.
 
 ## Phase 12: Testing strategy (continuous, gate per phase)
 

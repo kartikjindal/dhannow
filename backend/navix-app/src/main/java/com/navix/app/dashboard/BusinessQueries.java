@@ -107,14 +107,32 @@ public class BusinessQueries {
         return out;
     }
 
-    /** Processing fee (GST excluded -- it is not revenue) per disbursal day. */
-    public Map<LocalDate, Long> pfByDay(LocalDate from, LocalDate to) {
-        Map<LocalDate, Long> out = new LinkedHashMap<>();
-        metrics.jdbc().query("select l.disbursed_on as d, coalesce(sum(l.processing_fee), 0) as pf from loan l"
-                        + " where l.disbursed_on between :from and :to group by 1",
+    /**
+     * Income booked on the disbursal-confirmation day (PLAN Phase 10b revenue recognition): {@code [fee, upfront
+     * interest]} per day 0. GST is excluded (it is payable, not revenue); an unconfirmed loan books nothing.
+     */
+    public Map<LocalDate, long[]> feeAndInterestByDay(LocalDate from, LocalDate to) {
+        Map<LocalDate, long[]> out = new LinkedHashMap<>();
+        metrics.jdbc().query("select l.disbursed_on as d, coalesce(sum(l.processing_fee), 0) as pf,"
+                        + " coalesce(sum(l.upfront_interest_paise), 0) as interest from loan l"
+                        + " where l.disbursed_on between :from and :to and l.lifecycle_status <> 'DISBURSEMENT_PENDING'"
+                        + " group by 1",
                 new MapSqlParameterSource("from", from).addValue("to", to),
                 rs -> {
-                    out.put(rs.getObject("d", LocalDate.class), rs.getLong("pf"));
+                    out.put(rs.getObject("d", LocalDate.class), new long[] {rs.getLong("pf"), rs.getLong("interest")});
+                });
+        return out;
+    }
+
+    /** Late charges booked on receipt: PENAL allocations of verified repayments, per bank date ({@code paid_on}). */
+    public Map<LocalDate, Long> penalReceivedByDay(LocalDate from, LocalDate to) {
+        Map<LocalDate, Long> out = new LinkedHashMap<>();
+        metrics.jdbc().query("select p.paid_on as d, coalesce(sum(pa.amount_paise), 0) as penal from payment_allocation pa"
+                        + " join payment p on p.id = pa.payment_id where pa.component = 'PENAL' and p.status = 'VERIFIED'"
+                        + " and p.purpose = 'REPAYMENT' and p.paid_on between :from and :to group by 1",
+                new MapSqlParameterSource("from", from).addValue("to", to),
+                rs -> {
+                    out.put(rs.getObject("d", LocalDate.class), rs.getLong("penal"));
                 });
         return out;
     }

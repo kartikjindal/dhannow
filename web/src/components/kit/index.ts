@@ -1,5 +1,5 @@
 /**
- * DhanBoost UI kit — the reusable dashboard vocabulary (live showcase: /sample).
+ * DhanNow UI kit — the reusable dashboard vocabulary (live showcase: /sample).
  * Every value resolves to a token in src/styles/theme.css.
  */
 export * from "./surface";

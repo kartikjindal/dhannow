@@ -43,7 +43,7 @@ function row(loanId: number, dpd: number, dueDate: string, officerId: number | n
   return {
     loanId,
     dpd,
-    bucket: dpd > 0 ? "T0_T7" : "UPCOMING",
+    bucket: dpd > 0 ? "D2_7" : "UPCOMING",
     preDue: dpd === 0,
     caseId: officerId == null ? null : `case-${loanId}`,
     assignedOfficerId: officerId,

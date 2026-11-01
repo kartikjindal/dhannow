@@ -4,8 +4,9 @@
  * "Accept lead" — the Credit Executive's FINAL credit decision (revamp.md Phase 2, decision 27).
  *
  * There is no Head counter-approval behind this: whatever is submitted here is the sanction the
- * borrower is offered and held to. So the dialog shows the full consequence of the numbers before
- * they're committed — a live repayment schedule computed with the same math the borrower will see.
+ * borrower is offered and held to. The amount is a credit-ladder chip within the customer's level, and the
+ * figures are the backend's quote on the ACTIVE pricing (PLAN Phase 10b) — the console computes no money.
+ * The release then goes to the Disbursement Head and the Accountant's confirmation starts day 0.
  *
  * The bank account + IFSC are shown read-only: credit verifies them, but only the borrower may
  * change where the money lands (Phase 3's disbursal-account step, which penny-drops a change).
@@ -15,13 +16,10 @@ import * as React from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { Dialog, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input, Select, Skeleton, toast } from "@/components/ui";
-import { staffApi, type ApplicationView } from "@/lib/api/applications";
-import { buildCostBreakdown, daysBetween, dueDateFromSalary } from "@/lib/calc/loan-math";
-import { formatDate, formatINR } from "@/lib/utils";
+import { Input, Skeleton, toast } from "@/components/ui";
+import { paiseToINR, staffApi, type ApplicationView } from "@/lib/api/applications";
+import { creditLevelApi } from "@/lib/api/staff-desks";
 import { useRefreshAfterAction, errMessage } from "@/components/staff/pipeline/hooks";
-
-const MIN_AMOUNT = 1000;
 
 export function SanctionDialog({
   app,
@@ -33,8 +31,7 @@ export function SanctionDialog({
   onClose: () => void;
 }) {
   const refresh = useRefreshAfterAction();
-  const [amount, setAmount] = React.useState("");
-  const [salaryCreditDay, setSalaryCreditDay] = React.useState(String(app.salaryCreditDay ?? 30));
+  const [amountPaise, setAmountPaise] = React.useState<number | null>(null);
   const [remarks, setRemarks] = React.useState("");
 
   // The salary account credit verified at intake — read-only context for the decision.
@@ -43,14 +40,16 @@ export function SanctionDialog({
     queryFn: () => staffApi.getProfile(app.id),
     enabled: open,
   });
+  // The customer's ladder level and every ladder amount priced by the backend.
+  const level = useQuery({
+    queryKey: ["credit-level", app.customerId],
+    queryFn: () => creditLevelApi.get(app.customerId),
+    enabled: open,
+  });
+  const chips = (level.data?.quotes ?? []).filter((q) => q.principalPaise <= (level.data?.current.maxPaise ?? 0));
 
   const m = useMutation({
-    mutationFn: () =>
-      staffApi.sanction(app.id, {
-        sanctionedAmountPaise: Math.round(Number(amount) * 100),
-        salaryCreditDay: Number(salaryCreditDay),
-        remarks: remarks.trim() || undefined,
-      }),
+    mutationFn: () => staffApi.sanction(app.id, { sanctionedAmountPaise: amountPaise!, remarks: remarks.trim() || undefined }),
     onSuccess: () => {
       refresh(app.id);
       toast.success(`Application #${app.id} sanctioned`);
@@ -58,14 +57,7 @@ export function SanctionDialog({
     },
   });
 
-  const rupees = Number(amount);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const projectedDate = dueDateFromSalary({ disbursedOn: today, salaryDay: Number(salaryCreditDay) });
-  const tenure = daysBetween(today, projectedDate);
-  const amountOk = Number.isFinite(rupees) && rupees >= MIN_AMOUNT;
-  const dateOk = Number(salaryCreditDay) >= 1 && Number(salaryCreditDay) <= 31 && tenure > 0;
-  const preview = amountOk && dateOk ? buildCostBreakdown(rupees, tenure) : null;
+  const preview = chips.find((q) => q.principalPaise === amountPaise) ?? null;
 
   return (
     // !max-w / !w: globals.css's un-layered `.modal { max-width: 460px }` outranks plain utilities.
@@ -79,29 +71,30 @@ export function SanctionDialog({
         </p>
       </DialogHeader>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Input
-          label="Sanctioned amount (₹)"
-          required
-          inputMode="numeric"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value.replace(/[^\d]/g, ""))}
-          placeholder="25000"
-          helperText="The ceiling the borrower may draw from — they may take less."
-          error={amount && !amountOk ? `Minimum ₹${MIN_AMOUNT.toLocaleString("en-IN")}` : undefined}
-        />
-        <Select
-          label="Salary credit day"
-          required
-          value={salaryCreditDay}
-          onChange={(e) => setSalaryCreditDay(e.target.value)}
-          helperText={dateOk ? `Projected ${formatDate(projectedDate)} — ${tenure} days from today. Final due date is set from actual disbursal.` : undefined}
-          error={!dateOk ? "Select a day from 1 to 31" : undefined}
-        >
-          {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
-            <option key={day} value={day}>{day}</option>
-          ))}
-        </Select>
+      <div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+          Amount{level.data ? ` · level ${level.data.current.level}, up to ${paiseToINR(level.data.current.maxPaise)}` : ""}
+        </p>
+        {level.isLoading ? (
+          <Skeleton variant="line" rows={1} />
+        ) : level.isError ? (
+          <p className="text-sm text-error-700">{errMessage(level.error)}</p>
+        ) : (
+          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Sanctioned amount">
+            {chips.map((q) => (
+              <button
+                key={q.principalPaise}
+                type="button"
+                role="radio"
+                aria-checked={amountPaise === q.principalPaise}
+                className={`btn btn-sm ${amountPaise === q.principalPaise ? "btn-gold" : "btn-outline"}`}
+                onClick={() => setAmountPaise(q.principalPaise)}
+              >
+                {paiseToINR(q.principalPaise)}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="mt-4 rounded border border-line bg-ivory p-4">
@@ -119,17 +112,19 @@ export function SanctionDialog({
 
       {preview && (
         <div className="mt-4 rounded border border-line p-4">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-            Repayment schedule
-          </p>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">What the borrower gets</p>
           <dl className="grid gap-x-6 gap-y-1 text-[10.4px] sm:grid-cols-2">
-            <Kv label="Principal" value={formatINR(preview.principal)} />
-            <Kv label="Processing fee (excl. GST)" value={formatINR(preview.processingFee)} />
-            <Kv label="GST on fee" value={formatINR(preview.gstOnFee)} />
-            <Kv label="Interest (1%/day)" value={formatINR(preview.interest)} />
-            <Kv label="Borrower receives" value={formatINR(preview.netDisbursed)} emphasis />
-            <Kv label="Total repayable" value={formatINR(preview.totalRepayable)} emphasis />
+            <Kv label="Principal" value={paiseToINR(preview.principalPaise)} />
+            <Kv label="Processing fee" value={paiseToINR(preview.feePaise)} />
+            <Kv label="GST on fee" value={paiseToINR(preview.gstPaise)} />
+            <Kv label={`Interest (${preview.tenureDays} days, upfront)`} value={paiseToINR(preview.interestPaise)} />
+            <Kv label="Borrower receives" value={paiseToINR(preview.netPaise)} emphasis />
+            <Kv label="Repays (principal)" value={paiseToINR(preview.repayPaise)} emphasis />
           </dl>
+          <p className="mt-2 text-xs text-muted">
+            Due {preview.tenureDays} days after the confirmed disbursal, 23:59 IST. Release goes to the Disbursement Head,
+            then the Accountant confirms it.
+          </p>
         </div>
       )}
 

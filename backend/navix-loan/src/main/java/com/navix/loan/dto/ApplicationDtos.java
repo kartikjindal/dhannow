@@ -52,7 +52,8 @@ public final class ApplicationDtos {
      * down from and the repayment date they'll be held to, plus staff-only remarks.
      */
     public record SanctionRequest(@Positive long sanctionedAmountPaise,
-                                  @NotNull @Min(1) @Max(31) Integer salaryCreditDay,
+                                  /** Navix (ACCRUED) terms only; DhanNow terms ignore it (due = confirmed disbursal + tenure). */
+                                  @Min(1) @Max(31) Integer salaryCreditDay,
                                   String remarks) {
     }
 

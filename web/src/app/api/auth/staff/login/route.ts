@@ -29,11 +29,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
-  const { email, password, force, captchaToken } = (body ?? {}) as {
+  const { email, password, force, captchaToken, totpCode } = (body ?? {}) as {
     email?: unknown;
     password?: unknown;
     force?: unknown;
     captchaToken?: unknown;
+    totpCode?: unknown;
   };
 
   if (typeof email !== "string" || !email || typeof password !== "string" || !password) {
@@ -53,6 +54,8 @@ export async function POST(req: NextRequest) {
         force: force === true,
         // Forwarded verbatim — only the backend may judge it.
         captchaToken: typeof captchaToken === "string" ? captchaToken : "",
+        // Staff MFA (PLAN Phase 7): the authenticator code, when the backend asked for one.
+        ...(typeof totpCode === "string" && totpCode ? { totpCode } : {}),
       }),
       cache: "no-store",
     });

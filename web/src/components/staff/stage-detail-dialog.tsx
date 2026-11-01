@@ -110,7 +110,7 @@ const STAGE_BLURB: Record<JourneyStageKey, string> = {
   DISBURSEMENT:
     "The disbursement head releases the funds and an accountant confirms the bank transfer.",
   ACTIVE_REPAYMENT:
-    "The loan is live; the borrower repays on their salary day and an accountant verifies the payment.",
+    "The loan is live; the borrower repays the principal by 23:59 IST on day 14 and an accountant verifies the payment.",
   CLOSED: "The loan is fully repaid and the application is closed.",
 };
 
@@ -346,11 +346,6 @@ function StartedSection({ app, allEvents }: { app: ApplicationView; allEvents: E
         />
         <Row label="Purpose" value={app.purpose} />
         <Row label="Requested amount" value={paiseToINR(app.amountRequestedPaise)} />
-        <Row label="Eligible limit" value={paiseToINR(app.eligibleLimitPaise)} />
-        <Row
-          label="Salary day"
-          value={app.salaryCreditDay != null ? `Day ${app.salaryCreditDay}` : null}
-        />
       </dl>
     </section>
   );

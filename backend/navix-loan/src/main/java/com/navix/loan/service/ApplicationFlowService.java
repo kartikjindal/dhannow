@@ -694,13 +694,17 @@ public class ApplicationFlowService {
         if (sanctionedAmountPaise < LoanMath.MIN_LOAN_PAISE) {
             throw new BusinessException("AMOUNT_TOO_LOW", "The sanctioned amount is below the minimum of ₹1,000");
         }
-        if (salaryCreditDay == null || salaryCreditDay < 1 || salaryCreditDay > 31) {
+        if (salaryCreditDay != null && (salaryCreditDay < 1 || salaryCreditDay > 31)) {
             throw new BusinessException("INVALID_SALARY_DAY", "Salary credit day must be between 1 and 31");
         }
         // DhanNow: a ladder amount within the customer's credit level, locked from here on (CC-04),
         // on the pricing frozen now. The repayment date is indicative: disbursal + tenure (CC-01).
         creditLevels.requireSanctionable(app.getCustomerId(), sanctionedAmountPaise);
         pricing.freeze(app);
+        // The salary day only drives the due date on the navix (ACCRUED) terms (PLAN Phase 10b).
+        if (salaryCreditDay == null && !pricing.mathFor(app).pricing().upfront()) {
+            throw new BusinessException("INVALID_SALARY_DAY", "Salary credit day must be between 1 and 31");
+        }
         LocalDate projectedRepaymentDate = pricing.mathFor(app).dueDate(LocalDate.now(), salaryCreditDay);
         app.setSanctionedAmountPaise(sanctionedAmountPaise);
         app.setApprovedRepaymentDate(projectedRepaymentDate);
@@ -709,7 +713,9 @@ public class ApplicationFlowService {
         app.setSanctionRemarks(remarks);
         app.setSanctionedBy(actorIdOrNull());
         app.setSanctionedAt(Instant.now());
-        app.setSalaryCreditDay(salaryCreditDay);
+        if (salaryCreditDay != null) {
+            app.setSalaryCreditDay(salaryCreditDay);
+        }
         // Clearing the pending tag: a sanctioned lead is no longer parked.
         app.setMarkedPendingAt(null);
         app.setPendingReason(null);

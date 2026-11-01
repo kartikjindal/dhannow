@@ -58,7 +58,7 @@ function ActivateInner() {
 
   return (
     <div className="mx-auto max-w-md">
-      <PageHeader title="Activate your account" subtitle="Set a password to finish setting up your DhanBoost staff access." />
+      <PageHeader title="Activate your account" subtitle="Set a password to finish setting up your DhanNow staff access." />
 
       {done ? (
         <div className="rounded border border-success-100 bg-success-50 p-6 text-center shadow-sm">

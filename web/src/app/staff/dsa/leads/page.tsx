@@ -46,7 +46,7 @@ const COLUMN_LABEL: Record<string, string> = {
 
 /** The fixed SMS template every DSA lead invite goes out as — the DSA cannot change the wording. */
 const SMS_TEMPLATE = (name: string) =>
-  `Hi ${name || "there"}, DhanBoost can get you a quick salary-linked advance. Reply YES and we'll call you, or apply directly at dhanboost.com.`;
+  `Hi ${name || "there"}, DhanNow offers short-term personal loans. Reply YES and we'll call you, or get the DhanNow app at dhannow.com.`;
 
 /**
  * DSA portal · My leads — add a lead (PAN + name + mobile required) and track its live conversion
@@ -117,7 +117,7 @@ function DsaLeadsPageInner() {
     <div>
       <PageHeader
         title="My leads"
-        subtitle="Add a lead (PAN, name and mobile required). Track its status as it moves through DhanBoost."
+        subtitle="Add a lead (PAN, name and mobile required). Track its status as it moves through DhanNow."
       >
         <button
           type="button"

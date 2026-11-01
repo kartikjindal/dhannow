@@ -132,7 +132,6 @@ export function CustomerTab({ detail: c, customerId, app, onChanged }: TabCtx) {
       <Section title="Employment" icon={Briefcase} pill={employerPill}>
         <FieldGrid cols={4}>
           <Field label="Company">{p?.employer}</Field>
-          <Field label="Salary day">{latestApp?.salaryCreditDay != null ? `Day ${latestApp.salaryCreditDay}` : null}</Field>
           <Field label="Last salary received">{p?.previousSalaryDate ? formatDate(p.previousSalaryDate) : null}</Field>
           <Field label="Net monthly income" tone="navy">
             {p?.monthlySalaryPaise != null ? paiseToINR(p.monthlySalaryPaise) : null}

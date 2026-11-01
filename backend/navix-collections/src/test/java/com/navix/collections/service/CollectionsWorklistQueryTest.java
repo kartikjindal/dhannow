@@ -1,5 +1,7 @@
 package com.navix.collections.service;
 
+import com.navix.collections.domain.DpdBucket;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -132,16 +134,9 @@ class CollectionsWorklistQueryTest {
         query.count(head(), FilterSpec.empty());
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
         verify(jdbc).queryForObject(sql.capture(), any(SqlParameterSource.class), eq(Long.class));
-        assertThat(sql.getValue()).contains("<= 0 then 'UPCOMING'", "<= 7 then 'T0_T7'", "<= 30 then 'T8_T30'",
-                "<= 60 then 'T30_T60'", "<= 90 then 'T60_T90'", "else 'T90_PLUS'");
-        DpdCalculator calc = new DpdCalculator();
-        assertThat(calc.bucket(7).name()).isEqualTo("T0_T7");
-        assertThat(calc.bucket(8).name()).isEqualTo("T8_T30");
-        assertThat(calc.bucket(30).name()).isEqualTo("T8_T30");
-        assertThat(calc.bucket(31).name()).isEqualTo("T30_T60");
-        assertThat(calc.bucket(60).name()).isEqualTo("T30_T60");
-        assertThat(calc.bucket(61).name()).isEqualTo("T60_T90");
-        assertThat(calc.bucket(90).name()).isEqualTo("T60_T90");
-        assertThat(calc.bucket(91).name()).isEqualTo("T90_PLUS");
+        assertThat(sql.getValue()).contains(DpdBucket.sqlCase("coalesce(cast(:today as date) - l.due_date, 0)"));
+        assertThat(DpdBucket.sqlCase("x")).isEqualTo("case when x <= -1 then 'UPCOMING' when x <= 0 then 'DUE_TODAY'"
+                + " when x <= 1 then 'D1' when x <= 7 then 'D2_7' when x <= 30 then 'REVIEW' when x <= 60 then 'D31_60'"
+                + " when x <= 90 then 'D61_90' else 'D90_PLUS' end");
     }
 }

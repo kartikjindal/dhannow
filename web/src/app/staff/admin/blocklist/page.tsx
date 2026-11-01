@@ -90,7 +90,7 @@ export default function AdminBlocklistPage() {
       >
         <ExportMenu
           title="Fraud blocklist"
-          fileBase="dhanboost-blocklist"
+          fileBase="dhannow-blocklist"
           columns={[
             { header: "Type", value: (b: BlocklistResponse) => b.type },
             { header: "Value", value: (b) => b.value },

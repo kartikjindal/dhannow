@@ -1,23 +1,22 @@
 /* ==========================================================================
-   DhanBoost — THEME (single source of truth)
+   DhanNow staff console — THEME (single source of truth)
    --------------------------------------------------------------------------
    Every colour, font, radius and shadow in the product resolves to a variable
-   in this file. Three consumers read it:
+   in this file. Two consumers read it:
 
      1. tailwind.config.ts   → `bg-navy`, `text-gold/60`, `border-line` … read the
                                `--c-*` RGB channels below (channels, not hex, so
                                Tailwind's `/opacity` modifiers keep working).
      2. app/globals.css      → component classes (.btn, .card, .field, .cal-*…)
                                read the hex aliases (`--navy`, `--gold-500`…).
-     3. marketing-theme.css  → `.navix-mkt` re-points its tokens at these.
 
    To re-skin the product, change VALUES here. Token NAMES are load-bearing
    across ~54 screens and must not be renamed (`navy` = the primary dark ink,
    `gold` = the brand accent, `ivory` = the page canvas — the names are
    historical, the values are what the brand is today).
 
-   Current skin (2026-10): "Monochrome + Ember" — near-black ink, ember-orange
-   accent, cool grey canvas with soft white cards; yellow / green / violet as
+   Current skin (2026-11): app_navix "Monochrome" with the cobalt accent
+   (#1F5BDB, pressed #1A4BB8, tint #EEF3FF), cool grey canvas with soft white cards; yellow / green / violet as
    chart companions. Display face: Bebas Neue (condensed caps — page titles and
    headline figures only); body: Inter.
    ========================================================================== */
@@ -37,15 +36,15 @@
   --c-navy-50:  243 244 244;
   --c-navy-tint: 236 237 238;
 
-  /* ---------- brand accent ("gold" — now ember orange) ---------- */
-  --c-gold-700: 169 48 19;
-  --c-gold-600: 229 70 31;
-  --c-gold-500: 255 91 55;
-  --c-gold-400: 255 138 107;
-  --c-gold-300: 255 201 184;
-  --c-gold-dark: 199 58 24;   /* accent as TEXT on light surfaces (≥4.5:1 on white) */
-  --c-gold-soft: 255 217 204;
-  --c-gold-50:  255 241 236;
+  /* ---------- brand accent ("gold" — now cobalt, CLAUDE.md design system) ---------- */
+  --c-gold-700: 22 63 156;   /* #163F9C */
+  --c-gold-600: 26 75 184;   /* #1A4BB8 links / pressed */
+  --c-gold-500: 31 91 219;   /* #1F5BDB primary */
+  --c-gold-400: 98 140 232;
+  --c-gold-300: 176 199 245;
+  --c-gold-dark: 26 75 184;   /* accent as TEXT on light surfaces (≥4.5:1 on white) */
+  --c-gold-soft: 214 226 251; /* #D6E2FB */
+  --c-gold-50:  238 243 255; /* #EEF3FF tint */
 
   /* ---------- canvas / surfaces ---------- */
   --c-canvas:   228 230 231;  /* behind the app frame (with the faint grid) */
@@ -97,7 +96,7 @@
   --c-info-700: 81 54 184;
 
   /* ---------- chart companions (reference palette) ---------- */
-  --c-chart-ember:  255 91 55;
+  --c-chart-ember:  31 91 219;  /* cobalt; name kept */
   --c-chart-sun:    248 207 64;
   --c-chart-mint:   92 211 152;
   --c-chart-violet: 142 108 242;

@@ -23,6 +23,13 @@ import {
   Landmark,
   Repeat,
   FileBarChart,
+  BadgeCheck,
+  Camera,
+  MessageSquareWarning,
+  CalendarDays,
+  SlidersHorizontal,
+  ScrollText,
+  Layers,
 } from "lucide-react";
 import { can, type Permission, type StaffRole } from "@/lib/auth/rbac";
 import type { FeatureFlags } from "@/lib/api/applications";
@@ -143,6 +150,8 @@ export const NAV: NavGroup[] = [
       },
       { label: "All applications", href: "/staff/admin/all-applications", Icon: Files, perm: "staff:manage" },
       { label: "Rejections", href: "/staff/admin/rejections", Icon: Ban, perm: "staff:manage" },
+      { label: "Selfie review", href: "/staff/credit/selfie-reviews", Icon: Camera, perm: "selfie:review" },
+      { label: "Complaints", href: "/staff/support/complaints", Icon: MessageSquareWarning, perm: "complaints:view" },
       { label: "Onboarding waitlist", href: "/staff/admin/waitlist", Icon: Users, perm: "waitlist:view" },
       { label: "Blocklist", href: "/staff/admin/blocklist", Icon: Ban, perm: "staff:manage" },
     ],
@@ -184,13 +193,21 @@ export const NAV: NavGroup[] = [
       // COLLECTION_HEAD/ADMIN rule rather than collections:interact.
       // Deliberately NOT flag-gated: if digio-debit is switched off during an incident, the money already
       // taken is still owed back, and this register is the only record of it.
-      { label: "Refunds owed", href: "/staff/collections/refunds", Icon: HandCoins, perm: "collections:manage" },
+      { label: "Refunds owed", href: "/staff/collections/refunds", Icon: HandCoins, perm: ["collections:manage", "refunds:view"] },
+      // G3: extension offers waiting for the Collection Head (the worklist filtered on the latest extension state).
+      { label: "Extension approvals", href: "/staff/collections?f.extState=in%3AOFFERED", Icon: Layers, perm: "extension:approve", flag: "loan-extension" },
+      // Recovery EMI approvals (ADMIN only, never the requester). The flag hides it while EMI is off.
+      { label: "Restructure approvals", href: "/staff/collections/restructure", Icon: Layers, perm: "emi:approve", flag: "emi-conversion" },
     ],
   },
   {
     heading: "Finance & reports",
     items: [
-      { label: "Transactions", href: "/staff/accounting/transactions", Icon: Receipt, perm: ["loan:activate", "staff:manage"] },
+      // PLAN Phase 4 / 10b R6: the Accountant confirms every disbursal before day 0 starts.
+      { label: "Disbursal confirmation", href: "/staff/accounting/disbursals", Icon: BadgeCheck, perm: "loan:activate" },
+      { label: "Transactions", href: "/staff/accounting/transactions", Icon: Receipt, perm: ["loan:activate", "staff:manage", "finance:view"] },
+      { label: "Adjustment log", href: "/staff/compliance/adjustments", Icon: ScrollText, perm: "adjustments:view" },
+      { label: "Pricing and product", href: "/staff/admin/config", Icon: SlidersHorizontal, perm: "config:view" },
       { label: "Company expenses", href: "/staff/admin/expenses", Icon: Wallet, perm: "staff:manage" },
       // Downloadable CSV / PDF reports across the whole platform, one child per report group. staff:manage
       // keeps it to the Admin working role; the backend allows the real ADMIN role only.
@@ -217,6 +234,7 @@ export const NAV: NavGroup[] = [
       { label: "DSA", href: "/staff/admin/dsa", Icon: Briefcase, perm: "staff:manage" },
       { label: "Invites", href: "/staff/admin/invites", Icon: Mail, perm: "staff:manage" },
       { label: "Provider API dashboard", href: "/staff/admin/api-dashboard", Icon: ListChecks, perm: "verification:retry" },
+      { label: "Holiday calendar", href: "/staff/admin/holidays", Icon: CalendarDays, perm: "holidays:manage" },
       { label: "Settings", href: "/staff/admin/settings", Icon: Settings, perm: "staff:manage" },
     ],
   },

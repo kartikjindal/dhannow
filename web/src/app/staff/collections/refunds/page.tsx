@@ -7,6 +7,8 @@ import { PageHeader } from "@/components/staff/staff-ui";
 import { collectionsApi, paiseToINR, type DebitRecord } from "@/lib/api/applications";
 import { EmptyState, ErrorState, InfoTooltip, Skeleton } from "@/components/ui";
 import { formatDateTime } from "@/lib/utils";
+import { RefundCases } from "@/components/staff/refund-cases";
+import { useCan } from "@/components/staff/pipeline/hooks";
 
 /**
  * Refunds owed: NACH debits that collected money from a borrower who had already repaid (the loan
@@ -18,22 +20,23 @@ import { formatDateTime } from "@/lib/utils";
  * have not built, so hiding rows would lose the only record there is.
  */
 export default function RefundsOwedPage() {
-  const q = useQuery({ queryKey: ["debit-overpayments"], queryFn: () => collectionsApi.overpayments() });
+  const can = useCan();
+  const nachRegister = can("collections:manage") || can("collections:overview");
+  const q = useQuery({ queryKey: ["debit-overpayments"], queryFn: () => collectionsApi.overpayments(), enabled: nachRegister });
   const rows: DebitRecord[] = q.data ?? [];
   const total = rows.reduce((sum, r) => sum + r.amountPaise, 0);
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Refunds owed"
-        subtitle="NACH debits that took money a borrower no longer owed"
-      >
+      <PageHeader title="Refunds owed" subtitle="Money a borrower paid beyond what they owed, and how it was returned">
         <button type="button" className="btn btn--ghost" onClick={() => void q.refetch()} disabled={q.isFetching}>
           <RefreshCw size={15} className={q.isFetching ? "animate-spin" : undefined} /> Refresh
         </button>
       </PageHeader>
 
-      {q.isLoading ? (
+      {can("refunds:view") && <RefundCases canManage={can("refunds:manage")} />}
+
+      {!nachRegister ? null : q.isLoading ? (
         <Skeleton className="h-40 w-full" />
       ) : q.isError ? (
         <ErrorState error={q.error} onRetry={() => void q.refetch()} />

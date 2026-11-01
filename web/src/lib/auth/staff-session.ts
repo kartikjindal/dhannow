@@ -68,12 +68,14 @@ export async function loginStaff(
   password: string,
   force = false,
   captchaToken = "",
+  /** Staff MFA (Phase 7): the 6-digit authenticator code, once the backend asked for one. */
+  totpCode?: string,
 ): Promise<StaffSession> {
   const res = await fetch("/api/auth/staff/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
-    body: JSON.stringify({ email, password, force, captchaToken }),
+    body: JSON.stringify({ email, password, force, captchaToken, totpCode }),
   });
   if (!res.ok) {
     const env = await readEnvelopeError(res, "Sign-in failed. Please try again.");

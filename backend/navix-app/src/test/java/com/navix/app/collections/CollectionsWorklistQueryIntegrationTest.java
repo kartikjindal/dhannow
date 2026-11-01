@@ -69,7 +69,7 @@ class CollectionsWorklistQueryIntegrationTest {
         }
 
         String bucket() {
-            return DPD.bucket(dpd()).name();
+            return DPD.bucketFor(due, TODAY).name();
         }
     }
 
@@ -87,15 +87,15 @@ class CollectionsWorklistQueryIntegrationTest {
         ravi = staff("Ravi Nair", "ravi@t.example");
         //            id  name            employer       principal salary   due offset  status           officer
         loan(1, "Asha Rao", "Acme Corp", 1_000_000, 4_000_000, 20, "ACTIVE", null);       // beyond the 7-day horizon: not collectible
-        loan(2, "Bina Shah", "Acme Corp", 1_500_000, 5_000_000, 5, "ACTIVE", meera);      // pre-due (due in 5)
+        loan(2, "Bina Shah", "Acme Corp", 1_500_000, 5_000_000, 2, "ACTIVE", meera);      // pre-due (due in 2)
         loan(3, "Chetan Das", "Zenith Ltd", 2_000_000, 6_000_000, 0, "ACTIVE", ravi);     // due today -> UPCOMING
-        loan(4, "Dev Patel", "Acme Corp", 2_500_000, 7_000_000, -3, "OVERDUE", meera);   // T0_T7
-        loan(5, "Esha Iyer", "Zenith Ltd", 3_000_000, 8_000_000, -12, "IN_COLLECTIONS", null); // T8_T30, no case
-        loan(6, "Farid Khan", "Acme Corp", 3_500_000, 9_000_000, -45, "IN_COLLECTIONS", ravi); // T30_T60
-        loan(7, "Gita Rao", "Orbit Inc", 4_000_000, 3_000_000, -75, "OVERDUE", meera);   // T60_T90
-        loan(8, "Hari Om", "Orbit Inc", 4_500_000, 3_500_000, -120, "OVERDUE", null);    // T90_PLUS, no case
+        loan(4, "Dev Patel", "Acme Corp", 2_500_000, 7_000_000, -3, "OVERDUE", meera);   // D2_7
+        loan(5, "Esha Iyer", "Zenith Ltd", 3_000_000, 8_000_000, -12, "IN_COLLECTIONS", null); // REVIEW, no case
+        loan(6, "Farid Khan", "Acme Corp", 3_500_000, 9_000_000, -45, "IN_COLLECTIONS", ravi); // D31_60
+        loan(7, "Gita Rao", "Orbit Inc", 4_000_000, 3_000_000, -75, "OVERDUE", meera);   // D61_90
+        loan(8, "Hari Om", "Orbit Inc", 4_500_000, 3_500_000, -120, "OVERDUE", null);    // D90_PLUS, no case
         loan(9, "Isha Bose", "Acme Corp", 5_000_000, 2_000_000, -20, "CLOSED", null);    // settled: never listed
-        seeded.removeIf(s -> s.status().equals("CLOSED") || s.due().isAfter(TODAY.plusDays(7)));
+        seeded.removeIf(s -> s.status().equals("CLOSED") || s.due().isAfter(TODAY.plusDays(com.navix.common.loan.LoanDirectory.PRE_DUE_WINDOW_DAYS)));
     }
 
     private long staff(String name, String email) {
@@ -164,7 +164,7 @@ class CollectionsWorklistQueryIntegrationTest {
         // Closed and beyond-horizon loans never list; every bucket assignment agrees with DpdCalculator.
         assertThat(query.pageIds(head(null), FilterSpec.empty(), 0, 100, null, null))
                 .isEqualTo(expected(s -> true));
-        for (String bucket : List.of("UPCOMING", "T0_T7", "T8_T30", "T30_T60", "T60_T90", "T90_PLUS")) {
+        for (String bucket : List.of("UPCOMING", "DUE_TODAY", "D1", "D2_7", "REVIEW", "D31_60", "D61_90", "D90_PLUS")) {
             assertThat(query.pageIds(head(bucket), FilterSpec.empty(), 0, 100, null, null))
                     .as(bucket).isEqualTo(expected(s -> s.bucket().equals(bucket)));
         }
@@ -172,8 +172,8 @@ class CollectionsWorklistQueryIntegrationTest {
 
     @Test
     void theBucketColumnFilterAndTheDpdFilterAgreeWithTheClientRules() {
-        assertThat(query.pageIds(head(null), spec("f.bucketLabel", "in:T0_T7,T90_PLUS"), 0, 100, "loanId", "asc"))
-                .containsExactlyInAnyOrderElementsOf(expected(s -> List.of("T0_T7", "T90_PLUS").contains(s.bucket())));
+        assertThat(query.pageIds(head(null), spec("f.bucketLabel", "in:D2_7,D90_PLUS"), 0, 100, "loanId", "asc"))
+                .containsExactlyInAnyOrderElementsOf(expected(s -> List.of("D2_7", "D90_PLUS").contains(s.bucket())));
         assertThat(query.pageIds(head(null), spec("f.dpd", "num:10..50"), 0, 100, "dpd", "asc"))
                 .containsExactlyInAnyOrderElementsOf(expected(s -> s.dpd() >= 10 && s.dpd() <= 50));
         // A day window over the due date (IST days, inclusive).

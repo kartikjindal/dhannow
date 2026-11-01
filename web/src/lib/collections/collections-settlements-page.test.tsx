@@ -46,7 +46,7 @@ function settlement(overrides: Partial<SettlementView>): SettlementView {
     outstandingPaise: 1_300_000,
     dueDate: "2026-09-30",
     dpd: 12,
-    bucket: "T8_T30",
+    bucket: "REVIEW",
     pan: "ABCDE1234F",
     email: "ravi@example.com",
     employer: "Acme Corp",

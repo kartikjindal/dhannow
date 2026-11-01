@@ -31,7 +31,8 @@ class CustomerSegmentsTest {
                 // read CLOSED) while the loan itself is still being chased.
                 new Case("OVERDUE", "CLOSED", "overdue"),
                 new Case("ACTIVE", "REJECTED", "active"),
-                new Case("DISBURSING", "SANCTIONED", "active"),
+                new Case("DISBURSING", "SANCTIONED", "awaitingConfirmation"),
+                new Case(null, "DISBURSAL_CONFIRMATION_PENDING", "awaitingConfirmation"),
 
                 // --- application status, in the frontend's order --------------------------------
                 new Case(null, "OVERDUE", "overdue"),

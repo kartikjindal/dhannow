@@ -87,7 +87,7 @@ export const SERIES = {
   bad: "#E5484D",
   tloan: "#D8DADB",
   collected: "#0B0B0C",
-  pctLine: "#FF5B37",
+  pctLine: "#1F5BDB",
   interest: "#5BA3F0",
   pf: "#5CD398",
   penalty: "#E5484D",
@@ -220,7 +220,7 @@ export const STAT_CHIP = {
 export const MAP = {
   noData: "#F1F2F2",
   noDataBorder: "#D8DADB",
-  highlight: "#FF5B37",
+  highlight: "#1F5BDB",
   border: WHITE,
   rampFrom: "#BDEDD3",
   rampTo: NAVY,

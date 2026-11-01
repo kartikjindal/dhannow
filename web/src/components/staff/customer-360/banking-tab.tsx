@@ -240,14 +240,14 @@ export function BankingTab({ detail, customerId, applicationId }: TabCtx) {
               <Field label="Unique salary credits">{a.salary.uniqueCredits}</Field>
               <Field label="Employer on statement">{a.salary.employerOnStatement}</Field>
               <Field label="Declared salary">{declared}</Field>
-              <Field label="Declared salary day">{salaryDay}</Field>
+              <Field label="Declared salary credit date">{salaryDay}</Field>
               <Field label="Analysed at">{formatDateTime(a.salary.analysedAt)}</Field>
             </FieldGrid>
           </div>
         ) : (
           <FieldGrid cols={4}>
             <Field label="Declared salary">{declared}</Field>
-            <Field label="Salary day">{salaryDay}</Field>
+            <Field label="Salary credit date">{salaryDay}</Field>
             <Field label="Last salary received">
               {p?.previousSalaryDate ? formatDate(p.previousSalaryDate) : null}
             </Field>

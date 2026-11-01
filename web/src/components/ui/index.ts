@@ -1,4 +1,4 @@
-// Barrel export for DhanBoost shared UI primitives.
+// Barrel export for DhanNow shared UI primitives.
 export * from "./button";
 export * from "./input";
 export * from "./select";

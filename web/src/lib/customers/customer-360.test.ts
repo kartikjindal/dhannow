@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { dueDateFromSalary } from "@/lib/calc/loan-math";
 import type { ActivityEntry, LoanView, OutstandingView, PaymentView } from "@/lib/api/applications";
 import {
   AUDIT_FILTER_ALL,
-  SALARY_DUE_MAX_DAYS,
   auditTypeChips,
   auditTypeLabel,
   customerExposure,
@@ -14,7 +12,6 @@ import {
   LIMIT_BASIS_LABEL,
   resolveAuditFilter,
   rupeeInputPreview,
-  salaryDueWindow,
 } from "./customer-360";
 
 const ymd = (d: Date) => [d.getFullYear(), d.getMonth() + 1, d.getDate()];
@@ -33,38 +30,6 @@ describe("istCalendarToday", () => {
   it("returns a local-midnight date (no time-of-day)", () => {
     const d = istCalendarToday(new Date("2026-03-01T06:00:00Z"));
     expect([d.getHours(), d.getMinutes(), d.getSeconds()]).toEqual([0, 0, 0]);
-  });
-});
-
-describe("salaryDueWindow", () => {
-  it("is within the window for the CLAUDE.md §9 worked example (27 days)", () => {
-    expect(salaryDueWindow(new Date(2026, 5, 3), new Date(2026, 5, 30))).toEqual({ days: 27, exceeds: false });
-  });
-
-  it("treats exactly 40 days as allowed", () => {
-    expect(salaryDueWindow(new Date(2026, 5, 3), new Date(2026, 6, 13))).toEqual({ days: 40, exceeds: false });
-  });
-
-  it("flags 41 days as beyond the 40-day rule", () => {
-    expect(salaryDueWindow(new Date(2026, 5, 3), new Date(2026, 6, 14))).toEqual({ days: 41, exceeds: true });
-  });
-
-  it("uses 40 as the default limit", () => {
-    expect(SALARY_DUE_MAX_DAYS).toBe(40);
-  });
-
-  it("never fires for dueDateFromSalary across a full year of disbursal days and every salary day", () => {
-    // The warning is a guard on an invariant: the projection is built to stay inside the window.
-    const start = new Date(2026, 0, 1);
-    for (let offset = 0; offset < 366; offset++) {
-      const disbursedOn = new Date(start.getFullYear(), start.getMonth(), start.getDate() + offset);
-      for (let salaryDay = 1; salaryDay <= 31; salaryDay++) {
-        const due = dueDateFromSalary({ disbursedOn, salaryDay });
-        const { days, exceeds } = salaryDueWindow(disbursedOn, due);
-        expect(exceeds).toBe(false);
-        expect(days).toBeGreaterThan(0);
-      }
-    }
   });
 });
 
@@ -92,8 +57,8 @@ describe("limitBasisOf", () => {
   });
 
   it("labels both bases", () => {
-    expect(LIMIT_BASIS_LABEL.ADMIN_OVERRIDE).toBe("Admin override");
-    expect(LIMIT_BASIS_LABEL.SALARY_RULE).toBe("Salary rule");
+    expect(LIMIT_BASIS_LABEL.ADMIN_OVERRIDE).toBe("Admin exception");
+    expect(LIMIT_BASIS_LABEL.SALARY_RULE).toBe("Ladder level");
   });
 });
 

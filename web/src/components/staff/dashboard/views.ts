@@ -38,6 +38,11 @@ export function allowedViews(real: StaffRole): DashView[] {
     case "COLLECTION_HEAD":
       return ["COLLECTION_HEAD", "COLLECTION_EXECUTIVE"];
     case "DSA":
+    // PLAN Phase 7/10 roles: their desks are in the menu; dashboard role views for them are not built yet.
+    case "RECOVERY":
+    case "SUPPORT":
+    case "FINANCE":
+    case "COMPLIANCE":
       return [];
     default:
       return [real as DashView];

@@ -75,6 +75,7 @@ const ZERO_COUNTS: CustomerSummaryCounts = {
   review: 0,
   approved: 0,
   disbursementPending: 0,
+  awaitingConfirmation: 0,
   active: 0,
   overdue: 0,
   hold: 0,
@@ -409,7 +410,7 @@ function CustomersPageInner() {
         <ExportMenu
           title="Customers"
           subtitle={exportSubtitle}
-          fileBase="dhanboost-customers"
+          fileBase="dhannow-customers"
           columns={[
             { header: "Customer ID", value: (c: CustomerSummary) => c.customerId },
             { header: "Date", value: (c) => (c.createdAt ? formatDateTime(c.createdAt) : "") },

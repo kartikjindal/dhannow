@@ -61,7 +61,7 @@ public class DashboardService {
     private static final int GEO_PINCODE_LIMIT = 300;
     private static final int TOP_COMPANIES = 10;
     private static final long MAX_SPAN_DAYS = 1100;
-    private static final List<String> BUCKETS = List.of("RUNNING", "D1_30", "D31_60", "D61_90", "D90_PLUS");
+    private static final List<String> BUCKETS = java.util.Arrays.stream(com.navix.collections.domain.DpdBucket.RbiClass.values()).map(Enum::name).toList();
 
     private final MetricQueries metrics;
     private final BusinessQueries business;
@@ -343,16 +343,23 @@ public class DashboardService {
 
     public Daily daily(DashboardScope scope, LocalDate from, LocalDate to) {
         scope.require("ADMIN", "DISBURSEMENT_HEAD", "ACCOUNTANT");
-        Map<LocalDate, Long> pf = business.pfByDay(from, to);
-        Map<LocalDate, long[]> accrued = new HashMap<>(); // [interest, penalty] frozen at the day each loan closed
+        // Revenue recognition (PLAN Phase 10b): fee and upfront interest on the disbursal-confirmation day, late
+        // charges on receipt. Interest still accruing on navix (ACCRUED) terms is booked when the loan closes.
+        Map<LocalDate, long[]> booked = business.feeAndInterestByDay(from, to);
+        Map<LocalDate, Long> penal = business.penalReceivedByDay(from, to);
+        Map<LocalDate, Long> pf = new HashMap<>();
+        Map<LocalDate, long[]> accrued = new HashMap<>(); // [interest, penalty]
+        booked.forEach((d, v) -> {
+            pf.put(d, v[0]);
+            accrued.computeIfAbsent(d, x -> new long[2])[0] += v[1];
+        });
+        penal.forEach((d, v) -> accrued.computeIfAbsent(d, x -> new long[2])[1] += v);
         List<Loan> closedLoans = loadLoans(business.closedLoanIds(from, to));
         Map<Long, OutstandingBreakdown> priced = price(closedLoans, today());
         for (Loan l : closedLoans) {
             OutstandingBreakdown b = priced.get(l.getId());
             if (b == null || l.getClosedOn() == null) continue;
-            long[] slot = accrued.computeIfAbsent(l.getClosedOn(), d -> new long[2]);
-            slot[0] += b.interestPaise();
-            slot[1] += b.penaltyPaise();
+            accrued.computeIfAbsent(l.getClosedOn(), d -> new long[2])[0] += b.interestPaise();
         }
         List<DayRow> days = new ArrayList<>();
         long cumulative = 0;

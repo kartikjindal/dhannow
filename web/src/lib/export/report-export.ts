@@ -7,6 +7,7 @@
  * Pure builders are exported for the unit test; `downloadReport` is the one side-effecting entry.
  */
 
+import { BRAND } from "@/lib/brand";
 import type { ReportCell, ReportColumnType, ReportData } from "@/lib/api/applications";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import { csvCell, exportCsvText, exportReportPdf, type ExportActor } from "./exporters";
@@ -67,10 +68,10 @@ export function reportTotals(r: Pick<ReportData, "columns" | "rows" | "totals">)
   });
 }
 
-/** `dhanboost-report-loan-book-2026-10-01-to-2026-10-23`. */
+/** `dhannow-report-loan-book-2026-10-01-to-2026-10-23`. */
 export function reportFileBase(r: Pick<ReportData, "key" | "from" | "to" | "dateBasis">): string {
   const span = r.dateBasis && r.from && r.to ? `${r.from}-to-${r.to}` : r.dateBasis ? "all-time" : "snapshot";
-  return `dhanboost-report-${r.key}-${span}`;
+  return `dhannow-report-${r.key}-${span}`;
 }
 
 /** Every string the downloads carry, formatted once. */
@@ -91,7 +92,7 @@ export function formatReport(r: ReportData) {
 export function buildReportCsv(r: ReportData, actor: ExportActor, generatedAt: string): string {
   const line = (...cells: (string | number | null | undefined)[]) => cells.map(csvCell).join(",");
   const out: string[] = [
-    line("DhanBoost report", r.title),
+    line(`${BRAND.name} report`, r.title),
     line("Category", r.category),
     line("About", r.description),
     line("Period", periodLine(r)),

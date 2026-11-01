@@ -15,6 +15,7 @@ import {
 } from "@/lib/api/applications";
 import { formatDateTime } from "@/lib/utils";
 import { parsePositiveRupees, sanitizeRupeeInput } from "@/lib/collections/rupee-amount-input";
+import { extensionsApi } from "@/lib/api/staff-desks";
 
 /**
  * The collections payment chain (V47; revamp.md decisions 43, 44) on the staff side.
@@ -56,8 +57,13 @@ export function RecordPaymentCard({ caseId, onRaised }: { caseId: string; onRais
   const [paidOn, setPaidOn] = React.useState(() => new Date().toISOString().slice(0, 10));
   const [txnRef, setTxnRef] = React.useState("");
   const [proofRef, setProofRef] = React.useState("");
+  // Phase 6b: an ACCEPTED extension on the case can be paid here, at exactly the backend's quote for today.
+  const ext = useQuery({ queryKey: ["extension-panel", caseId], queryFn: () => extensionsApi.panel(caseId) });
+  const accepted = ext.data?.current?.status === "ACCEPTED" ? ext.data.current : null;
+  const quote = accepted ? ext.data?.quoteForToday ?? null : null;
+  const isExt = kind === "EXTENSION";
   // Null while the box is empty, a lone ".", or zero — submit stays disabled until it is an amount.
-  const rupees = parsePositiveRupees(amount);
+  const rupees = isExt ? (quote ? quote.totalPaise / 100 : null) : parsePositiveRupees(amount);
 
   const raise = useMutation({
     mutationFn: (value: number) =>
@@ -67,6 +73,7 @@ export function RecordPaymentCard({ caseId, onRaised }: { caseId: string; onRais
         paidOn: paidOn || undefined,
         txnRef: txnRef.trim() || undefined,
         proofRef: proofRef.trim() || undefined,
+        extensionId: isExt ? accepted?.id : undefined,
       }),
     onSuccess: (data) => {
       setAmount("");
@@ -96,13 +103,14 @@ export function RecordPaymentCard({ caseId, onRaised }: { caseId: string; onRais
           label="What did the borrower pay?"
           value={kind}
           onChange={(e) => setKind(e.target.value as CollectionPaymentKind)}
-          options={COLLECTION_PAYMENT_KINDS.map((k) => ({ value: k.value, label: k.label }))}
+          options={COLLECTION_PAYMENT_KINDS.filter((k) => k.value !== "EXTENSION" || quote).map((k) => ({ value: k.value, label: k.label }))}
         />
         {hint && <p className="-mt-1 mb-3 text-xs text-muted">{hint}</p>}
         <Input
           label="Amount (₹)"
           inputMode="decimal"
-          value={amount}
+          value={isExt && quote ? String(quote.totalPaise / 100) : amount}
+          disabled={isExt}
           onChange={(e) => setAmount(sanitizeRupeeInput(e.target.value))}
           placeholder="5000"
         />
@@ -122,7 +130,7 @@ export function RecordPaymentCard({ caseId, onRaised }: { caseId: string; onRais
         {raise.error && <p className="mb-2 text-sm text-error-700">{errMessage(raise.error)}</p>}
         <button
           onClick={() => rupees != null && raise.mutate(rupees)}
-          disabled={raise.isPending || rupees == null}
+          disabled={raise.isPending || rupees == null || (isExt && !txnRef.trim())}
           className="btn btn-sm btn-gold btn-block disabled:opacity-50"
         >
           {raise.isPending ? <Loader2 size={13} className="animate-spin" /> : null} Record payment

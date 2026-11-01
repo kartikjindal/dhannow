@@ -486,7 +486,7 @@ public class CollectionsService {
             HandledBy handled = handledBy.getOrDefault(loan.loanId(), HandledBy.NONE);
             int dpd = dpd(loan);
             return new WorklistRow(
-                    loan.loanId(), dpd, dpdCalculator.bucket(dpd), loan.preDue(),
+                    loan.loanId(), dpd, bucket(loan), loan.preDue(),
                     c == null ? null : c.getId(),
                     c == null ? null : c.getAssignedOfficerId(),
                     c == null ? null : officerNames.get(c.getAssignedOfficerId()),
@@ -684,7 +684,7 @@ public class CollectionsService {
         int dpd = dpd(loan);
         return new CaseDetailView(c.getId(), c.getLoanId(), c.getAssignedOfficerId(),
                 officerName(c.getAssignedOfficerId()), c.getCreatedAt(),
-                dpd, dpdCalculator.bucket(dpd), loan);
+                dpd, bucket(loan), loan);
     }
 
     private CaseView toListView(CollectionCase c) {
@@ -692,7 +692,7 @@ public class CollectionsService {
         int dpd = dpd(loan);
         return new CaseView(c.getId(), c.getLoanId(), c.getAssignedOfficerId(),
                 officerName(c.getAssignedOfficerId()), c.getCreatedAt(),
-                dpd, dpdCalculator.bucket(dpd),
+                dpd, bucket(loan),
                 loan != null ? loan.status() : null,
                 loan != null ? loan.borrowerName() : null,
                 loan != null ? loan.outstandingPaise() : null,
@@ -709,7 +709,7 @@ public class CollectionsService {
         Long officerId = c.getAssignedOfficerId();
         return new CaseView(c.getId(), c.getLoanId(), officerId,
                 officerId == null ? null : officerNames.get(officerId), c.getCreatedAt(),
-                dpd, dpdCalculator.bucket(dpd),
+                dpd, bucket(loan),
                 loan != null ? loan.status() : null,
                 loan != null ? loan.borrowerName() : null,
                 loan != null ? loan.outstandingPaise() : null,
@@ -745,6 +745,11 @@ public class CollectionsService {
             return 0;
         }
         return dpdCalculator.daysPastDue(loan.dueDate(), LocalDate.now(IST));
+    }
+
+    /** The live bucket: from the due date, so a loan not yet due is UPCOMING and one due today is DUE_TODAY. */
+    private com.navix.collections.domain.DpdBucket bucket(LoanSummary loan) {
+        return dpdCalculator.bucketFor(loan == null ? null : loan.dueDate(), LocalDate.now(IST));
     }
 
     private String officerName(Long officerId) {

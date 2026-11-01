@@ -206,7 +206,7 @@ export function FinancialSummaryStrip({ loan, outstanding }: { loan: LoanView; o
       <div className="mb-2 flex items-center gap-1.5">
         <IndianRupee size={13} className="text-gold" />
         <span className="text-[9.6px] font-bold uppercase tracking-wide text-gold-dark">
-          Financial summary ({formatDate(istCalendarToday())}) · 1% per day
+          Financial summary ({formatDate(istCalendarToday())})
         </span>
         <span className={`ml-auto text-[9.6px] font-bold uppercase ${statusTone}`}>{humanStatus(loan.status)}</span>
       </div>
@@ -220,26 +220,21 @@ export function FinancialSummaryStrip({ loan, outstanding }: { loan: LoanView; o
           {paiseToINR(due)}
         </Field>
         {closed && <Field label="Paid (verified)" tone="success">{money(outstanding?.verifiedPaise)}</Field>}
-        <Field
-          label="Interest accrued"
-          keyLabel
-          tone="warning"
-          caption={outstanding?.interestDays != null ? `${outstanding.interestDays} ${outstanding.interestDays === 1 ? "day" : "days"} × 1%` : undefined}
-        >
-          {money(outstanding?.interestPaise)}
+        <Field label="Interest" keyLabel tone="warning" caption="prepaid at disbursal, not owed">
+          {money(loan.upfrontInterestPaise ?? outstanding?.interestPrepaidPaise)}
         </Field>
         <Field
-          label="Late penalty"
+          label="Late charge"
           tone="error"
           caption={penaltyDays > 0 ? `${penaltyDays} ${penaltyDays === 1 ? "day" : "days"} × 2%` : "starts after the due date"}
         >
           {money(outstanding?.penaltyPaise)}
         </Field>
-        {!closed && <Field label="Interest rate" caption="simple, on principal">1% / day</Field>}
+        {!closed && <Field label="Repayable">{money(loan.totalRepayablePaise)}</Field>}
       </FieldGrid>
       <p className="mt-2 text-[8.8px] text-muted">
-        <span className="font-bold text-warning-800">Note:</span> Penalty is 2%/day of principal, starts the day after the
-        due date (after the one grace day on older loans) and is capped at 30 days.
+        <span className="font-bold text-warning-800">Note:</span> Owed = principal + late charge − paid. The late charge
+        is 2%/day of principal from the day after the due date, capped at 30 days.
       </p>
     </div>
   );

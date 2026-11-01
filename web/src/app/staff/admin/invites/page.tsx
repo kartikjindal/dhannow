@@ -82,7 +82,7 @@ export default function AdminInvitesPage() {
       >
         <ExportMenu
           title="Staff invites"
-          fileBase="dhanboost-invites"
+          fileBase="dhannow-invites"
           columns={[
             { header: "Email", value: (i: InviteResponse) => i.email },
             { header: "Role", value: (i) => i.role },
@@ -104,7 +104,7 @@ export default function AdminInvitesPage() {
         <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-navy"><Mail size={16} /> Invite a staff member</div>
         <div className="flex flex-wrap items-end gap-3">
           <Input label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-            placeholder="new.hire@dhanboost.com" className="!mb-0" inputClassName="w-64" />
+            placeholder="new.hire@dhannow.com" className="!mb-0" inputClassName="w-64" />
           <Select label="Role" value={role} onChange={(e) => setRole(e.target.value as StaffRoleName)}
             options={ROLES.map((r) => ({ value: r, label: r }))} className="!mb-0" />
           <button onClick={() => create.mutate()} disabled={create.isPending || !email.trim()}

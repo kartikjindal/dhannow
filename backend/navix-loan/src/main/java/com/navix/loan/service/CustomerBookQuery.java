@@ -61,7 +61,7 @@ public class CustomerBookQuery {
     }
 
     public static final Set<String> SEGMENTS = Set.of(
-            "incomplete", "pending", "review", "approved", "disbursementPending",
+            "incomplete", "pending", "review", "approved", "disbursementPending", "awaitingConfirmation",
             "active", "overdue", "hold", "rejected", "closed", "unallocated", "reloan", "blocked");
 
     private static final String BOOK_CTE = """
@@ -103,6 +103,7 @@ public class CustomerBookQuery {
                        case
                          when ll.loan_status in ('OVERDUE', 'IN_COLLECTIONS') then 'overdue'
                          when la.app_status in ('OVERDUE', 'DEFAULTED') then 'overdue'
+                         when ll.loan_status = 'DISBURSING' or la.app_status = 'DISBURSAL_CONFIRMATION_PENDING' then 'awaitingConfirmation'
                          when ll.loan_status in ('ACTIVE', 'DISBURSING') then 'active'
                          when la.app_status in ('DISBURSED', 'ACTIVE') then 'active'
                          when la.app_status in ('REVIEW_PENDING', 'CREDIT_EXEC_PENDING', 'CREDIT_HEAD_PENDING') then 'review'
@@ -145,7 +146,7 @@ public class CustomerBookQuery {
             "customerId", "b.customer_id",
             "mobile", "b.mobile",
             "stage", "case b.segment when 'incomplete' then 1 when 'pending' then 2 when 'review' then 3"
-                    + " when 'approved' then 4 when 'disbursementPending' then 5 when 'hold' then 6"
+                    + " when 'approved' then 4 when 'disbursementPending' then 5 when 'awaitingConfirmation' then 5 when 'hold' then 6"
                     + " when 'active' then 7 when 'overdue' then 8 when 'closed' then 9 when 'rejected' then 10"
                     + " else 11 end");
 

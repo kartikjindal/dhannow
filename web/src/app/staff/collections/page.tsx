@@ -10,7 +10,7 @@
  * bucket at all, so the page showed the bookkeeping rather than the debt.
  *
  * It now renders the loan worklist: every live loan already past due, plus those falling due within
- * the next week so an officer can take an update *before* salary day. The collection case is an
+ * the next week so an officer can take an update *before* the due date. The collection case is an
  * internal row created behind the first real action (assign, log an interaction, propose a
  * settlement) — there is no "open a case" step for a human to remember any more.
  */
@@ -372,7 +372,7 @@ export default function CollectionsBucketPage() {
       // The server's day count (0 while not yet due), not the "due in 3 d" cue the cell can show —
       // that cue depends on the clock, a bound typed into a filter must not.
       { key: "dpd", kind: "num", value: (r) => String(r.dpd), num: (r) => r.dpd },
-      // `bucketLabel` renders T0_T7 as "1–7 DPD"; the filter travels as the stored enum.
+      // `bucketLabel` renders D2_7 as "1–7 DPD"; the filter travels as the stored enum.
       { key: "bucketLabel", facet: true, value: (r) => r.bucketLabel, raw: (r) => r.bucket },
       { key: "employer", kind: "text", value: (r) => r.employer ?? "" },
       { key: "salaryPaise", kind: "num", value: (r) => (r.salaryPaise != null ? paiseToINR(r.salaryPaise) : "—"), num: (r) => (r.salaryPaise != null ? r.salaryPaise / 100 : null) },

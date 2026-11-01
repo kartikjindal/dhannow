@@ -6,7 +6,7 @@ import { useStaffMe, ROLE_LABEL } from "@/components/staff/live-pipeline";
 import { exportCsv, exportPdf, type ExportColumn, type ExportMeta } from "@/lib/export/exporters";
 
 /**
- * "Export ▾" dropdown for staff dashboards — offers CSV and a DhanBoost-branded PDF of whatever the
+ * "Export ▾" dropdown for staff dashboards — offers CSV and a DhanNow-branded PDF of whatever the
  * page hands it, which the labels name honestly (`scope` below: one page, or every matching row). The PDF is stamped with the signed-in staffer (provenance). Generic over the
  * row type so each page declares its columns once. When a page is server-paginated it can also pass
  * `getAllRows` to offer a "Download all" CSV that fetches every matching row on demand.

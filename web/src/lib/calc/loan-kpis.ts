@@ -3,7 +3,8 @@
  * come from the server (OutstandingView); nothing here recomputes them — only lays out counts,
  * dates and ratios around them.
  */
-import { daysBetween, dpdBucket } from "@/lib/calc/loan-math";
+import { daysBetween } from "@/lib/calc/loan-math";
+import { bucketOfDays } from "@/lib/collection-buckets";
 import { isoDayToLocalDate } from "@/lib/customers/customer-360";
 import type { DpdBucket, LoanView, PaymentView } from "@/lib/api/applications";
 
@@ -29,7 +30,12 @@ export function dpdDays(loan: Pick<LoanView, "dueDate" | "closedOn" | "status">,
   return Math.max(0, daysBetween(due, end));
 }
 
-export const bucketOf = (dpd: number): DpdBucket => dpdBucket(dpd);
+/** The loan's DPD bucket from its due date (the server's rule: UPCOMING before the day, DUE_TODAY on it). */
+export function bucketForLoan(loan: Pick<LoanView, "dueDate" | "closedOn">, today: Date): DpdBucket | null {
+  const due = isoDayToLocalDate(loan.dueDate);
+  if (!due) return null;
+  return bucketOfDays(daysBetween(due, (loan.closedOn ? isoDayToLocalDate(loan.closedOn) : null) ?? today));
+}
 
 /**
  * Penalty days used (of the 30-day cap) and the penalty that can still accrue.

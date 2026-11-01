@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, RefreshCw, Pencil, Ban, Trash2, AlertTriangle, Gauge, Send, Phone, IndianRupee, Calendar, ShieldOff } from "lucide-react";
+import { ArrowLeft, Loader2, RefreshCw, Pencil, Ban, Trash2, AlertTriangle, Gauge, Send, IndianRupee, ShieldOff } from "lucide-react";
 import { ErrorState, Input, Select, Skeleton, toast } from "@/components/ui";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { PageHeader } from "@/components/staff/staff-ui";
@@ -27,21 +27,16 @@ import {
   paiseToINR,
   type CustomerDetail,
   type BlocklistType,
-  type ApplicationView,
 } from "@/lib/api/applications";
-import { dueDateFromSalary } from "@/lib/calc/loan-math";
-import {
-  SALARY_DUE_MAX_DAYS,
-  istCalendarToday,
-  rupeeInputPreview,
-  salaryDueWindow,
-} from "@/lib/customers/customer-360";
-import { formatDate } from "@/lib/utils";
+import { CreditLevelCard } from "@/components/staff/credit-level-card";
+import { useCan } from "@/components/staff/pipeline/hooks";
+import { rupeeInputPreview } from "@/lib/customers/customer-360";
 
 /** Loan statuses that mean the loan is still live (vs. a past/closed loan). */
 const OPEN_LOAN = new Set(["ACTIVE", "OVERDUE", "IN_COLLECTIONS", "DISBURSED", "DEFAULTED"]);
 
 export default function CustomerDetailPage() {
+  const canManage = useCan()("customer:manage");
   const { customerId } = useParams<{ customerId: string }>();
   const id = Number(customerId);
   const qc = useQueryClient();
@@ -116,6 +111,7 @@ export default function CustomerDetailPage() {
                   size="sm"
                 />
               </Card>
+              <CreditLevelCard customerId={id} canSetException={canManage} />
               <PermissionGate permission="customer:manage">
                 {sanctionedApp && (
                   <Card title="Force to disbursement (admin)" icon={<Send size={16} />}>
@@ -133,17 +129,7 @@ export default function CustomerDetailPage() {
                     onSaved={invalidate}
                   />
                 )}
-                <LimitOverrideCard
-                  customerId={id}
-                  currentLimitPaise={c.applications[0]?.eligibleLimitPaise ?? null}
-                  overridePaise={c.limitOverridePaise ?? null}
-                  onSaved={invalidate}
-                />
-                {c.applications.length > 0 && (
-                  <SalaryDayCard customerId={id} app={c.applications[0]} onSaved={invalidate} />
-                )}
                 <AdminEditCard detail={c} onSaved={invalidate} />
-                <MobileChangeCard detail={c} onSaved={invalidate} />
                 {c.blocked && <UnblockCard customerId={id} reason={c.blockedReason ?? null} onDone={invalidate} />}
                 <BlocklistCard customerId={id} />
                 <DeleteCustomerCard
@@ -276,7 +262,7 @@ function AdminEditCard({ detail, onSaved }: { detail: CustomerDetail; onSaved: (
 
   return (
     <Card title="Edit KYC / salary (admin)" icon={<Pencil size={16} />}>
-      <p className="mb-3 text-xs text-muted">Identity (PAN/Aadhaar) is locked. Mobile can be corrected below, with OTP verification. Salary edits are audited and recompute the eligible limit.</p>
+      <p className="mb-3 text-xs text-muted">Identity (PAN/Aadhaar) and the mobile number are locked (CC-24). Edits are audited.</p>
       <Input label="Full name" value={fullName} onChange={(e) => setFullName(e.target.value)} className="!mb-2" />
       <Input label="Employer" value={employer} onChange={(e) => setEmployer(e.target.value)} className="!mb-2" />
       <Input label="Employment status" value={employmentStatus} onChange={(e) => setEmploymentStatus(e.target.value)} className="!mb-2" />
@@ -312,159 +298,7 @@ function AdminEditCard({ detail, onSaved }: { detail: CustomerDetail; onSaved: (
   );
 }
 
-/**
- * ADMIN correcting a customer's mobile number — a two-step OTP flow (mirrors the borrower-facing
- * bureau-consent OTP: request, then confirm with the code). The OTP is sent to the NEW number,
- * proving it's real and reachable before it's saved. This is a KYC-data correction only — it does
- * NOT change which number the borrower logs in with (login identity is derived from whatever
- * mobile the borrower types at login, not from this profile field).
- */
-function MobileChangeCard({ detail, onSaved }: { detail: CustomerDetail; onSaved: () => void }) {
-  const [newMobile, setNewMobile] = React.useState("");
-  const [otp, setOtp] = React.useState("");
-  const [sent, setSent] = React.useState(false);
 
-  const request = useMutation({
-    mutationFn: () => customersApi.requestMobileChangeOtp(detail.customerId, newMobile.trim()),
-    onSuccess: () => { setSent(true); setOtp(""); },
-  });
-  const confirm = useMutation({
-    mutationFn: () => customersApi.confirmMobileChange(detail.customerId, newMobile.trim(), otp.trim()),
-    onSuccess: () => { setSent(false); setNewMobile(""); setOtp(""); onSaved(); toast.success("Mobile number updated"); },
-  });
-
-  return (
-    <Card title="Correct mobile number (admin)" icon={<Phone size={16} />}>
-      <p className="mb-3 text-xs text-muted">
-        Current: <span className="font-mono text-ink">{detail.profile?.mobile ?? "—"}</span>. Sends an OTP
-        to the new number before saving it — does not change the borrower&apos;s login number.
-      </p>
-      <Input
-        label="New mobile number"
-        inputMode="numeric"
-        value={newMobile}
-        onChange={(e) => setNewMobile(e.target.value.replace(/\D/g, "").slice(0, 10))}
-        placeholder="9876543210"
-        className="!mb-2"
-        disabled={sent}
-      />
-      {!sent ? (
-        <>
-          {request.error && <p className="mb-2 text-sm text-error-700">{errMessage(request.error)}</p>}
-          <button
-            onClick={() => request.mutate()}
-            disabled={request.isPending || newMobile.trim().length !== 10}
-            className="btn btn-sm btn-outline btn-block disabled:opacity-50"
-          >
-            {request.isPending ? <Loader2 size={13} className="animate-spin" /> : null} Send OTP
-          </button>
-        </>
-      ) : (
-        <>
-          <Input
-            label="OTP"
-            inputMode="numeric"
-            value={otp}
-            onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            placeholder="6-digit code"
-            className="!mb-2"
-          />
-          {confirm.error && <p className="mb-2 text-sm text-error-700">{errMessage(confirm.error)}</p>}
-          <div className="flex gap-2">
-            <button
-              onClick={() => confirm.mutate()}
-              disabled={confirm.isPending || otp.trim().length !== 6}
-              className="btn btn-sm btn-navy flex-1 disabled:opacity-50"
-            >
-              {confirm.isPending ? <Loader2 size={13} className="animate-spin" /> : null} Confirm
-            </button>
-            <button onClick={() => setSent(false)} disabled={confirm.isPending} className="btn btn-sm btn-outline">
-              Change number
-            </button>
-          </div>
-        </>
-      )}
-    </Card>
-  );
-}
-
-/**
- * ADMIN raising (or lowering) how much this customer may be advanced — the eligible limit, which is
- * otherwise derived as 25% of their monthly salary.
- *
- * The override is stored per CUSTOMER, not per application, so it survives a payslip re-upload, a
- * salary edit and every future reborrow. "Reset" clears it and hands them back to the salary rule.
- * Unlike the sanctioned amount this is headroom, not an offer, so the borrower is not notified.
- */
-function LimitOverrideCard({
-  customerId,
-  currentLimitPaise,
-  overridePaise,
-  onSaved,
-}: {
-  customerId: number;
-  currentLimitPaise: number | null;
-  overridePaise: number | null;
-  onSaved: () => void;
-}) {
-  const [amount, setAmount] = React.useState(
-    overridePaise != null ? String(Math.round(overridePaise / 100)) : "",
-  );
-  const newLimitPaise = amount ? rupeesToPaise(Number(amount.replace(/[^\d]/g, ""))) : 0;
-
-  const save = useMutation({
-    mutationFn: (limitPaise: number | null) => customersApi.setLimitOverride(customerId, limitPaise),
-    onSuccess: (_data, limitPaise) => {
-      onSaved();
-      toast.success(limitPaise == null ? "Limit reset to 25% of salary" : "Maximum loan amount saved");
-    },
-  });
-
-  return (
-    <Card title="Maximum loan amount (admin)" icon={<IndianRupee size={16} />}>
-      <p className="mb-3 text-xs text-muted">
-        <span className="mb-1 flex flex-wrap items-center gap-1.5">
-          Current limit:
-          <span className="font-mono text-ink">{paiseToINR(overridePaise ?? currentLimitPaise)}</span>
-          <LimitBasisBadge overridePaise={overridePaise} />
-        </span>
-        {overridePaise != null && currentLimitPaise != null && currentLimitPaise !== overridePaise
-          ? `The salary rule alone would give ${paiseToINR(currentLimitPaise)}. `
-          : ""}
-        A limit set here sticks — it survives a salary re-check and carries into future re-borrows,
-        raising what the borrower can actually draw. They are emailed when it increases.
-      </p>
-      <Input
-        label="Maximum amount (₹)"
-        inputMode="numeric"
-        value={amount}
-        onChange={(e) => setAmount(e.target.value.replace(/[^\d]/g, ""))}
-        placeholder={currentLimitPaise != null ? String(Math.round(currentLimitPaise / 100)) : "50000"}
-        className="!mb-2"
-      />
-      {save.error && <p className="mb-2 text-sm text-error-700">{errMessage(save.error)}</p>}
-      <button
-        onClick={() => save.mutate(newLimitPaise)}
-        disabled={save.isPending || newLimitPaise <= 0}
-        className="btn btn-sm btn-navy btn-block disabled:opacity-50"
-      >
-        {save.isPending ? <Loader2 size={13} className="animate-spin" /> : null} Save
-      </button>
-      {overridePaise != null && (
-        <button
-          onClick={() => {
-            setAmount("");
-            save.mutate(null);
-          }}
-          disabled={save.isPending}
-          className="btn btn-sm btn-ghost btn-block mt-2 disabled:opacity-50"
-        >
-          Reset to 25% of salary
-        </button>
-      )}
-    </Card>
-  );
-}
 
 /**
  * ADMIN correcting the amount credit approved (sanctioned) for the customer's current, not-yet-
@@ -534,81 +368,6 @@ function SanctionedAmountCard({
   );
 }
 
-/**
- * ADMIN correcting the salary-credit day (1-31) on the customer's latest application — the day the
- * next reborrow inherits and disbursal reads to compute the loan's due date. Shown whenever the
- * customer has an application at all (not just a live SANCTIONED offer): a closed/active loan's
- * stored day can still be corrected, it just won't move an already-disbursed due date.
- */
-function SalaryDayCard({
-  customerId,
-  app,
-  onSaved,
-}: {
-  customerId: number;
-  app: ApplicationView;
-  onSaved: () => void;
-}) {
-  const [day, setDay] = React.useState(String(app.salaryCreditDay ?? 1));
-  const hasPendingOffer = app.status === "SANCTIONED" && app.loanId == null;
-  // Projected from today's IST date — the backend recomputes a pending offer from LocalDate.now(IST).
-  const todayIst = istCalendarToday();
-  const projectedDue = dueDateFromSalary({ disbursedOn: todayIst, salaryDay: Number(day) });
-  const dueWindow = salaryDueWindow(todayIst, projectedDue);
-
-  const save = useMutation({
-    mutationFn: () => customersApi.changeSalaryDay(customerId, Number(day)),
-    onSuccess: () => {
-      onSaved();
-      toast.success("Salary credit day updated");
-    },
-  });
-
-  return (
-    <Card title="Correct salary credit day (admin)" icon={<Calendar size={16} />}>
-      <p className="mb-3 text-xs text-muted">
-        Currently on file: <span className="font-mono text-ink">{app.salaryCreditDay ?? "—"}</span>.
-        Carried over to a reborrow and read by disbursal to set the loan&apos;s due date.
-      </p>
-      <Select
-        label="Salary credit day"
-        value={day}
-        onChange={(e) => setDay(e.target.value)}
-        helperText={`Projected next due date: ${formatDate(projectedDue)}.`}
-        className="!mb-2"
-      >
-        {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-          <option key={d} value={d}>{d}</option>
-        ))}
-      </Select>
-      {/* The live region stays mounted so a note that appears after a day change is announced —
-          a region inserted together with its text is often missed by screen readers. */}
-      <div role="status">
-        {dueWindow.exceeds && (
-          <p className="mb-2 flex items-start gap-1.5 rounded border border-warning-100 bg-warning-50 px-2 py-1.5 text-xs text-warning-800">
-            <AlertTriangle size={13} className="mt-px flex-shrink-0" aria-hidden="true" />
-            <span>
-              That due date is {dueWindow.days} days after a disbursal today — beyond the {SALARY_DUE_MAX_DAYS}-day
-              limit. Check the salary day before saving.
-            </span>
-          </p>
-        )}
-      </div>
-      <p className="mb-3 text-xs text-muted">
-        {hasPendingOffer ? "Also moves the pending offer's repayment date. " : null}
-        Active loans keep their existing due date.
-      </p>
-      {save.error && <p className="mb-2 text-sm text-error-700">{errMessage(save.error)}</p>}
-      <button
-        onClick={() => save.mutate()}
-        disabled={save.isPending || Number(day) === (app.salaryCreditDay ?? 0)}
-        className="btn btn-sm btn-navy btn-block disabled:opacity-50"
-      >
-        {save.isPending ? <Loader2 size={13} className="animate-spin" /> : null} Save
-      </button>
-    </Card>
-  );
-}
 
 /**
  * ADMIN lifts a staff block (set at repayment verify, or by the accountant/admin elsewhere). The

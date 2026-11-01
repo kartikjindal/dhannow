@@ -1,7 +1,7 @@
-# DhanBoost — Frontend
+# DhanNow staff console
 
-Next.js (App Router) frontend for DhanBoost, a salary-linked single-repayment
-lending product.
+Next.js (App Router) staff console for DhanNow (`staff.dhannow.com`), forked from navix (PLAN Phase 10).
+Borrowers use the Android app (`app/`); the public site is static (`site/`). There is no borrower web.
 
 ## Getting started
 
@@ -17,20 +17,18 @@ npm install
 npm run dev
 ```
 
-The frontend talks to the Spring Boot backend at `http://localhost:8080`.
+The console talks to the Spring Boot backend at `http://localhost:8080` through its BFF (`src/app/api`).
 
-## Route groups
+## Layout
 
-The App Router uses two route groups to separate audiences:
-
-- `(borrower)` — public/borrower-facing flows: landing page, login, signup
-  (`/signup/pan`), loan application, repayment, etc.
-- `(staff)` — internal back-office flows: Credit Head and assigned Credit Executive
-  share the single credit-decision stage, the Disbursement Head owns release, and the
-  Accountant verifies borrower repayments.
-
-Route groups in parentheses do not affect the URL path; they only organize
-files and let each group have its own layout.
+- `src/app/staff` — every console screen; `/` redirects to `/staff/dashboard`, and the edge middleware gates
+  `/staff/*` on a verified staff JWT.
+- `src/app/api/staff/*`, `src/app/api/auth/staff/*` — the BFF; `/api/staff/desk/*` proxies the Phase 10 desks
+  (complaints, selfie review, refunds, holidays, config, adjustment log, holds) to an allowlist of backend paths.
+- `src/lib/api/staff-desks.ts` — clients for those desks; `src/lib/collection-buckets.ts` and
+  `src/lib/domain/loan.ts` mirror the backend enums (tests read the Java files).
+- `src/lib/copy-guard.test.ts` fails the build on navix wording or if the borrower web comes back; eslint
+  `no-restricted-imports` blocks borrower imports.
 
 ## Middleware & role gating
 

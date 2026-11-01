@@ -72,6 +72,10 @@ public final class CustomerSegments {
             return "overdue";
         }
 
+        // PLAN Phase 10b: money sent with a UTR, not yet confirmed by the Accountant (loan DISBURSING).
+        if ("DISBURSING".equals(loan) || "DISBURSAL_CONFIRMATION_PENDING".equals(app)) {
+            return "awaitingConfirmation";
+        }
         if (loan != null && ACTIVE_LOAN.contains(loan)) {
             return "active";
         }
@@ -128,6 +132,7 @@ public final class CustomerSegments {
         long unallocated = 0;
         long reloan = 0;
         long blocked = 0;
+        long awaitingConfirmation = 0;
         for (CustomerSummary c : rows) {
             all++;
             switch (segmentOf(c.loanStatus(), c.latestStatus())) {
@@ -135,6 +140,7 @@ public final class CustomerSegments {
                 case "review" -> review++;
                 case "approved" -> approved++;
                 case "disbursementPending" -> disbursementPending++;
+                case "awaitingConfirmation" -> awaitingConfirmation++;
                 case "active" -> active++;
                 case "overdue" -> overdue++;
                 case "hold" -> hold++;
@@ -153,6 +159,7 @@ public final class CustomerSegments {
             }
         }
         return new CustomerSummaryCounts(all, incomplete, pending, review, approved,
-                disbursementPending, active, overdue, hold, rejected, closed, unallocated, reloan, blocked);
+                disbursementPending, active, overdue, hold, rejected, closed, unallocated, reloan, blocked,
+                awaitingConfirmation);
     }
 }
