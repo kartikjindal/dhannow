@@ -24,6 +24,8 @@ export default defineWorkspace([
     test: {
       name: "node",
       environment: "node",
+      // The suites exercise the non-prod "Act as role" switcher; rbac.test.ts covers it switched off.
+      env: { NEXT_PUBLIC_ROLE_SWITCHER: "true" },
       include: ["src/**/*.test.ts"],
     },
   },
@@ -37,6 +39,7 @@ export default defineWorkspace([
     test: {
       name: "dom",
       environment: "jsdom",
+      env: { NEXT_PUBLIC_ROLE_SWITCHER: "true" },
       include: ["src/**/*.test.tsx"],
       setupFiles: ["./vitest.setup.ts"],
       restoreMocks: true,
