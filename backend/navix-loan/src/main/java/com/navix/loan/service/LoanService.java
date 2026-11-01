@@ -33,6 +33,7 @@ public class LoanService {
     private final LoanRepository loanRepository;
     private final PricingService pricing;
     private final Clock clock;
+    private final RepaymentScheduleService schedules;
 
     @Transactional(readOnly = true)
     public Loan getLoan(Long id) {
@@ -78,7 +79,9 @@ public class LoanService {
         schedule(loan, application, pricing.mathFor(application),
                 confirmedOn != null ? confirmedOn : LocalDate.now(clock));
         loan.moveTo(LoanLifecycle.ACTIVE);
-        return loanRepository.save(loan);
+        Loan saved = loanRepository.save(loan);
+        schedules.writeOriginal(saved); // v1 BULLET on the confirmed due date, never edited (V102)
+        return saved;
     }
 
     /** The Accountant returned the transfer (wrong UTR, not credited): the unconfirmed loan is dropped. */

@@ -394,6 +394,48 @@ class LoanDocumentServiceTest {
         assertThat(rows).isEmpty();
     }
 
+    // ---------------------------------------------------------------- closure receipt (Phase 6a)
+
+    /** The receipt states the payments and the waterfall split, in the brand's plain wording. */
+    @Test
+    void theClosureReceiptStatesThePaymentsAndHowTheyWereApplied() {
+        Loan loan = activeLoan();
+        var c = new com.navix.loan.pdf.ClosureFacts(LocalDate.of(2026, 11, 19),
+                List.of(new com.navix.loan.pdf.ClosureFacts.PaidLine(LocalDate.of(2026, 11, 19), "UTR77", 104_000L)),
+                4_000L, 100_000L, 0L, false);
+
+        String t = text(new KfsPdfRenderer().renderClosureReceipt(service.facts(app, loan), c));
+
+        assertThat(t).contains("LOAN CLOSURE RECEIPT", "Loan account no. " + loan.getId(), "Repaid in full",
+                "19 Nov 2026, ref UTR77", "₹1,040", "Late charge", "₹40", "Principal",
+                "Nothing more is owed on this loan.", "No refund is due.");
+        assertThat(t.toLowerCase()).doesNotContain("dhanboost", "nbfc", "pay early", "save interest");
+    }
+
+    /** CC-08 on the receipt: the excess is stated as a refund. */
+    @Test
+    void cc08_theClosureReceiptStatesTheRefund() {
+        Loan loan = activeLoan();
+        var c = new com.navix.loan.pdf.ClosureFacts(LocalDate.of(2026, 11, 17),
+                List.of(new com.navix.loan.pdf.ClosureFacts.PaidLine(LocalDate.of(2026, 11, 17), null, 110_000L)),
+                0L, 100_000L, 10_000L, false);
+
+        assertThat(text(new KfsPdfRenderer().renderClosureReceipt(service.facts(app, loan), c)))
+                .contains("Excess, to be refunded to you", "₹100", "We will refund ₹100 to your bank account.");
+    }
+
+    @Test
+    void theClosureReceiptIsIssuedOnceOnTheRepaidTransition() {
+        Loan loan = activeLoan();
+        var repaid = new ApplicationTransitionedEvent(APP, CUSTOMER, loan.getId(), "ACTIVE", "CLOSED", "REPAID",
+                null, "3", "ACCOUNTANT", NOW, null);
+        service.onLoanClosed(repaid);
+        service.onLoanClosed(repaid);
+        service.onLoanClosed(activated(loan.getId()));
+
+        assertThat(rows).filteredOn(d -> d.getType() == LoanDocumentType.CLOSURE_RECEIPT).hasSize(1);
+    }
+
     // ---------------------------------------------------------------- access
 
     @Test

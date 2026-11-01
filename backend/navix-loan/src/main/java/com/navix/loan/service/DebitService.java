@@ -109,6 +109,7 @@ public class DebitService {
     private final MandatePort port;
     private final PaymentRepository payments;
     private final TransactionTemplate tx;
+    private final RefundCaseService refunds;
 
     /** Opened per call: the credit runs in its own transaction so a caught LOAN_SETTLED cannot poison ours. */
     private TransactionTemplate creditTx() {
@@ -464,7 +465,14 @@ public class DebitService {
         row.setUtr(o.utr());
         row.setPaymentId(paymentId);
         row.setOverpayment(overpayment);
-        tx.execute(s -> debits.save(row));
+        boolean refund = overpayment;
+        tx.execute(s -> {
+            MandateDebit saved = debits.save(row);
+            if (refund) { // CC-11: a manual payment and the debit both cleared; the debit is owed back
+                refunds.open(row.getLoanId(), null, row.getId(), amount, RefundCaseService.Reason.NACH_AFTER_CLOSE);
+            }
+            return saved;
+        });
     }
 
     /**

@@ -54,11 +54,11 @@ class DashboardPositionTest {
     }
 
     private static OutstandingBreakdown bd(long out, long interest, long penalty, long verified) {
-        return new OutstandingBreakdown(out, interest, penalty, verified, null, 0, 0);
+        return new OutstandingBreakdown(out, interest, penalty, verified, null, 0, 0, 0);
     }
 
     private static OutstandingBreakdown settled(long out, long interest, long penalty, long verified) {
-        return new OutstandingBreakdown(out, interest, penalty, verified, 40_000L, 0, 0);
+        return new OutstandingBreakdown(out, interest, penalty, verified, 40_000L, 0, 0, 0);
     }
 
     /** active (1), overdue with penalty (2), closed (3), settled/capped (4). */

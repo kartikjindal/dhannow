@@ -88,8 +88,8 @@ class DashboardCalendarTest {
         l2.setId(2L);
         when(loanRepository.findAllById(any())).thenReturn(List.of(l1, l2));
         when(repayments.outstandingBreakdownsForAll(any(), any())).thenReturn(Map.of(
-                1L, new com.navix.loan.service.RepaymentService.OutstandingBreakdown(1_400_000, 0, 0, 0, null, 0, 0),
-                2L, new com.navix.loan.service.RepaymentService.OutstandingBreakdown(300_000, 0, 0, 0, null, 0, 0)));
+                1L, new com.navix.loan.service.RepaymentService.OutstandingBreakdown(1_400_000, 0, 0, 0, null, 0, 0, 0),
+                2L, new com.navix.loan.service.RepaymentService.OutstandingBreakdown(300_000, 0, 0, 0, null, 0, 0, 0)));
 
         Calendar c = service.calendar(admin, "2026-09", "DUE_OPEN");
 

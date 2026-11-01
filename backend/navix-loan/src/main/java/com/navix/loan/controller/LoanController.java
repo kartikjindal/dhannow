@@ -186,6 +186,7 @@ public class LoanController {
     private static OutstandingView view(Long loanId, LocalDate asOf,
                                         RepaymentService.OutstandingBreakdown b) {
         return new OutstandingView(loanId, asOf, b.outstandingPaise(), b.settledAmountPaise(),
-                b.interestPaise(), b.penaltyPaise(), b.verifiedPaise(), b.interestDays(), b.penaltyDays());
+                b.interestPaise(), b.penaltyPaise(), b.verifiedPaise(), b.interestDays(), b.penaltyDays(),
+                b.interestPrepaidPaise());
     }
 }

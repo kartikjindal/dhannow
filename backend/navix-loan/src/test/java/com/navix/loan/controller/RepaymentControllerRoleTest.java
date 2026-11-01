@@ -38,7 +38,7 @@ class RepaymentControllerRoleTest {
         for (String role : new String[] {"TELECALLER", "COLLECTION_EXECUTIVE", "COLLECTION_HEAD", "DSA",
                 "CREDIT_EXECUTIVE", "CREDIT_HEAD", "DISBURSEMENT_HEAD", "ACCOUNTANT"}) {
             ActorContext.set(new CurrentActor("1", "Staffer", role));
-            assertThatThrownBy(() -> controller.record(1L, REQUEST))
+            assertThatThrownBy(() -> controller.record(1L, "key-1", REQUEST))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("requires role");
         }
@@ -48,7 +48,7 @@ class RepaymentControllerRoleTest {
     void borrowerAndAdminMayRecord() {
         for (String role : new String[] {"BORROWER", "ADMIN"}) {
             ActorContext.set(new CurrentActor("1", "Actor", role));
-            assertThatCode(() -> controller.record(1L, REQUEST)).doesNotThrowAnyException();
+            assertThatCode(() -> controller.record(1L, "key-1", REQUEST)).doesNotThrowAnyException();
         }
     }
 
@@ -57,12 +57,12 @@ class RepaymentControllerRoleTest {
         ActorContext.set(new CurrentActor("9000001", "Asha", "BORROWER"));
         for (String key : new String[] {"applications/7/aadhaar_card_front/1.jpg", "loan/repayment-proof/../x"}) {
             RepaymentRequest withProof = new RepaymentRequest(500_000L, PaymentMethod.UPI, "TXN-1", key, LocalDate.now());
-            assertThatThrownBy(() -> controller.record(1L, withProof))
+            assertThatThrownBy(() -> controller.record(1L, "key-1", withProof))
                     .isInstanceOf(BusinessException.class)
                     .hasFieldOrPropertyWithValue("code", "INVALID_PROOF_KEY");
         }
         RepaymentRequest own = new RepaymentRequest(500_000L, PaymentMethod.UPI, "TXN-1",
                 "loan/repayment-proof/uuid-shot.jpg", LocalDate.now());
-        assertThatCode(() -> controller.record(1L, own)).doesNotThrowAnyException();
+        assertThatCode(() -> controller.record(1L, "key-1", own)).doesNotThrowAnyException();
     }
 }

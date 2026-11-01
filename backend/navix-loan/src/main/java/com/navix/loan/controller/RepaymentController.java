@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -43,10 +44,11 @@ public class RepaymentController {
      */
     @PostMapping
     public ApiResponse<PaymentView> record(@PathVariable Long loanId,
+                                           @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
                                            @Valid @RequestBody RepaymentRequest request) {
         requireRole("BORROWER", "ADMIN");
         requireOwnProofKey(request.proofUrl());
-        return ApiResponse.ok(repaymentService.view(repaymentService.recordPayment(
+        return ApiResponse.ok(repaymentService.view(repaymentService.submitPayment(idempotencyKey,
                 loanId, request.amountPaise(), request.method(), request.txnRef(),
                 request.proofUrl(), request.paidOn())));
     }
@@ -61,10 +63,11 @@ public class RepaymentController {
      */
     @PostMapping("/admin-record")
     public ApiResponse<PaymentView> adminRecord(@PathVariable Long loanId,
+                                                @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
                                                 @Valid @RequestBody AdminRepaymentRequest request) {
         requireRole("ADMIN");
-        return ApiResponse.ok(repaymentService.view(repaymentService.recordPayment(loanId, request.amountPaise(),
-                request.method(), request.txnRef(), request.proofUrl(), request.paidOn())));
+        return ApiResponse.ok(repaymentService.view(repaymentService.submitPayment(idempotencyKey, loanId,
+                request.amountPaise(), request.method(), request.txnRef(), request.proofUrl(), request.paidOn())));
     }
 
     /** List repayments recorded against the loan. Owner-or-staff: a borrower sees only their own. */

@@ -84,6 +84,225 @@ class ApplicationFlowIntegrationTest {
         when(storage.fetch(org.mockito.ArgumentMatchers.anyString())).thenReturn("%PDF-signed".getBytes());
     }
 
+    // ---- PLAN Phase 6a: payments, closure, schedules ---------------------------------
+
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
+
+    /**
+     * Confirmation writes the v1 BULLET schedule; a part and then a full on-time payment (one replayed with
+     * its Idempotency-Key) are verified, split penal → principal, close the loan, issue the closure receipt
+     * and move the borrower up one level.
+     */
+    @Test
+    void payments_recordVerifyAllocateCloseReceiptAndLadderUp() throws Exception {
+        long loanId = loanIdOf(walkToActive(70L));
+        String b = bearer("70", "BORROWER");
+
+        // v1 BULLET schedule from the confirmed due date, immutable.
+        var schedule = jdbc.queryForMap("select s.id, s.version, s.kind, s.status, i.seq, i.due_date, i.due_at,"
+                + " i.principal_paise, i.interest_paise, l.due_date as loan_due, l.due_at as loan_due_at"
+                + " from repayment_schedule s join schedule_instalment i on i.schedule_id = s.id"
+                + " join loan l on l.id = s.loan_id where s.loan_id = ?", loanId);
+        assertThat(schedule).containsEntry("version", 1).containsEntry("kind", "BULLET").containsEntry("status", "ACTIVE")
+                .containsEntry("seq", 1).containsEntry("principal_paise", 100000L).containsEntry("interest_paise", 0L)
+                .containsEntry("due_date", schedule.get("loan_due")).containsEntry("due_at", schedule.get("loan_due_at"));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update(
+                        "update schedule_instalment set due_date = due_date + 14 where schedule_id = ?", schedule.get("id")))
+                .hasMessageContaining("immutable");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update(
+                        "delete from repayment_schedule where id = ?", schedule.get("id")))
+                .hasMessageContaining("cannot be deleted");
+
+        // CC-22: the borrower needs a key; a replay with the same key returns the same payment.
+        String part = repayment(40000, " utr pay 70a ", LocalDate.now(IST));
+        mvc.perform(post("/api/loan/{id}/repayments", loanId).header("Authorization", b)
+                        .contentType(MediaType.APPLICATION_JSON).content(part))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REQUIRED"));
+        long first = submit(loanId, b, "k-70-1", part);
+        assertThat(submit(loanId, b, "k-70-1", part)).isEqualTo(first);
+        mvc.perform(post("/api/loan/{id}/repayments", loanId).header("Authorization", b).header("Idempotency-Key", "k-70-1")
+                        .contentType(MediaType.APPLICATION_JSON).content(repayment(50000, "UTR-PAY-70Z", LocalDate.now(IST))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REUSED"));
+        assertThat(jdbc.queryForObject("select count(*) from payment where loan_id = ?", Long.class, loanId)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("select txn_ref from payment where id = ?", String.class, first)).isEqualTo("UTRPAY70A");
+        // CC-07: the same UTR again is refused.
+        mvc.perform(post("/api/loan/{id}/repayments", loanId).header("Authorization", b).header("Idempotency-Key", "k-70-dup")
+                        .contentType(MediaType.APPLICATION_JSON).content(repayment(40000, "UTRPAY70A", LocalDate.now(IST))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("DUPLICATE_UTR"));
+
+        verifyPayment(loanId, first);
+        assertThat(allocations(loanId)).containsExactly(java.util.Map.entry("PRINCIPAL", 40000L));
+        assertThat(jdbc.queryForObject("select repayment_status from loan where id = ?", String.class, loanId)).isEqualTo("PARTIAL");
+
+        long rest = submit(loanId, b, "k-70-2", repayment(60000, "UTR-PAY-70B", LocalDate.now(IST)));
+        verifyPayment(loanId, rest);
+
+        assertThat(allocations(loanId)).containsExactly(java.util.Map.entry("PRINCIPAL", 100000L));
+        assertThat(jdbc.queryForMap("select lifecycle_status, repayment_status from loan where id = ?", loanId))
+                .containsEntry("lifecycle_status", "CLOSED").containsEntry("repayment_status", "PAID");
+        assertThat(jdbc.queryForObject("select i.status from schedule_instalment i join repayment_schedule s"
+                + " on s.id = i.schedule_id where s.loan_id = ?", String.class, loanId)).isEqualTo("PAID");
+        assertThat(jdbc.queryForObject("select count(*) from loan_document where loan_id = ? and type = 'CLOSURE_RECEIPT'",
+                Long.class, loanId)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("select count(*) from refund_case where loan_id = ?", Long.class, loanId)).isZero();
+        mvc.perform(get("/api/me/credit-level").header("Authorization", b))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.level").value(2));
+    }
+
+    /**
+     * R4 / CC-19: a loan 40 days late owes principal + the late charge capped at 30 days, never the prepaid
+     * interest. CC-08: paying more than that closes the loan, splits penal → principal and opens a refund
+     * case for the excess. CC-07: a UTR used on another loan is refused.
+     */
+    @Test
+    void cc08_overpaymentOnALateLoanOpensARefundCaseAndTheLateChargeIsCapped() throws Exception {
+        long loanId = loanIdOf(walkToActive(71L));
+        LocalDate today = LocalDate.now(IST);
+        LocalDate due = today.minusDays(40);
+        jdbc.update("update loan set disbursed_on = ?, due_date = ?, due_at = ? where id = ?", due.minusDays(14), due,
+                java.sql.Timestamp.from(due.atTime(23, 59, 59).atZone(IST).toInstant()), loanId);
+
+        mvc.perform(get("/api/loan/{id}/outstanding", loanId).header("Authorization", bearer("71", "BORROWER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.outstandingPaise").value(160000))
+                .andExpect(jsonPath("$.data.penaltyPaise").value(60000))
+                .andExpect(jsonPath("$.data.penaltyDays").value(30))
+                .andExpect(jsonPath("$.data.interestPaise").value(0))
+                .andExpect(jsonPath("$.data.interestPrepaidPaise").value(14000));
+
+        String admin = bearer("1", "ADMIN");
+        long paid = submit("/api/loan/{id}/repayments/admin-record", loanId, admin, "k-71-1",
+                repayment(170000, "UTR-PAY-71", today));
+        verifyPayment(loanId, paid);
+
+        assertThat(allocations(loanId)).containsOnly(java.util.Map.entry("PENAL", 60000L),
+                java.util.Map.entry("PRINCIPAL", 100000L), java.util.Map.entry("EXCESS", 10000L));
+        assertThat(jdbc.queryForMap("select amount_paise, reason, status, customer_id from refund_case where payment_id = ?", paid))
+                .containsEntry("amount_paise", 10000L).containsEntry("reason", "OVERPAYMENT")
+                .containsEntry("status", "OPEN").containsEntry("customer_id", 71L);
+        mvc.perform(get("/api/refund-cases").param("status", "OPEN").header("Authorization", bearer("3", "ACCOUNTANT")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.paymentId==" + paid + ")].amountPaise").value(10000));
+        mvc.perform(get("/api/refund-cases").header("Authorization", bearer("71", "BORROWER")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("FORBIDDEN_ROLE"));
+        assertThat(jdbc.queryForObject("select lifecycle_status from loan where id = ?", String.class, loanId)).isEqualTo("CLOSED");
+        assertThat(jdbc.queryForObject("select count(*) from loan_document where loan_id = ? and type = 'CLOSURE_RECEIPT'",
+                Long.class, loanId)).isEqualTo(1L);
+        // CC-07: another customer cannot reuse that UTR on their own loan.
+        long other = loanIdOf(walkToActive(72L));
+        mvc.perform(post("/api/loan/{id}/repayments", other).header("Authorization", bearer("72", "BORROWER"))
+                        .header("Idempotency-Key", "k-72-1")
+                        .contentType(MediaType.APPLICATION_JSON).content(repayment(100000, "utr-pay-71", today)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("DUPLICATE_UTR"));
+        // Late: the level stays.
+        mvc.perform(get("/api/me/credit-level").header("Authorization", bearer("71", "BORROWER")))
+                .andExpect(jsonPath("$.data.level").value(1));
+    }
+
+    /** The gateway callback is refused while the payment-gateway flag is OFF (v1). */
+    @Test
+    void paymentWebhookIsRefusedWhileTheFlagIsOff() throws Exception {
+        mvc.perform(post("/api/webhooks/payments/{provider}", "anygateway")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"event\":\"x\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("FEATURE_DISABLED"));
+        assertThat(jdbc.queryForObject("select enabled from feature_flag where flag_key = 'payment-gateway'", Boolean.class))
+                .isFalse();
+    }
+
+    /** With the flag ON and a provider adapter, a replayed callback records one payment, awaiting an Accountant. */
+    @Test
+    void paymentWebhookReplayIsIdempotent() throws Exception {
+        long loanId = loanIdOf(walkToActive(73L));
+        jdbc.update("update feature_flag set enabled = true where flag_key = 'payment-gateway'");
+        try {
+            String body = "{\"event\":\"evt-73\",\"loanId\":" + loanId + ",\"amount\":100000,\"utr\":\"GW-73\"}";
+            long first = webhook(body);
+            assertThat(webhook(body)).isEqualTo(first);
+            assertThat(jdbc.queryForMap("select count(*) as n, max(status) as status from payment where loan_id = ?", loanId))
+                    .containsEntry("n", 1L).containsEntry("status", "PENDING_VERIFICATION");
+            mvc.perform(post("/api/webhooks/payments/{provider}", "nosuchgateway")
+                            .contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isUnprocessableEntity())
+                    .andExpect(jsonPath("$.error.code").value("UNKNOWN_PROVIDER"));
+        } finally {
+            jdbc.update("update feature_flag set enabled = false where flag_key = 'payment-gateway'");
+        }
+    }
+
+    private long webhook(String body) throws Exception {
+        MvcResult r = mvc.perform(post("/api/webhooks/payments/{provider}", "testpay")
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk())
+                .andReturn();
+        return data(r).asLong();
+    }
+
+    /** A provider adapter for the tests only; no gateway ships in v1. */
+    @org.springframework.boot.test.context.TestConfiguration
+    static class TestGateway {
+        @org.springframework.context.annotation.Bean
+        com.navix.loan.service.PaymentGatewayPort testPayGateway(ObjectMapper om) {
+            return new com.navix.loan.service.PaymentGatewayPort() {
+                @Override
+                public String provider() {
+                    return "testpay";
+                }
+
+                @Override
+                public GatewayPayment parse(java.util.Map<String, String> headers, String body) {
+                    try {
+                        JsonNode n = om.readTree(body);
+                        return new GatewayPayment(n.get("event").asText(), n.get("loanId").asLong(),
+                                n.get("amount").asLong(), n.get("utr").asText(), LocalDate.now(IST));
+                    } catch (java.io.IOException e) {
+                        throw new IllegalArgumentException(e);
+                    }
+                }
+            };
+        }
+    }
+
+    private static String repayment(long paise, String utr, LocalDate paidOn) {
+        return "{\"amountPaise\":" + paise + ",\"method\":\"UPI\",\"txnRef\":\"" + utr + "\",\"paidOn\":\"" + paidOn
+                + "\",\"proofUrl\":\"loan/repayment-proof/shot.png\"}";
+    }
+
+    private long submit(long loanId, String bearer, String key, String body) throws Exception {
+        return submit("/api/loan/{id}/repayments", loanId, bearer, key, body);
+    }
+
+    private long submit(String path, long loanId, String bearer, String key, String body) throws Exception {
+        MvcResult r = mvc.perform(post(path, loanId)
+                        .header("Authorization", bearer).header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PENDING_VERIFICATION"))
+                .andReturn();
+        return data(r).get("id").asLong();
+    }
+
+    private void verifyPayment(long loanId, long paymentId) throws Exception {
+        mvc.perform(post("/api/loan/{id}/repayments/{pid}/verify", loanId, paymentId)
+                        .header("Authorization", bearer("3", "ACCOUNTANT")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("VERIFIED"));
+    }
+
+    private java.util.Map<String, Long> allocations(long loanId) {
+        java.util.Map<String, Long> out = new java.util.LinkedHashMap<>();
+        jdbc.query("select component, sum(amount_paise) from payment_allocation where loan_id = ? group by component"
+                + " order by component", (org.springframework.jdbc.core.RowCallbackHandler)
+                rs -> out.put(rs.getString(1), rs.getLong(2)), loanId);
+        return out;
+    }
+
     // ---- PLAN Phase 5: documents ------------------------------------------------------
 
     private static final String ESIGN_INIT =
@@ -399,6 +618,7 @@ class ApplicationFlowIntegrationTest {
         // Payments wait for the confirmation too.
         mvc.perform(post("/api/loan/{id}/repayments", loanId)
                         .header("Authorization", bearer("52", "BORROWER"))
+                        .header("Idempotency-Key", "cc01-52")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"amountPaise\":100000,\"method\":\"UPI\",\"txnRef\":\"UTR-EARLY\",\"proofUrl\":\"loan/repayment-proof/52/x.png\"}"))
                 .andExpect(status().isUnprocessableEntity())

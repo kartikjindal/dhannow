@@ -52,6 +52,10 @@ class RepaymentServiceTest {
     private DocumentStoragePort storage;
     @Mock
     private CreditLevelService creditLevels;
+    @Mock
+    private PaymentAllocator allocator;
+    @Mock
+    private com.navix.common.idempotency.IdempotencyService idempotency;
 
     private RepaymentService repaymentService;
 
@@ -71,7 +75,7 @@ class RepaymentServiceTest {
     void setUp() {
         repaymentService = new RepaymentService(paymentRepository, loanRepository, TestPricing.navix(),
                 applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage,
-                creditLevels);
+                creditLevels, allocator, idempotency);
     }
 
     /**
@@ -121,7 +125,8 @@ class RepaymentServiceTest {
     void theOwningBorrowerCanRecordTheirOwnPaymentWithAScreenshotAttached() {
         when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan())); // customer 7
         when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(0L);
-        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         com.navix.common.security.ActorContext.set(
                 new com.navix.common.security.CurrentActor("7", "Asha", "BORROWER"));
         try {
@@ -160,7 +165,8 @@ class RepaymentServiceTest {
     void staffCanRecordAPaymentWithoutAScreenshot() {
         when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
         when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(0L);
-        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         com.navix.common.security.ActorContext.set(
                 new com.navix.common.security.CurrentActor("40", "Accountant Rao", "ACCOUNTANT"));
         try {
@@ -175,7 +181,8 @@ class RepaymentServiceTest {
     void recordsPendingPartialPayment() {
         when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
         when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(0L);
-        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
 
         Payment p = repaymentService.recordPayment(1L, 500_000L, PaymentMethod.UPI, "TXN1", null, DUE);
 
@@ -184,17 +191,69 @@ class RepaymentServiceTest {
         assertThat(p.isPartial()).isTrue(); // 500k < 1.27m remaining
     }
 
+    /** CC-07: a UTR already on file is refused, on this loan or any other; references compare normalised. */
     @Test
-    void recordIsIdempotentOnTxnRef() {
+    void cc07_aUtrAlreadyOnFileIsRefused() {
+        Payment existing = new Payment();
+        existing.setLoanId(2L);
+        existing.setTxnRef("DUP42");
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.findFirstByTxnRefAndStatusNot("DUP42", PaymentStatus.REJECTED))
+                .thenReturn(Optional.of(existing));
+
+        assertThatThrownBy(() -> repaymentService.recordPayment(1L, 500_000L, PaymentMethod.UPI, " dup 42 ", null, null))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getCode()).isEqualTo("DUPLICATE_UTR");
+        // Upstream-validated credits (collections, NACH) are refused on another loan too.
+        assertThatThrownBy(() -> repaymentService.recordPayment(1L, 500_000L, PaymentMethod.UPI, "DUP42", null, null, null))
+                .extracting(e -> ((BusinessException) e).getCode()).isEqualTo("DUPLICATE_UTR");
+    }
+
+    /** An upstream-validated credit whose UTR is already on this loan is that same payment, never a second one. */
+    @Test
+    void anUpstreamCreditWithAUtrAlreadyOnTheLoanReturnsThatPayment() {
         Payment existing = new Payment();
         existing.setLoanId(1L);
         existing.setTxnRef("DUP");
         when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
-        when(paymentRepository.findFirstByLoanIdAndTxnRef(1L, "DUP")).thenReturn(Optional.of(existing));
+        when(paymentRepository.findFirstByTxnRefAndStatusNot("DUP", PaymentStatus.REJECTED)).thenReturn(Optional.of(existing));
 
-        Payment p = repaymentService.recordPayment(1L, 500_000L, PaymentMethod.UPI, "DUP", null, null);
+        assertThat(repaymentService.recordPayment(1L, 500_000L, PaymentMethod.UPI, "DUP", null, null, null))
+                .isSameAs(existing);
+    }
 
-        assertThat(p).isSameAs(existing);
+    @Test
+    void utrsAreStoredWithoutSpacesInUpperCase() {
+        assertThat(RepaymentService.normaliseUtr(" ab 12\t3 ")).isEqualTo("AB123");
+        assertThat(RepaymentService.normaliseUtr("  ")).isNull();
+        assertThat(RepaymentService.normaliseUtr(null)).isNull();
+    }
+
+    /** CC-22: the borrower's submit needs an Idempotency-Key; with one, the replay guard runs the record. */
+    @Test
+    void cc22_aBorrowerSubmitNeedsAnIdempotencyKeyAndGoesThroughTheGuard() {
+        Payment stored = new Payment();
+        stored.setId(5L);
+        withActor("7", "BORROWER", () -> {
+            assertThatThrownBy(() -> repaymentService.submitPayment(null, 1L, 1L, PaymentMethod.UPI, "U1", "p", null))
+                    .extracting(e -> ((BusinessException) e).getCode()).isEqualTo("IDEMPOTENCY_KEY_REQUIRED");
+            when(idempotency.execute(eq("REPAYMENT_SUBMIT"), eq("key-1"), eq("7|1|1|UPI|U1|p|null"), any())).thenReturn(5L);
+            when(paymentRepository.findById(5L)).thenReturn(Optional.of(stored));
+            assertThat(repaymentService.submitPayment("key-1", 1L, 1L, PaymentMethod.UPI, "u1", "p", null))
+                    .isSameAs(stored);
+        });
+    }
+
+    /** A rejected payment stays rejected: verifying it would revive money that never arrived. */
+    @Test
+    void aRejectedPaymentCannotBeVerified() {
+        Payment rejected = new Payment();
+        rejected.setLoanId(1L);
+        rejected.setStatus(PaymentStatus.REJECTED);
+        when(paymentRepository.findById(9L)).thenReturn(Optional.of(rejected));
+        assertThatThrownBy(() -> repaymentService.verifyPayment(9L))
+                .extracting(e -> ((BusinessException) e).getCode()).isEqualTo("PAYMENT_REJECTED");
+        verify(allocator, never()).allocate(any(), anyLong(), anyLong(), anyLong());
     }
 
     @Test
@@ -223,7 +282,8 @@ class RepaymentServiceTest {
     @Test
     void sodPaymentRecorderCannotVerifyEvenAsAdmin() {
         when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
-        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         com.navix.common.security.ActorContext.set(
                 new com.navix.common.security.CurrentActor("10", "Admin", "ADMIN"));
         try {
@@ -249,7 +309,8 @@ class RepaymentServiceTest {
     @Test
     void borrowerRecordedPaymentHasNoStaffRecorder() {
         when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
-        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         com.navix.common.security.ActorContext.set(
                 new com.navix.common.security.CurrentActor("7", "Borrower", "BORROWER"));
         try {
@@ -271,6 +332,7 @@ class RepaymentServiceTest {
         when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
         when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(1_270_000L);
         lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
         repaymentService.verifyPayment(99L);
@@ -300,6 +362,7 @@ class RepaymentServiceTest {
         when(paymentRepository.findByLoanId(1L)).thenReturn(java.util.List.of(payment));
         when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(1_270_000L);
         lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
         repaymentService.verifyPayment(99L);
@@ -326,6 +389,7 @@ class RepaymentServiceTest {
         when(paymentRepository.findByLoanId(1L)).thenReturn(java.util.List.of(first, last));
         when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(1_270_000L);
         lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
         repaymentService.verifyPayment(99L);
@@ -345,6 +409,7 @@ class RepaymentServiceTest {
         when(paymentRepository.findByLoanId(1L)).thenReturn(java.util.List.of(payment));
         when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(500_000L);
         lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
         repaymentService.verifyPayment(99L);
@@ -383,7 +448,7 @@ class RepaymentServiceTest {
     void anUpfrontLoanOwesThePrincipalPlusAnyLateCharge() {
         RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, dhanNowPricing(),
                 applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage,
-                creditLevels);
+                creditLevels, allocator, idempotency);
         Loan loan = dhanNowLoan(today().minusDays(2));
         when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
 
@@ -398,6 +463,74 @@ class RepaymentServiceTest {
     }
 
     /**
+     * PLAN Phase 10b R4: owed = principal + late charge - verified paid. The prepaid interest is reported
+     * and never owed, and the late charge (2%/day on the principal) stops at the 30-day cap (CC-19).
+     */
+    @Test
+    void cc19_breakdownExcludesPrepaidInterestAndCapsTheLateChargeAtThirtyDays() {
+        RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, dhanNowPricing(),
+                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage,
+                creditLevels, allocator, idempotency);
+        Loan loan = dhanNowLoan(today().minusDays(45));
+        loan.setUpfrontInterestPaise(14_000L);
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(10_000L);
+
+        RepaymentService.OutstandingBreakdown b = dhanNow.outstandingBreakdownAsOf(1L, today());
+
+        assertThat(b.interestPrepaidPaise()).isEqualTo(14_000L);
+        assertThat(b.interestPaise()).isZero();
+        assertThat(b.penaltyDays()).isEqualTo(30);
+        assertThat(b.penaltyPaise()).isEqualTo(60_000L);
+        assertThat(b.outstandingPaise()).isEqualTo(100_000L + 60_000L - 10_000L);
+        // Day 31 and day 45 owe the same: outstanding never grows past the cap.
+        assertThat(dhanNow.outstandingAsOf(1L, loan.getDueDate().plusDays(31))).isEqualTo(b.outstandingPaise());
+    }
+
+    /** CC-09: verification splits the payment against what was owed on its bank date, before any payment. */
+    @Test
+    void cc09_verifyAllocatesAgainstTheLateChargeToThePaymentDate() {
+        RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, dhanNowPricing(),
+                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage,
+                creditLevels, allocator, idempotency);
+        Loan loan = dhanNowLoan(today().minusDays(3));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        Payment p = new Payment();
+        p.setLoanId(1L);
+        p.setAmount(50_000L);
+        p.setStatus(PaymentStatus.PENDING_VERIFICATION);
+        p.setPaidOn(today().minusDays(1)); // 2 days late: Rs 40 late charge
+        when(paymentRepository.findById(9L)).thenReturn(Optional.of(p));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(50_000L);
+
+        dhanNow.verifyPayment(9L);
+
+        verify(allocator).allocate(p, 4_000L, 0L, 100_000L);
+    }
+
+    /** CC-08: money verified onto a loan that was already closed owes nothing; all of it is excess. */
+    @Test
+    void cc08_aPaymentVerifiedAfterClosureIsAllExcess() {
+        Loan loan = activeLoan();
+        loan.moveTo(com.navix.loan.domain.LoanLifecycle.CLOSED);
+        loan.setClosedOn(DUE);
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        Payment p = new Payment();
+        p.setLoanId(1L);
+        p.setAmount(30_000L);
+        p.setStatus(PaymentStatus.PENDING_VERIFICATION);
+        p.setPaidOn(DUE);
+        when(paymentRepository.findById(9L)).thenReturn(Optional.of(p));
+        lenient().when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(1_300_000L);
+
+        repaymentService.verifyPayment(9L);
+
+        verify(allocator).allocate(p, 0L, 0L, 0L);
+    }
+
+    /**
      * PLAN Phase 2: a part payment leaves the loan open and the ladder alone; the full repayment on the
      * due date then closes it on time and moves the customer up one level.
      */
@@ -408,11 +541,12 @@ class RepaymentServiceTest {
         CreditLevelHistoryRepository history = org.mockito.Mockito.mock(CreditLevelHistoryRepository.class);
         CreditLevelService ladder = new CreditLevelService(levels, history, pricing, java.time.Clock.system(IST));
         RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, pricing,
-                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage, ladder);
+                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage, ladder, allocator, idempotency);
         Loan loan = dhanNowLoan(today());
         when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
         when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         com.navix.loan.entity.CreditLevel l1 = new com.navix.loan.entity.CreditLevel();
         l1.setCustomerId(7L);
         l1.setLevel((short) 1);
@@ -452,10 +586,11 @@ class RepaymentServiceTest {
     @Test
     void cc09_partPaymentLeavesTheLoanOpenAndPartial() {
         RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, dhanNowPricing(),
-                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage, creditLevels);
+                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage, creditLevels, allocator, idempotency);
         Loan loan = dhanNowLoan(today());
         when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
         lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
 
         Payment pending = dhanNow.recordPayment(1L, 40_000L, PaymentMethod.UPI, "UTR-CC09", "proof", today());
         assertThat(loan.getRepaymentStatus()).isEqualTo(com.navix.loan.domain.RepaymentStatus.PAID_PENDING_VERIFICATION);
@@ -528,7 +663,8 @@ class RepaymentServiceTest {
     void aDayOfClockSkewIsClampedRatherThanRejected() {
         withActor("7", "BORROWER", () -> {
             when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
-            when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+            lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
 
             Payment saved = repaymentService.recordPayment(1L, 100_000L, PaymentMethod.UPI,
                     "T1", "proof", today().plusDays(1));
@@ -568,7 +704,8 @@ class RepaymentServiceTest {
         withActor("9", "ADMIN", () -> {
             Loan loan = activeLoan();
             when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
-            when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+            lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
 
             LocalDate paidOn = today().minusDays(20);
             Payment saved = repaymentService.recordPayment(1L, 100_000L, PaymentMethod.UPI,
@@ -605,7 +742,8 @@ class RepaymentServiceTest {
         payment.setAmount(500_000L);
         payment.setStatus(PaymentStatus.PENDING_VERIFICATION);
         when(paymentRepository.findById(99L)).thenReturn(Optional.of(payment));
-        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
 
         repaymentService.rejectPayment(99L, "WRONG_REFERENCE", "UTR didn't match");
@@ -817,6 +955,7 @@ class RepaymentServiceTest {
         when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(700_000L);
         when(settlementDirectory.approvedSettlementAmount(1L)).thenReturn(Optional.of(700_000L));
         lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
         repaymentService.verifyPayment(55L);

@@ -93,6 +93,43 @@ public class KfsPdfRenderer {
         });
     }
 
+    /** The closure receipt (PLAN Phase 6a): issued once when the loan closes, from the ledger. */
+    public byte[] renderClosureReceipt(DocumentFacts f, ClosureFacts c) {
+        return PdfKit.render(f, "LOAN CLOSURE RECEIPT", "Receipt v" + f.version() + "  ·  Loan account no. "
+                + PdfKit.loanAccount(f) + "  ·  Application no. " + f.applicationId(), doc -> {
+            doc.add(PdfKit.hero("Loan amount", rs(f.principalPaise()), "Closed on", date(c.closedOn())));
+            doc.add(kv(new String[][] {
+                    {"Borrower", PdfKit.borrowerLine(f)},
+                    {"Lender", f.lender().legalName()},
+                    {"Disbursed on", date(f.disbursedOn())},
+                    {"Due date", PdfKit.dueLine(f)},
+                    {"Status", c.settled() ? "Closed by an approved settlement" : "Repaid in full"},
+            }));
+            doc.add(section("Payments received"));
+            String[][] rows = new String[c.payments().size() + 1][];
+            for (int i = 0; i < c.payments().size(); i++) {
+                ClosureFacts.PaidLine p = c.payments().get(i);
+                rows[i] = new String[] {date(p.paidOn()) + (p.reference() == null ? "" : ", ref " + p.reference()),
+                        rs(p.amountPaise())};
+            }
+            rows[c.payments().size()] = new String[] {"Total received", rs(c.totalPaise())};
+            doc.add(kv(rows));
+            doc.add(section("How your payments were applied"));
+            doc.add(kv(new String[][] {
+                    {"Late charge", rs(c.penalPaise())},
+                    {"Principal", rs(c.principalPaise())},
+                    {"Excess, to be refunded to you", rs(c.refundPaise())},
+            }));
+            doc.add(section("Please note"));
+            doc.add(bullets(
+                    c.settled() ? "This loan is closed on the settlement agreed with you. Nothing more is owed on it."
+                            : "Nothing more is owed on this loan.",
+                    c.refundPaise() > 0 ? "We will refund " + rs(c.refundPaise()) + " to your bank account."
+                            : "No refund is due.",
+                    PdfKit.grievanceLine(f)));
+        });
+    }
+
     private static com.lowagie.text.pdf.PdfPTable schedule(DocumentFacts f) throws com.lowagie.text.DocumentException {
         return kv(new String[][] {
                 {"Number of instalments", "1"},

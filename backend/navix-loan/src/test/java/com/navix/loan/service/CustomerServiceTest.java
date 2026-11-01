@@ -1555,8 +1555,8 @@ class CustomerServiceTest {
         when(loanRepository.findByCustomerId(9000001L)).thenReturn(List.of(l1, l2));
         when(profileRepository.findByApplicationIdIn(any())).thenReturn(List.of());
         when(repaymentService.outstandingBreakdownsForAll(any(), eq(null))).thenReturn(java.util.Map.of(
-                500L, new RepaymentService.OutstandingBreakdown(10_000L, 2_000L, 500L, 0L, null, 2, 1),
-                501L, new RepaymentService.OutstandingBreakdown(20_000L, 4_000L, 900L, 0L, null, 40, 30)));
+                500L, new RepaymentService.OutstandingBreakdown(10_000L, 2_000L, 500L, 0L, null, 2, 1, 0),
+                501L, new RepaymentService.OutstandingBreakdown(20_000L, 4_000L, 900L, 0L, null, 40, 30, 0)));
 
         var detail = service.detail(9000001L);
 

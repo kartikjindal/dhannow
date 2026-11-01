@@ -24,6 +24,9 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     /** Idempotency guard: a transaction reference is unique per loan. */
     Optional<Payment> findFirstByLoanIdAndTxnRef(Long loanId, String txnRef);
 
+    /** CC-07: a (normalised) UTR is unique across every loan, rejected payments aside. */
+    Optional<Payment> findFirstByTxnRefAndStatusNot(String txnRef, PaymentStatus status);
+
     /** Total paid against a loan in a given status (paise); 0 when none. */
     @Query("select coalesce(sum(p.amount), 0) from Payment p "
             + "where p.loanId = :loanId and p.status = :status")

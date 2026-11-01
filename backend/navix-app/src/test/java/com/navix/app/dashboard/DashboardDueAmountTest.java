@@ -44,7 +44,7 @@ class DashboardDueAmountTest {
     }
 
     private static OutstandingBreakdown bd(long outstanding, long interest, long penalty, long verified, Long settled) {
-        return new OutstandingBreakdown(outstanding, interest, penalty, verified, settled, 0, 0);
+        return new OutstandingBreakdown(outstanding, interest, penalty, verified, settled, 0, 0, 0);
     }
 
     @Test

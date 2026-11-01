@@ -58,7 +58,9 @@ class LoanRegisterServiceTest {
         loanMath = new LoanMath();
         repaymentService = new RepaymentService(paymentRepository, loanRepository, TestPricing.navix(),
                 applicationFlowService, settlementDirectory, eventPublisher, dsaCommissionService, storage,
-                org.mockito.Mockito.mock(CreditLevelService.class));
+                org.mockito.Mockito.mock(CreditLevelService.class),
+                org.mockito.Mockito.mock(PaymentAllocator.class),
+                org.mockito.Mockito.mock(com.navix.common.idempotency.IdempotencyService.class));
         service = new LoanRegisterService(loanRepository, applicationRepository, profileRepository,
                 repaymentService, loanMath, collectionCaseDirectory, staffDirectory, trustSignals, registerQuery);
         lenient().when(settlementDirectory.approvedSettlementAmount(any())).thenReturn(java.util.Optional.empty());

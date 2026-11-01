@@ -1,0 +1,78 @@
+package com.navix.loan.service;
+
+import com.navix.loan.entity.Payment;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Splits each verified payment over what the loan owes on the payment's bank date ({@code payment_allocation},
+ * V101), in the order of config {@code navix.payments.waterfall}: penal → principal (CC-09). Interest is
+ * prepaid at disbursal on the DhanNow terms, so INTEREST owes nothing there; it is in the default order only
+ * for loans priced on the navix terms. Whatever is left is EXCESS and opens a refund case (CC-08).
+ */
+@Service
+@RequiredArgsConstructor
+public class PaymentAllocator {
+
+    public enum Component { PENAL, INTEREST, PRINCIPAL, EXCESS }
+
+    private final JdbcTemplate jdbc;
+    private final RefundCaseService refunds;
+    private final RepaymentScheduleService schedules;
+
+    @Value("${navix.payments.waterfall:PENAL,INTEREST,PRINCIPAL}")
+    private List<Component> waterfall = List.of(Component.PENAL, Component.INTEREST, Component.PRINCIPAL);
+
+    /**
+     * Allocate one payment that has just been verified.
+     *
+     * @param penalToDate    late charge accrued up to the payment's {@code paid_on} (capped), before any payment
+     * @param interestToDate interest still owed to that date (0 on UPFRONT terms)
+     * @param principal      the loan principal; pass 0 for all three when the loan was already closed
+     */
+    @Transactional
+    public Map<Component, Long> allocate(Payment payment, long penalToDate, long interestToDate, long principal) {
+        Map<Component, Long> paid = new EnumMap<>(Component.class);
+        jdbc.query("select component, sum(amount_paise) from payment_allocation where loan_id = ? group by component",
+                (org.springframework.jdbc.core.RowCallbackHandler)
+                        rs -> paid.put(Component.valueOf(rs.getString(1)), rs.getLong(2)),
+                payment.getLoanId());
+        Map<Component, Long> due = new EnumMap<>(Component.class);
+        due.put(Component.PENAL, Math.max(0L, penalToDate - paid.getOrDefault(Component.PENAL, 0L)));
+        due.put(Component.INTEREST, Math.max(0L, interestToDate - paid.getOrDefault(Component.INTEREST, 0L)));
+        due.put(Component.PRINCIPAL, Math.max(0L, principal - paid.getOrDefault(Component.PRINCIPAL, 0L)));
+
+        Map<Component, Long> split = split(payment.getAmount(), waterfall, due);
+        split.forEach((component, amount) -> jdbc.update(
+                "insert into payment_allocation (payment_id, loan_id, component, amount_paise) values (?, ?, ?, ?)",
+                payment.getId(), payment.getLoanId(), component.name(), amount));
+        schedules.applyPaid(payment.getLoanId(),
+                split.getOrDefault(Component.PRINCIPAL, 0L) + split.getOrDefault(Component.INTEREST, 0L));
+        refunds.open(payment.getLoanId(), payment.getId(), null, split.getOrDefault(Component.EXCESS, 0L),
+                RefundCaseService.Reason.OVERPAYMENT);
+        return split;
+    }
+
+    /** The waterfall itself: fill each component in {@code order} up to its due; the rest is EXCESS. Zero parts are left out. */
+    static Map<Component, Long> split(long amount, List<Component> order, Map<Component, Long> due) {
+        Map<Component, Long> out = new EnumMap<>(Component.class);
+        long left = amount;
+        for (Component c : order) {
+            long take = Math.min(left, due.getOrDefault(c, 0L));
+            if (take > 0) {
+                out.put(c, take);
+                left -= take;
+            }
+        }
+        if (left > 0) {
+            out.put(Component.EXCESS, left);
+        }
+        return out;
+    }
+}

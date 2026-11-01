@@ -1,6 +1,7 @@
 package com.navix.loan.service;
 
 import com.navix.common.collections.SettlementDirectory;
+import com.navix.common.idempotency.IdempotencyService;
 import com.navix.common.security.ActorContext;
 import com.navix.common.security.SeparationOfDutiesGuard;
 import com.navix.common.storage.DocumentStoragePort;
@@ -64,6 +65,8 @@ public class RepaymentService {
     private final DsaCommissionService dsaCommissionService;
     private final DocumentStoragePort storage;
     private final CreditLevelService creditLevels;
+    private final PaymentAllocator allocator;
+    private final IdempotencyService idempotency;
 
     /**
      * Record a (possibly partial) repayment. Idempotent on {@code txnRef} per loan.
@@ -78,7 +81,41 @@ public class RepaymentService {
     public Payment recordPayment(Long loanId, long amountPaise, PaymentMethod method,
                                  String txnRef, String proofUrl, LocalDate paidOn) {
         boolean staff = !"BORROWER".equals(ActorContext.get().role());
-        return recordPayment(loanId, amountPaise, method, txnRef, proofUrl, paidOn, staff ? staffIdOrNull() : null);
+        return recordPayment(loanId, amountPaise, method, txnRef, proofUrl, paidOn,
+                staff ? staffIdOrNull() : null, true);
+    }
+
+    /**
+     * {@link #recordPayment(Long, long, PaymentMethod, String, String, LocalDate)} behind an
+     * {@code Idempotency-Key} (CC-22): a double tap or a network retry with the same key returns the first
+     * payment. The borrower's app must send one; staff may.
+     */
+    @Transactional
+    public Payment submitPayment(String idempotencyKey, Long loanId, long amountPaise, PaymentMethod method,
+                                 String txnRef, String proofUrl, LocalDate paidOn) {
+        var actor = ActorContext.get();
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            if ("BORROWER".equals(actor.role())) {
+                throw new BusinessException("IDEMPOTENCY_KEY_REQUIRED", "Send an Idempotency-Key with this request.");
+            }
+            return recordPayment(loanId, amountPaise, method, txnRef, proofUrl, paidOn);
+        }
+        String request = String.join("|", actor.id(), String.valueOf(loanId), String.valueOf(amountPaise),
+                String.valueOf(method), String.valueOf(normaliseUtr(txnRef)), String.valueOf(proofUrl),
+                String.valueOf(paidOn));
+        Long id = idempotency.execute("REPAYMENT_SUBMIT", idempotencyKey, request,
+                () -> recordPayment(loanId, amountPaise, method, txnRef, proofUrl, paidOn).getId());
+        return paymentRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Payment", String.valueOf(id)));
+    }
+
+    /**
+     * A payment reported by a gateway webhook (flag {@code payment-gateway}, OFF in v1). It waits for an
+     * Accountant like any other; the caller guards it with the provider's event id.
+     */
+    @Transactional
+    public Payment recordGatewayPayment(Long loanId, long amountPaise, String utr, LocalDate paidOn) {
+        return recordPayment(loanId, amountPaise, PaymentMethod.UPI, utr, null, paidOn, null, false);
     }
 
     /**
@@ -88,6 +125,16 @@ public class RepaymentService {
     @Transactional
     Payment recordPayment(Long loanId, long amountPaise, PaymentMethod method,
                           String txnRef, String proofUrl, LocalDate paidOn, Long recordedBy) {
+        return recordPayment(loanId, amountPaise, method, txnRef, proofUrl, paidOn, recordedBy, false);
+    }
+
+    /**
+     * {@code strictUtr}: a UTR already on file is refused (CC-07). The upstream-validated paths (collections,
+     * NACH, gateway) pass false, so a reference already recorded on the same loan returns that payment and
+     * the same money is never counted twice; on another loan it is still refused.
+     */
+    private Payment recordPayment(Long loanId, long amountPaise, PaymentMethod method, String txnRef,
+                                  String proofUrl, LocalDate paidOn, Long recordedBy, boolean strictUtr) {
         Loan loan = requireLoan(loanId);
         requireOwnLoanIfBorrower(loan);
         if (loan.getLifecycleStatus() == LoanLifecycle.DISBURSEMENT_PENDING) {
@@ -104,10 +151,14 @@ public class RepaymentService {
         if (amountPaise <= 0) {
             throw new BusinessException("INVALID_AMOUNT", "Payment amount must be positive");
         }
-        if (txnRef != null && !txnRef.isBlank()) {
-            var existing = paymentRepository.findFirstByLoanIdAndTxnRef(loanId, txnRef);
+        String utr = normaliseUtr(txnRef);
+        if (utr != null) {
+            var existing = paymentRepository.findFirstByTxnRefAndStatusNot(utr, PaymentStatus.REJECTED);
             if (existing.isPresent()) {
-                return existing.get();
+                if (!strictUtr && existing.get().getLoanId().equals(loanId)) {
+                    return existing.get();
+                }
+                throw duplicateUtr();
             }
         }
         LocalDate effectivePaidOn = requireSanePaidOn(loan, paidOn);
@@ -120,12 +171,17 @@ public class RepaymentService {
         payment.setAmount(amountPaise);
         payment.setMethod(method);
         payment.setStatus(PaymentStatus.PENDING_VERIFICATION);
-        payment.setTxnRef(txnRef);
+        payment.setTxnRef(utr);
         payment.setProofUrl(proofUrl);
         payment.setPaidOn(effectivePaidOn);
         payment.setPartial(amountPaise < remaining);
         payment.setRecordedBy(recordedBy);
-        Payment saved = paymentRepository.save(payment);
+        Payment saved;
+        try {
+            saved = paymentRepository.saveAndFlush(payment);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            throw duplicateUtr(); // two submits of one UTR at the same moment: the unique index decides (V101)
+        }
         // The loan is managed in this transaction, so the change is flushed with it.
         loan.setRepaymentStatus(RepaymentStatus.PAID_PENDING_VERIFICATION);
         eventPublisher.publishEvent(new RepaymentRecordedEvent(
@@ -144,6 +200,19 @@ public class RepaymentService {
      * penalty. Staff backdate legitimately (a branch walk-in, a reconciled bank line, collections'
      * validated payments), so the window is borrower-only, not a blanket rule.
      */
+    /** UTRs are compared without spaces and case (V101 stores them this way); blank is none. */
+    static String normaliseUtr(String txnRef) {
+        if (txnRef == null) {
+            return null;
+        }
+        String utr = txnRef.replaceAll("\\s", "").toUpperCase(java.util.Locale.ROOT);
+        return utr.isEmpty() ? null : utr;
+    }
+
+    private static BusinessException duplicateUtr() {
+        return new BusinessException("DUPLICATE_UTR", "This payment reference is already on file.");
+    }
+
     private LocalDate requireSanePaidOn(Loan loan, LocalDate paidOn) {
         LocalDate today = LocalDate.now(IST);
         LocalDate effective = paidOn != null ? paidOn : today;
@@ -175,6 +244,10 @@ public class RepaymentService {
     public Payment verifyPayment(Long paymentId) {
         Payment payment = paymentRepository.findById(paymentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Payment", String.valueOf(paymentId)));
+        if (payment.getStatus() == PaymentStatus.REJECTED) {
+            throw new BusinessException("PAYMENT_REJECTED", "A rejected payment cannot be verified; record it again.");
+        }
+        Loan loan = requireLoan(payment.getLoanId());
         if (payment.getStatus() != PaymentStatus.VERIFIED) {
             // PLAN Phase 4: whoever recorded a payment never verifies it, ADMIN included.
             if (payment.getRecordedBy() != null) {
@@ -183,13 +256,27 @@ public class RepaymentService {
             payment.setStatus(PaymentStatus.VERIFIED);
             stampDecider(payment);
             paymentRepository.save(payment);
+            allocate(loan, payment);
         }
         recomputeOutstanding(payment.getLoanId());
-        Loan loan = requireLoan(payment.getLoanId());
         eventPublisher.publishEvent(new RepaymentVerifiedEvent(
                 loan.getId(), loan.getCustomerId(), payment.getId(), payment.getAmount(),
                 loan.getStatus() == LoanStatus.CLOSED, Instant.now()));
         return payment;
+    }
+
+    /**
+     * The waterfall split (CC-09), against what was owed on the payment's bank date before any payment.
+     * Money reaching a loan that had already closed owes nothing: all of it is refunded (CC-08).
+     */
+    private void allocate(Loan loan, Payment payment) {
+        if (loan.getLifecycleStatus() == LoanLifecycle.CLOSED) {
+            allocator.allocate(payment, 0L, 0L, 0L);
+            return;
+        }
+        LocalDate at = payment.getPaidOn() != null ? payment.getPaidOn() : LocalDate.now(IST);
+        OutstandingBreakdown owed = breakdown(loan, at, 0L, null);
+        allocator.allocate(payment, owed.penaltyPaise(), owed.interestPaise(), loan.getPrincipal());
     }
 
     /**
@@ -285,9 +372,10 @@ public class RepaymentService {
     }
 
     /**
-     * Authoritative outstanding balance at a date: principal + interest accrued to {@code asOf}
-     * (capped at the scheduled tenure) + late penalty past the 1-day grace − verified payments.
-     * Prepayment falls out naturally (less interest for fewer days held).
+     * Authoritative outstanding balance at a date. DhanNow (UPFRONT) terms: principal + late charge
+     * (penal rate × principal per day past due, capped at the frozen cap) − verified payments; the
+     * interest was deducted at disbursal, so it is reported ({@code interestPrepaidPaise}) and never owed
+     * (PLAN Phase 10b R4). Navix (ACCRUED) terms add the interest accrued to {@code asOf}.
      *
      * <p><b>Approved settlement:</b> when collections has an approved partial settlement for the loan
      * (via {@link SettlementDirectory}), the agreed full-and-final amount caps the payable. Because a
@@ -317,7 +405,7 @@ public class RepaymentService {
      */
     public record OutstandingBreakdown(long outstandingPaise, long interestPaise, long penaltyPaise,
                                        long verifiedPaise, Long settledAmountPaise,
-                                       int interestDays, int penaltyDays) {
+                                       int interestDays, int penaltyDays, long interestPrepaidPaise) {
     }
 
     @Transactional(readOnly = true)
@@ -372,8 +460,10 @@ public class RepaymentService {
         // Report the days actually CHARGED (penalty is capped inside latePenaltyPaise), so the
         // displayed "2%/day × N days" reconciles with penaltyPaise instead of overstating it.
         int chargedPenaltyDays = Math.min(penaltyDays, math.penalCapDays());
+        // Interest deducted at disbursal is shown, never owed (PLAN Phase 10b R4).
+        long prepaid = loan.getUpfrontInterestPaise() != null ? loan.getUpfrontInterestPaise() : 0L;
         return new OutstandingBreakdown(owed, interest, penalty, verified, settled,
-                Math.max(0, interestDays), chargedPenaltyDays);
+                Math.max(0, interestDays), chargedPenaltyDays, prepaid);
     }
 
     /**

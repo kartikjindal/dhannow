@@ -50,6 +50,7 @@ class DebitServiceTest {
     private MandatePort port;
     private PaymentRepository payments;
     private PlatformTransactionManager ptm;
+    private RefundCaseService refunds;
     private DebitService service;
     private Mandate mandate;
 
@@ -62,8 +63,9 @@ class DebitServiceTest {
         port = mock(MandatePort.class);
         payments = mock(PaymentRepository.class);
         ptm = mock(PlatformTransactionManager.class);
+        refunds = mock(RefundCaseService.class);
         service = new DebitService(debits, mandateService, loans, repayments, port, payments,
-                new TransactionTemplate(ptm));
+                new TransactionTemplate(ptm), refunds);
         ReflectionTestUtils.setField(service, "corporateAccountNumber", "0123456789");
 
         mandate = new Mandate();
@@ -282,6 +284,17 @@ class DebitServiceTest {
         assertThat(view.status()).isEqualTo(Status.SUCCEEDED);
         assertThat(view.overpayment()).isTrue();
         assertThat(d.getPaymentId()).isNull();
+        verify(refunds).open(LOAN, null, d.getId(), 500_000L, RefundCaseService.Reason.NACH_AFTER_CLOSE);
+    }
+
+    /** CC-11: a credited debit is no refund; only a debit that lands on a settled loan opens one. */
+    @Test
+    void cc11_bothClearOpensARefundCaseOnlyForTheDebitNoLongerOwed() {
+        inProgress();
+        when(port.debitStatus("NPT1")).thenReturn(new DebitOutcome("NPT1", "PAYMENT_SUCCESS", "UTR123", null, null, 500_000L));
+        when(loans.creditCollectionPayment(anyLong(), anyLong(), anyString(), anyString(), any())).thenReturn(55L);
+        service.reconcile(11L);
+        verify(refunds, never()).open(any(), any(), any(), anyLong(), any());
     }
 
     @Test

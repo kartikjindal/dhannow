@@ -22,6 +22,7 @@ import com.navix.loan.entity.CustomerProfile;
 import com.navix.loan.entity.Loan;
 import com.navix.loan.entity.LoanApplication;
 import com.navix.loan.entity.LoanDocument;
+import com.navix.loan.pdf.ClosureFacts;
 import com.navix.loan.pdf.DocumentFacts;
 import com.navix.loan.pdf.KfsPdfRenderer;
 import com.navix.loan.pdf.LoanAgreementPdfRenderer;
@@ -310,6 +311,48 @@ public class LoanDocumentService {
         int version = nextVersion(app.getId(), LoanDocumentType.SCHEDULE);
         DocumentFacts f = facts(app, loan).withVersion(version);
         save(app, LoanDocumentType.SCHEDULE, version, kfsRenderer.renderSchedule(f), f);
+    }
+
+    // ---------------------------------------------------------------- closure receipt (Phase 6a)
+
+    /**
+     * Issue the closure receipt once the closure commits (the application's {@code REPAID} transition,
+     * which every closing path takes), in its own transaction: a storage failure is logged and never
+     * reopens the loan.
+     */
+    @TransactionalEventListener
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onLoanClosed(ApplicationTransitionedEvent event) {
+        if (!"REPAID".equals(event.action()) || event.loanId() == null) {
+            return;
+        }
+        try {
+            issueClosureReceipt(event.loanId());
+        } catch (RuntimeException e) {
+            log.error("Closure receipt not issued for loan {}: {}", event.loanId(), e.toString());
+        }
+    }
+
+    void issueClosureReceipt(Long loanId) {
+        if (documents.existsByLoanIdAndType(loanId, LoanDocumentType.CLOSURE_RECEIPT)) {
+            return;
+        }
+        Loan loan = loans.findById(loanId).orElseThrow(() -> new ResourceNotFoundException("Loan", String.valueOf(loanId)));
+        LoanApplication app = applications.findByLoanId(loanId)
+                .orElseThrow(() -> new ResourceNotFoundException("LoanApplication", "loan " + loanId));
+        List<ClosureFacts.PaidLine> paid = jdbc.query(
+                "select paid_on, txn_ref, amount from payment where loan_id = ? and status = 'VERIFIED' order by paid_on, id",
+                (rs, i) -> new ClosureFacts.PaidLine(rs.getObject("paid_on", LocalDate.class), rs.getString("txn_ref"),
+                        rs.getLong("amount")), loanId);
+        Map<String, Long> split = new java.util.HashMap<>();
+        jdbc.query("select component, sum(amount_paise) from payment_allocation where loan_id = ? group by component",
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> split.put(rs.getString(1), rs.getLong(2)), loanId);
+        long principalPaid = split.getOrDefault("PRINCIPAL", 0L);
+        ClosureFacts c = new ClosureFacts(loan.getClosedOn(), paid, split.getOrDefault("PENAL", 0L), principalPaid,
+                split.getOrDefault("EXCESS", 0L), principalPaid < loan.getPrincipal());
+        int version = nextVersion(app.getId(), LoanDocumentType.CLOSURE_RECEIPT);
+        DocumentFacts f = facts(app, loan).withVersion(version);
+        save(app, LoanDocumentType.CLOSURE_RECEIPT, version, kfsRenderer.renderClosureReceipt(f, c), f);
     }
 
     // ---------------------------------------------------------------- access

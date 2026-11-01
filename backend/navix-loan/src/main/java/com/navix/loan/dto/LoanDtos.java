@@ -157,7 +157,8 @@ public final class LoanDtos {
      */
     public record OutstandingView(Long loanId, LocalDate asOf, long outstandingPaise,
                                   Long settledAmountPaise, long interestPaise, long penaltyPaise,
-                                  long verifiedPaise, int interestDays, int penaltyDays) {
+                                  long verifiedPaise, int interestDays, int penaltyDays,
+                                  long interestPrepaidPaise) {
     }
 
     /**

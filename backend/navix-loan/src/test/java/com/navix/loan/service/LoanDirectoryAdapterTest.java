@@ -90,7 +90,7 @@ class LoanDirectoryAdapterTest {
         when(applicationRepository.findByLoanIdIn(any())).thenReturn(List.of(app));
         when(profileRepository.findByApplicationIdIn(any())).thenReturn(List.of(profile));
         when(repaymentService.outstandingBreakdownsForAll(any(), any())).thenReturn(java.util.Map.of(2L,
-                new RepaymentService.OutstandingBreakdown(900_000L, 240_000L, 160_000L, 300_000L, null, 30, 10)));
+                new RepaymentService.OutstandingBreakdown(900_000L, 240_000L, 160_000L, 300_000L, null, 30, 10, 0)));
 
         com.navix.common.loan.LoanDues d = adapter.findDues(List.of(2L)).get(2L);
 

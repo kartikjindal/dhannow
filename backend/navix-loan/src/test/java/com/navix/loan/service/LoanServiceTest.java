@@ -30,12 +30,14 @@ class LoanServiceTest {
 
     @Mock
     private LoanRepository loanRepository;
+    @Mock
+    private RepaymentScheduleService schedules;
 
     private LoanService loanService;
 
     @BeforeEach
     void setUp() {
-        loanService = new LoanService(loanRepository, TestPricing.navix(), java.time.Clock.systemDefaultZone());
+        loanService = new LoanService(loanRepository, TestPricing.navix(), java.time.Clock.systemDefaultZone(), schedules);
     }
 
     @Test
@@ -91,7 +93,7 @@ class LoanServiceTest {
         when(productRepo.findById(1L)).thenReturn(Optional.of(TestPricing.seedProductRow(1L, ConfigStatus.ACTIVE)));
         // 20:00 IST on 1 Nov, after the 18:00 same-day cutoff: still day 0 if the transfer is confirmed now.
         Clock clock = Clock.fixed(Instant.parse("2026-11-01T14:30:00Z"), ZoneId.of("Asia/Kolkata"));
-        loanService = new LoanService(loanRepository, new PricingService(pricingRepo, productRepo), clock);
+        loanService = new LoanService(loanRepository, new PricingService(pricingRepo, productRepo), clock, schedules);
 
         LoanApplication app = new LoanApplication();
         app.setCustomerId(7L);
@@ -140,7 +142,7 @@ class LoanServiceTest {
         when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
         Clock utrDay = Clock.fixed(Instant.parse("2026-11-01T06:00:00Z"), ZoneId.of("Asia/Kolkata"));
-        Loan loan = new LoanService(loanRepository, pricing, utrDay).disburse(app, null, "UTR-DN-2");
+        Loan loan = new LoanService(loanRepository, pricing, utrDay, schedules).disburse(app, null, "UTR-DN-2");
         assertThat(loan.getLifecycleStatus()).isEqualTo(LoanLifecycle.DISBURSEMENT_PENDING);
         assertThat(loan.getDueDate()).isEqualTo(LocalDate.of(2026, 11, 15)); // indicative only
         loan.setId(5L);
@@ -148,7 +150,7 @@ class LoanServiceTest {
 
         // 00:30 IST on 3 Nov is still 2 Nov in UTC: day 0 is the IST date.
         Clock confirmDay = Clock.fixed(Instant.parse("2026-11-02T19:00:00Z"), ZoneId.of("Asia/Kolkata"));
-        Loan active = new LoanService(loanRepository, pricing, confirmDay).confirmDisbursal(5L, app, null);
+        Loan active = new LoanService(loanRepository, pricing, confirmDay, schedules).confirmDisbursal(5L, app, null);
 
         assertThat(active.getLifecycleStatus()).isEqualTo(LoanLifecycle.ACTIVE);
         assertThat(active.getStatus()).isEqualTo(LoanStatus.ACTIVE);

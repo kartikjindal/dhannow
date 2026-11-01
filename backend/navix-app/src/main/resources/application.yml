@@ -319,6 +319,10 @@ navix:
   # How the documents' APR is worked out: IRR (cash flows, compounded) or SIMPLE (rate x 365/days).
   apr:
     method: ${NAVIX_APR_METHOD:IRR}
+  # The order a verified payment pays what is owed on its bank date (PLAN Phase 6a); the rest is a refund
+  # case. INTEREST owes nothing on the DhanNow terms (prepaid at disbursal), so this is penal -> principal.
+  payments:
+    waterfall: PENAL,INTEREST,PRINCIPAL
   # SES bounce/complaint ingestion (SES config-set -> SNS -> SQS -> SesEventSqsListener). Off by
   # default so the app boots without an SQS queue; flip on in AWS environments.
   ses:

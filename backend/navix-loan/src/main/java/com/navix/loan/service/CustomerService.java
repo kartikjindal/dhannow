@@ -1109,7 +1109,7 @@ public class CustomerService {
         breakdowns.forEach((loanId, b) -> outstandingByLoanId.put(loanId,
                 new LoanDtos.OutstandingView(loanId, asOf, b.outstandingPaise(),
                         b.settledAmountPaise(), b.interestPaise(), b.penaltyPaise(),
-                        b.verifiedPaise(), b.interestDays(), b.penaltyDays())));
+                        b.verifiedPaise(), b.interestDays(), b.penaltyDays(), b.interestPrepaidPaise())));
 
         List<PaymentView> payments = loans.stream()
                 .flatMap(l -> paymentRepository.findByLoanId(l.getId()).stream())
