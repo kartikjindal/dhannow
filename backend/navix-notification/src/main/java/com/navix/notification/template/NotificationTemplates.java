@@ -467,7 +467,8 @@ public class NotificationTemplates {
     /** The template for a type+channel, or {@code null} if none is defined (channel skipped). */
     public TemplateDef get(NotificationType type, NotificationChannel channel) {
         Map<NotificationChannel, TemplateDef> byChannel = registry.get(type);
-        return byChannel == null ? null : byChannel.get(channel);
+        // A push shows the in-app title and body (PLAN Phase 8): one wording per event, nothing to keep in step.
+        return byChannel == null ? null : byChannel.get(channel == NotificationChannel.PUSH ? NotificationChannel.IN_APP : channel);
     }
 
     private void put(NotificationType t, NotificationChannel c, String subject, String body) {

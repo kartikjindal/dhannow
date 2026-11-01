@@ -1,6 +1,8 @@
 package com.navix.auth;
 
 import com.navix.common.exception.BusinessException;
+import com.navix.common.featureflag.FeatureFlagService;
+import jakarta.servlet.http.HttpServletRequest;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Map;
@@ -15,6 +17,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
  * Cloudflare Turnstile check for the pre-auth forms — the password logins and the two
@@ -39,6 +43,13 @@ import org.springframework.web.client.RestClient;
  *       site key on their page and farm tokens there.</li>
  * </ul>
  * Cloudflare also enforces single use on its side, so replaying a spent token fails at {@code success}.
+ *
+ * <p><b>The Android app (PLAN Phase 8).</b> A request carrying {@code X-Client: android} cannot answer a web
+ * challenge, so with the {@code play-integrity} flag ON it is judged by its {@code X-Integrity-Token} instead
+ * ({@link IntegrityVerifier}: our package, Play-recognised, {@code MEETS_DEVICE_INTEGRITY}). With the flag OFF it
+ * falls back to Turnstile like any web request, which an app cannot pass when Turnstile is configured. The only
+ * way round that is {@code navix.integrity.allow-android-without-check=true}, default {@code false}: the header
+ * is client-supplied, so honouring it without a check would let any bot skip the challenge by sending it.
  */
 @Component
 public class CaptchaVerifier {
@@ -48,12 +59,33 @@ public class CaptchaVerifier {
     /** Cloudflare's documented ceiling; anything longer is not a token we minted. */
     private static final int MAX_TOKEN_LENGTH = 2048;
 
+    public static final String CLIENT_HEADER = "X-Client";
+    public static final String INTEGRITY_HEADER = "X-Integrity-Token";
+    public static final String PLAY_INTEGRITY_FLAG = "play-integrity";
+
+    /** What the Android branch makes of the current request. */
+    public enum AndroidCheck { NOT_ANDROID, OFF, PASSED, FAILED }
+
     private final String secret;
     private final Set<String> allowedHostnames;
     private final RestClient http;
+    private final IntegrityVerifier integrity;
+    private final FeatureFlagService flags;
+    private final boolean androidWithoutCheck;
 
+    /** Web-only (no Android branch): the unit tests that do not exercise it. */
+    public CaptchaVerifier(String secret, String hostnames) {
+        this(secret, hostnames, null, null, false);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
     public CaptchaVerifier(@Value("${navix.captcha.secret:}") String secret,
-                           @Value("${navix.captcha.hostnames:}") String hostnames) {
+                           @Value("${navix.captcha.hostnames:}") String hostnames,
+                           IntegrityVerifier integrity, FeatureFlagService flags,
+                           @Value("${navix.integrity.allow-android-without-check:false}") boolean androidWithoutCheck) {
+        this.integrity = integrity;
+        this.flags = flags;
+        this.androidWithoutCheck = androidWithoutCheck;
         this.secret = secret == null ? "" : secret.trim();
         this.allowedHostnames = hostnames == null ? Set.of() : Arrays.stream(hostnames.split(","))
                 .map(String::trim)
@@ -88,6 +120,21 @@ public class CaptchaVerifier {
      * @throws BusinessException {@code CAPTCHA_FAILED} (HTTP 422) when the challenge was not passed
      */
     public void verify(String token, String expectedAction) {
+        switch (androidCheck()) {
+            case PASSED -> {
+                return;
+            }
+            case FAILED -> throw new BusinessException("INTEGRITY_FAILED",
+                    "We could not confirm this app and device. Update the app from Google Play, or sign in with an OTP.");
+            case OFF -> {
+                if (androidWithoutCheck) {
+                    return;
+                }
+            }
+            case NOT_ANDROID -> {
+                // the web: Turnstile below
+            }
+        }
         if (!isEnabled()) {
             return;
         }
@@ -144,6 +191,22 @@ public class CaptchaVerifier {
             log.warn("captcha hostname not allowed action={} got={}", expectedAction, hostname);
             throw failed();
         }
+    }
+
+    /**
+     * The Android branch for the current request: not an app request, the {@code play-integrity} flag is off, or
+     * its integrity token passed / failed. One Google call per invocation.
+     */
+    public AndroidCheck androidCheck() {
+        HttpServletRequest request = RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes a
+                ? a.getRequest() : null;
+        if (request == null || !"android".equalsIgnoreCase(request.getHeader(CLIENT_HEADER))) {
+            return AndroidCheck.NOT_ANDROID;
+        }
+        if (integrity == null || flags == null || !flags.isEnabled(PLAY_INTEGRITY_FLAG, false)) {
+            return AndroidCheck.OFF;
+        }
+        return integrity.passes(request.getHeader(INTEGRITY_HEADER)) ? AndroidCheck.PASSED : AndroidCheck.FAILED;
     }
 
     private BusinessException failed() {

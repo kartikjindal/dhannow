@@ -10,6 +10,7 @@ import static com.navix.common.notification.NotificationCategory.STAFF_IAM;
 import static com.navix.common.notification.NotificationCategory.SYSTEM;
 import static com.navix.common.notification.NotificationChannel.EMAIL;
 import static com.navix.common.notification.NotificationChannel.IN_APP;
+import static com.navix.common.notification.NotificationChannel.PUSH;
 import static com.navix.common.notification.NotificationChannel.SMS;
 import static com.navix.common.notification.NotificationChannel.WHATSAPP;
 import static com.navix.notification.catalog.RecipientPolicy.TO_ACCOUNTANTS;
@@ -142,11 +143,11 @@ public enum NotificationType {
     // ---- EXTENSION (PLAN Phase 6b) ----
     // An officer offered an extension: the Heads approve it.
     EXTENSION_TO_APPROVE(EXTENSION, Set.of(IN_APP), Set.of(TO_COLLECTION_HEADS)),
-    // The Head approved it: the borrower is told it is on offer. PUSH arrives with Phase 8 (FCM); SMS once the
+    // The Head approved it: the borrower is told it is on offer. PUSH (Phase 8) while push-fcm is on; SMS once the
     // DLT template DN_EXT_OFFER is approved.
-    EXTENSION_OFFERED(EXTENSION, Set.of(IN_APP, EMAIL), Set.of(TO_BORROWER)),
+    EXTENSION_OFFERED(EXTENSION, Set.of(IN_APP, EMAIL, PUSH), Set.of(TO_BORROWER)),
     // The Accountant verified the payment and the due date moved. SMS delivers once its DLT template is approved.
-    EXTENSION_ACTIVATED(EXTENSION, Set.of(IN_APP, EMAIL, SMS), Set.of(TO_BORROWER)),
+    EXTENSION_ACTIVATED(EXTENSION, Set.of(IN_APP, EMAIL, SMS, PUSH), Set.of(TO_BORROWER)),
     // The offer lapsed, or the borrower declined: the officer on the case is told.
     EXTENSION_EXPIRED(EXTENSION, Set.of(IN_APP), Set.of(TO_ASSIGNED_EXECUTIVE)),
     EXTENSION_DECLINED(EXTENSION, Set.of(IN_APP), Set.of(TO_ASSIGNED_EXECUTIVE)),

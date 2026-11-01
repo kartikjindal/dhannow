@@ -434,6 +434,7 @@ class ApplicationVerificationServiceTest {
     @Test
     void pennyDrop_nameMismatch_isReview_match_isPass() {
         when(profileRepo.findByApplicationId(APP)).thenReturn(Optional.of(profile()));
+        when(applicationRepo.findById(APP)).thenReturn(Optional.of(appWithStatus(APP, ApplicationStatus.DRAFT)));
 
         when(verification.pennyDrop(anyString(), anyString(), anyString()))
                 .thenReturn(new VerificationPort.PennyDropCheck("TXN3", "SIGNZY", true, "RAVI KUMAR", "HDFC Bank", "HDFC0002557",
@@ -456,6 +457,7 @@ class ApplicationVerificationServiceTest {
     void pennyDrop_providerFailure_isReview_notError() {
         CustomerProfile p = profile();
         when(profileRepo.findByApplicationId(APP)).thenReturn(Optional.of(p));
+        when(applicationRepo.findById(APP)).thenReturn(Optional.of(appWithStatus(APP, ApplicationStatus.DRAFT)));
         // A wrong/unverifiable account makes the provider throw (surfaces as HTTP 500 today).
         when(verification.pennyDrop(anyString(), anyString(), anyString()))
                 .thenThrow(new RuntimeException("HTTP 500 from verification_pennydrop"));
@@ -2556,14 +2558,14 @@ class ApplicationVerificationServiceTest {
      * session we will not let the borrower use is pure spend.
      */
     @Test
-    void digilockerInit_sixthSessionInADayIsRefusedWithoutCallingTheVendor() {
+    void cc33_digilockerInit_fourthSessionInADayIsRefusedWithoutCallingTheVendor() {
         LoanApplication app = new LoanApplication();
         app.setId(APP);
         when(applicationRepo.findById(APP)).thenReturn(Optional.of(app));
         when(profileRepo.findByApplicationId(APP)).thenReturn(Optional.of(profile()));
         when(verificationRepo.findByApplicationIdAndCheckType(APP, ApplicationVerificationService.DIGILOCKER))
                 .thenReturn(Optional.of(rowWithDerived("DIGILOCKER", "PENDING",
-                        "{\"digilockerSessions\":5,\"digilockerSessionWindowStart\":\""
+                        "{\"digilockerSessions\":3,\"digilockerSessionWindowStart\":\""
                                 + java.time.Instant.now().minusSeconds(3600) + "\"}")));
 
         var result = service.digilockerInit(APP, "https://app.test/callback");
@@ -3146,5 +3148,82 @@ class ApplicationVerificationServiceTest {
         LocalDate yobOnly = LocalDate.of(2003, 1, 1);
         assertThat(ApplicationVerificationService.dobMismatch(d, yobOnly)).isNull();
         assertThat(ApplicationVerificationService.dobMismatch(d.minusYears(1), yobOnly)).isNotNull();
+    }
+
+    // ---- PLAN Phase 8: guided selfie, selfie cap, signup penny drop ----
+
+    private static final String STRAIGHT = "applications/42/selfie/1.jpg";
+    private static final String RIGHT = "applications/42/selfie/2.jpg";
+    private static final String LEFT = "applications/42/selfie/3.jpg";
+
+    /** Three frames are filed and the case goes to REVIEW for the staff queue; no provider is called. */
+    @Test
+    void selfieFrames_goToReviewWithAllThreeFramesFiled() {
+        when(applicationRepo.findById(APP)).thenReturn(Optional.of(new LoanApplication()));
+        when(storage.buildApplicationKey(APP, "SELFIE", "jpg")).thenReturn("applications/42/selfie/9.jpg");
+
+        var result = service.submitSelfieFrames(APP, STRAIGHT, RIGHT, LEFT);
+
+        assertThat(result.status()).isEqualTo("REVIEW");
+        assertThat(result.provider()).isEqualTo("MANUAL_REVIEW");
+        assertThat(result.derived()).containsEntry("selfieAttempts", 1).containsEntry("guided", true);
+        assertThat(result.derived()).containsEntry("frameStraight", STRAIGHT).containsEntry("frameRight", RIGHT)
+                .containsEntry("frameLeft", LEFT);
+        var docs = org.mockito.ArgumentCaptor.forClass(com.navix.loan.entity.ApplicationDocument.class);
+        verify(documentRepo, org.mockito.Mockito.times(3)).save(docs.capture());
+        assertThat(docs.getAllValues()).extracting(com.navix.loan.entity.ApplicationDocument::getDocType)
+                .containsExactly("SELFIE", "SELFIE_RIGHT", "SELFIE_LEFT");
+        verifyNoInteractions(verification);
+    }
+
+    @Test
+    void selfieFrames_refuseAnotherApplicationsKeyOrARepeatedFrame() {
+        when(applicationRepo.findById(APP)).thenReturn(Optional.of(new LoanApplication()));
+        when(storage.buildApplicationKey(APP, "SELFIE", "jpg")).thenReturn("applications/42/selfie/9.jpg");
+
+        assertThatThrownBy(() -> service.submitSelfieFrames(APP, STRAIGHT, "applications/99/selfie/2.jpg", LEFT))
+                .isInstanceOf(BusinessException.class).hasFieldOrPropertyWithValue("code", "INVALID_SELFIE_KEY");
+        assertThatThrownBy(() -> service.submitSelfieFrames(APP, STRAIGHT, STRAIGHT, LEFT))
+                .isInstanceOf(BusinessException.class).hasFieldOrPropertyWithValue("code", "SELFIE_FRAMES_REQUIRED");
+        verify(documentRepo, never()).save(any());
+    }
+
+    /** Server-side cap: three captures, then the step waits for staff. A staff reopen starts the count again. */
+    @Test
+    void selfie_threeAttemptsThenRefusedUntilStaffReopen() {
+        when(applicationRepo.findById(APP)).thenReturn(Optional.of(new LoanApplication()));
+        ApplicationVerification used = rowWithDerived("SELFIE", "REVIEW", "{\"selfieAttempts\":3}");
+        when(verificationRepo.findByApplicationIdAndCheckType(APP, "SELFIE")).thenReturn(Optional.of(used));
+
+        assertThatThrownBy(() -> service.submitSelfieFrames(APP, STRAIGHT, RIGHT, LEFT))
+                .isInstanceOf(BusinessException.class).hasFieldOrPropertyWithValue("code", "SELFIE_ATTEMPTS_EXCEEDED");
+        assertThatThrownBy(() -> service.verifySelfie(APP, SELFIE_KEY))
+                .isInstanceOf(BusinessException.class).hasFieldOrPropertyWithValue("code", "SELFIE_ATTEMPTS_EXCEEDED");
+        verifyNoInteractions(verification);
+
+        used.setReopenedAt(java.time.Instant.now());
+        when(storage.buildApplicationKey(APP, "SELFIE", "jpg")).thenReturn("applications/42/selfie/9.jpg");
+        assertThat(service.submitSelfieFrames(APP, STRAIGHT, RIGHT, LEFT).derived()).containsEntry("selfieAttempts", 1);
+    }
+
+    /** CC-27: the signup bank check is held by the same 3-strikes lock as the payout account. */
+    @Test
+    void cc27_signupPennyDropRespectsTheLockAndCountsAFailure() {
+        LoanApplication app = appWithStatus(APP, ApplicationStatus.DRAFT);
+        app.setCustomerId(7L);
+        when(applicationRepo.findById(APP)).thenReturn(Optional.of(app));
+        when(pennyDropGuard.lockedUntil(7L)).thenReturn(Optional.of(java.time.Instant.now().plusSeconds(3600)));
+
+        assertThatThrownBy(() -> service.verifyPennyDrop(APP, "123456", "HDFC0002557"))
+                .isInstanceOf(BusinessException.class).hasFieldOrPropertyWithValue("code", "PENNY_DROP_LOCKED");
+        verifyNoInteractions(verification);
+
+        when(pennyDropGuard.lockedUntil(7L)).thenReturn(Optional.empty());
+        when(profileRepo.findByApplicationId(APP)).thenReturn(Optional.of(profile()));
+        when(verification.pennyDrop(anyString(), anyString(), anyString()))
+                .thenReturn(new VerificationPort.PennyDropCheck("TXN9", "SIGNZY", true, "RAVI KUMAR", "HDFC Bank",
+                        "HDFC0002557", "RRN9", "success", "no"));
+        assertThat(service.verifyPennyDrop(APP, "123456", "HDFC0002557").status()).isEqualTo("REVIEW");
+        verify(pennyDropGuard).record(eq(7L), eq(APP), eq("123456"), eq("HDFC0002557"), eq(false), any());
     }
 }

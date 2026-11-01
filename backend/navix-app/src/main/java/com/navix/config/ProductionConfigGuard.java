@@ -28,6 +28,9 @@ import org.springframework.stereotype.Component;
  *   <li>staff MFA switched off ({@code navix.mfa.enforce=false}) or no valid {@code navix.mfa.encryption-key};</li>
  *   <li>a blank or {@code [placeholder]} {@code navix.lender.*} value — every loan document names the
  *       lender of record, and a document naming no real lender must never reach a borrower.</li>
+ *   <li>PLAN Phase 8: {@code navix.integrity.allow-android-without-check=true} (any client could skip the challenge
+ *       by sending {@code X-Client: android}), and the {@code push-fcm} / {@code play-integrity} flags ON with no
+ *       Google service account (every push would fail; every app sign-in would be refused).</li>
  * </ul>
  *
  * <p>Thrown from {@code @PostConstruct}, so it fires during bean initialisation — before the web
@@ -66,6 +69,12 @@ public class ProductionConfigGuard {
     @Value("${navix.digio.provider:digio}")
     private String digioProvider;
 
+    @Value("${navix.integrity.allow-android-without-check:false}")
+    private boolean androidWithoutIntegrity;
+
+    @Value("${navix.google.service-account-path:}")
+    private String googleKeyPath = "";
+
     @PostConstruct
     void check() {
         if (!"prod".equalsIgnoreCase(env)) {
@@ -102,6 +111,11 @@ public class ProductionConfigGuard {
             throw new IllegalStateException("NAVIX_ENV=prod without a valid navix.mfa.encryption-key — set "
                     + "NAVIX_MFA_ENCRYPTION_KEY to base64 of 32 random bytes (openssl rand -base64 32).");
         }
+        if (androidWithoutIntegrity) {
+            throw new IllegalStateException("NAVIX_ENV=prod with navix.integrity.allow-android-without-check=true — "
+                    + "any client could skip the sign-in challenge by sending X-Client: android. Unset "
+                    + "NAVIX_INTEGRITY_ALLOW_ANDROID_WITHOUT_CHECK.");
+        }
         if (!lender.unset().isEmpty()) {
             throw new IllegalStateException("NAVIX_ENV=prod with the lender of record unset or a placeholder: "
                     + String.join(", ", lender.unset()) + " — set the NAVIX_LENDER_* values.");
@@ -119,6 +133,20 @@ public class ProductionConfigGuard {
      * mock is exactly as dangerous as the eSign one (mandates recorded as registered, nothing filed at
      * NPCI), and this still fails the boot.
      */
+    /** As {@link #checkDigio}: only a flag that is actually ON needs the Google key behind it. */
+    @EventListener(ApplicationReadyEvent.class)
+    void checkGoogle() {
+        if (!"prod".equalsIgnoreCase(env) || (googleKeyPath != null && !googleKeyPath.isBlank())) {
+            return;
+        }
+        for (String flag : java.util.List.of("push-fcm", "play-integrity")) {
+            if (featureFlags.isEnabled(flag, false)) {
+                throw new IllegalStateException("NAVIX_ENV=prod with the " + flag + " flag ON and no "
+                        + "navix.google.service-account-path — set NAVIX_GOOGLE_SERVICE_ACCOUNT_PATH, or turn the flag off.");
+            }
+        }
+    }
+
     @EventListener(ApplicationReadyEvent.class)
     void checkDigio() {
         if (!"prod".equalsIgnoreCase(env) || !"mock".equalsIgnoreCase(digioProvider)) {

@@ -230,7 +230,7 @@ public class NotificationDispatcher {
         return switch (channel) {
             case SMS, WHATSAPP -> recipient.mobile();
             case EMAIL -> recipient.email();
-            case IN_APP -> null;
+            case IN_APP, PUSH -> null;
         };
     }
 

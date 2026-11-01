@@ -45,11 +45,21 @@ public final class AuthDtos {
      * the OTP-verified mobile. A client-supplied id was trusted verbatim, so anyone who could verify
      * an OTP on their own handset could mint a token for any other customer.
      */
-    public record BorrowerLoginRequest(@NotBlank String mobile, @NotBlank String otp, String name) {
+    public record BorrowerLoginRequest(@NotBlank String mobile, @NotBlank String otp, String name,
+                                       String deviceId, String deviceName, String appVersion) {
+        public BorrowerLoginRequest(String mobile, String otp, String name) {
+            this(mobile, otp, name, null, null, null);
+        }
     }
 
-    /** Request an OTP be generated + SMS-delivered to {@code mobile}. */
-    public record OtpRequestRequest(@NotBlank String mobile) {
+    /**
+     * Request an OTP be generated + SMS-delivered to {@code mobile}. {@code deviceId} (the app's install id) adds a
+     * per-device send limit (CC-36); the web sends none.
+     */
+    public record OtpRequestRequest(@NotBlank String mobile, String deviceId) {
+        public OtpRequestRequest(String mobile) {
+            this(mobile, null);
+        }
     }
 
     /** OTP-request outcome: whether the SMS went out + ttl. {@code devCode} is set only when
@@ -57,14 +67,39 @@ public final class AuthDtos {
     public record OtpRequestResponse(boolean sent, int ttlSeconds, String devCode) {
     }
 
-    /** Issued token + the identity it carries (the BFF stores the token in an httpOnly cookie). */
-    public record AuthResponse(String token, String id, String name, String role, Long customerId) {
+    /**
+     * Issued token + the identity it carries (the BFF stores the token in an httpOnly cookie).
+     *
+     * <p>PLAN Phase 8: an app sign-in (one that names a {@code deviceId}) also gets a {@code refreshToken} (30 days,
+     * rotated on every use) and a short access {@code token} that lasts {@code expiresIn} seconds (15 minutes).
+     * The web sends no device id and keeps its single long-lived token; those three fields are then null.
+     */
+    public record AuthResponse(String token, String id, String name, String role, Long customerId,
+                               String refreshToken, Long expiresIn, java.time.Instant refreshExpiresAt) {
+        public AuthResponse(String token, String id, String name, String role, Long customerId) {
+            this(token, id, name, role, customerId, null, null, null);
+        }
+    }
+
+    /** Spend a refresh token for a new access + refresh pair. It is bound to the device it was issued to. */
+    public record RefreshRequest(@NotBlank String refreshToken, @NotBlank String deviceId) {
+    }
+
+    /**
+     * Sign out. {@code refreshToken} ends this device's session; {@code allDevices=true} (with a borrower bearer)
+     * ends every session of the account (CC-38).
+     */
+    public record LogoutRequest(String refreshToken, Boolean allDevices) {
     }
 
     /** Borrower sign-in by password (the OTP-less alternative). {@code captchaToken}: see
      *  {@link StaffLoginRequest}. */
     public record BorrowerPasswordLoginRequest(@NotBlank String mobile, @NotBlank String password,
-                                               String captchaToken) {
+                                               String captchaToken, String deviceId, String deviceName,
+                                               String appVersion) {
+        public BorrowerPasswordLoginRequest(String mobile, String password, String captchaToken) {
+            this(mobile, password, captchaToken, null, null, null);
+        }
     }
 
     /** Set/replace a password for the signed-in borrower (optional signup step / profile). */

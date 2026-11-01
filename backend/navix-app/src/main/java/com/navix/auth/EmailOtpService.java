@@ -14,8 +14,6 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -23,10 +21,8 @@ import org.springframework.stereotype.Service;
 /**
  * Personal-email OTP: generates a random code, delivers it via {@link EmailClient} (bypassing the
  * notification dispatcher, same reasoning as {@link PasswordResetService} — a code is a credential,
- * not an inbox item), and verifies it. Sibling of {@link BorrowerOtpService}, same in-memory
- * purpose-keyed store / TTL / attempt-cap shape, swapped to an email transport.
- *
- * <p>In-memory and single-instance — the same caveat {@link BorrowerOtpService} carries.
+ * not an inbox item), and verifies it. Sibling of {@link BorrowerOtpService}, same purpose-keyed
+ * {@link AuthStateStore} / TTL / attempt-cap shape, swapped to an email transport.
  */
 @Service
 public class EmailOtpService implements EmailOtpPort {
@@ -45,30 +41,25 @@ public class EmailOtpService implements EmailOtpPort {
     private final AttemptLimiter limiter;
     private final EmailHtmlRenderer htmlRenderer;
     private final com.navix.common.brand.BrandProperties brand;
-    private final Map<String, Otp> store = new ConcurrentHashMap<>();
-
-    private record Otp(String code, Instant expiresAt, int attempts) {
-    }
+    private final AuthStateStore store;
 
     public EmailOtpService(EmailClient emailClient, EmailProperties emailProperties,
                            EmailSuppressionService suppression, AttemptLimiter limiter,
-                           EmailHtmlRenderer htmlRenderer, com.navix.common.brand.BrandProperties brand) {
+                           EmailHtmlRenderer htmlRenderer, com.navix.common.brand.BrandProperties brand,
+                           AuthStateStore store) {
         this.emailClient = emailClient;
         this.emailProperties = emailProperties;
         this.suppression = suppression;
         this.limiter = limiter;
         this.htmlRenderer = htmlRenderer;
         this.brand = brand;
-    }
-
-    private static String key(String purpose, String email) {
-        return purpose + ":" + email;
+        this.store = store;
     }
 
     @Override
     public OtpRequestResult request(String email, String purpose) {
         String address = normalize(email);
-        String storeKey = key(purpose, address);
+        String storeKey = purpose + ":" + address;
         // Same rationale as BorrowerOtpService: capped before the email goes out, so the store.put
         // below (which resets the attempt counter) can't be used to grind an unbounded number of
         // guesses by just re-requesting.
@@ -76,7 +67,7 @@ public class EmailOtpService implements EmailOtpPort {
                 "Too many email verification requests for this address.");
 
         String code = generate();
-        store.put(storeKey, new Otp(code, Instant.now().plusSeconds(TTL_SECONDS), 0));
+        store.putChallenge("EMAIL_" + purpose, address, code, Instant.now().plusSeconds(TTL_SECONDS));
 
         boolean sent = false;
         if (suppression.isSuppressed(address)) {
@@ -109,26 +100,11 @@ public class EmailOtpService implements EmailOtpPort {
     @Override
     public boolean verify(String email, String code, String purpose) {
         String address = normalize(email);
-        String storeKey = key(purpose, address);
         if (code == null) {
             return false;
         }
-        String submitted = code.trim();
-        // One atomic read-modify-write per key. A separate get() then put() let concurrent wrong
-        // guesses all read the same attempt count, so a burst of parallel requests could try far
-        // more than MAX_ATTEMPTS codes before the counter caught up.
-        boolean[] matched = {false};
-        store.computeIfPresent(storeKey, (k, otp) -> {
-            if (Instant.now().isAfter(otp.expiresAt()) || otp.attempts() >= MAX_ATTEMPTS) {
-                return null; // expired or locked out: drop it
-            }
-            if (!otp.code().equals(submitted)) {
-                return new Otp(otp.code(), otp.expiresAt(), otp.attempts() + 1);
-            }
-            matched[0] = true;
-            return null; // single-use
-        });
-        return matched[0];
+        // One atomic, row-locked read-modify-write per challenge (see BorrowerOtpService.verify).
+        return store.consumeChallenge("EMAIL_" + purpose, address, code.trim(), MAX_ATTEMPTS, Instant.now());
     }
 
     private String generate() {

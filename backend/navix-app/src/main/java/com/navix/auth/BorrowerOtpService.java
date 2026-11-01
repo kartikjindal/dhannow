@@ -9,8 +9,6 @@ import com.navix.sms.UltronSmsClient;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,7 +18,7 @@ import org.springframework.stereotype.Service;
  * Borrower mobile-OTP: generates a random code, delivers it via the {@link UltronSmsClient}
  * SMS gateway, and verifies it. Replaces the old fixed-{@code 123456} mock.
  *
- * <p>Codes are held in-memory (single-instance demo; move to Redis/DB for HA), keyed by
+ * <p>Codes are held in {@link AuthStateStore} (Postgres {@code otp_challenge}, PLAN Phase 8), keyed by
  * <b>purpose + the normalized 10-digit mobile</b>, with a TTL and a small attempt cap — the purpose
  * dimension keeps e.g. a login OTP and a bureau-consent OTP for the same mobile from clobbering each
  * other's stored code or rate-limit budget (see {@link OtpVerifierPort#LOGIN} /
@@ -43,20 +41,13 @@ public class BorrowerOtpService implements OtpVerifierPort {
     private final SmsProperties props;
     private final AttemptLimiter limiter;
     private final com.navix.common.brand.BrandProperties brand;
-    private final Map<String, Otp> store = new ConcurrentHashMap<>();
-
-    private record Otp(String code, Instant expiresAt, int attempts) {
-    }
-
-    private static String key(String purpose, String number) {
-        return purpose + ":" + number;
-    }
+    private final AuthStateStore store;
 
     /** Generate + store an OTP for {@code mobile}, scoped to {@code purpose}, and send it via SMS. */
     @Override
     public OtpRequestResult request(String mobile, String purpose) {
         String number = normalize(mobile);
-        String storeKey = key(purpose, number);
+        String storeKey = purpose + ":" + number;
         // Capped before the SMS goes out. This bounds two things at once: the gateway spend (and the
         // handset-bombing that comes free with it), and the store.put below, which resets the
         // MAX_ATTEMPTS guess counter — so without a send cap, guesses against a 6-digit code are
@@ -71,7 +62,7 @@ public class BorrowerOtpService implements OtpVerifierPort {
                 "Too many OTP requests for this number.");
         // Mock mode (demo/testing): a fixed code, no SMS, no DLT — testers just enter mockCode().
         String code = props.mock() ? mockCode() : generate();
-        store.put(storeKey, new Otp(code, Instant.now().plusSeconds(props.otpTtlSeconds()), 0));
+        store.putChallenge(purpose, number, code, Instant.now().plusSeconds(props.otpTtlSeconds()));
 
         boolean sent = props.mock();
         if (props.mock()) {
@@ -102,31 +93,17 @@ public class BorrowerOtpService implements OtpVerifierPort {
     @Override
     public boolean verify(String mobile, String code, String purpose) {
         String number = normalize(mobile);
-        String storeKey = key(purpose, number);
         // Mock mode: the fixed code always verifies (even if the store entry lapsed).
         if (props.mock() && code != null && mockCode().equals(code.trim())) {
-            store.remove(storeKey);
+            store.removeChallenge(purpose, number);
             return true;
         }
         if (code == null) {
             return false;
         }
-        String submitted = code.trim();
-        // One atomic read-modify-write per key. A separate get() then put() let concurrent wrong
-        // guesses all read the same attempt count, so a burst of parallel requests could try far
-        // more than MAX_ATTEMPTS codes before the counter caught up.
-        boolean[] matched = {false};
-        store.computeIfPresent(storeKey, (k, otp) -> {
-            if (Instant.now().isAfter(otp.expiresAt()) || otp.attempts() >= MAX_ATTEMPTS) {
-                return null; // expired or locked out: drop it
-            }
-            if (!otp.code().equals(submitted)) {
-                return new Otp(otp.code(), otp.expiresAt(), otp.attempts() + 1);
-            }
-            matched[0] = true;
-            return null; // single-use
-        });
-        return matched[0];
+        // One atomic, row-locked read-modify-write per challenge, so a burst of parallel wrong guesses (on one
+        // instance or several) can never try more than MAX_ATTEMPTS codes.
+        return store.consumeChallenge(purpose, number, code.trim(), MAX_ATTEMPTS, Instant.now());
     }
 
     /**

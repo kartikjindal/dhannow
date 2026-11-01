@@ -3,6 +3,7 @@ package com.navix.auth;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -50,6 +51,8 @@ class AuthControllerTest {
     @Mock private com.navix.iam.service.InviteService inviteService;
     @Mock private BorrowerMobileRepository mobileRepository;
     @Mock private StaffSessionRegistry staffSessionRegistry;
+    @Mock private RefreshTokenService refreshTokens;
+    @Mock private DeviceService devices;
 
     private AuthController controller;
     private JwtService jwt;
@@ -60,7 +63,8 @@ class AuthControllerTest {
         PasswordEncoder encoder = new BCryptPasswordEncoder();
         controller = new AuthController(staffRepository, jwt, encoder, otpService, profileRepository,
                 credentialRepository, passwordResetService, inviteService, mobileRepository,
-                new AttemptLimiter(), new CaptchaVerifier("", ""), staffSessionRegistry, mfa);
+                new AttemptLimiter(new InMemoryAuthStateStore()), new CaptchaVerifier("", ""), staffSessionRegistry, mfa,
+                refreshTokens, devices);
         // @Value-injected field, so there is no constructor slot for it — set what Spring would.
         org.springframework.test.util.ReflectionTestUtils.setField(
                 controller, "staffTtlSeconds", STAFF_TTL_SECONDS);
@@ -336,5 +340,98 @@ class AuthControllerTest {
                 controller.staffForgotPassword(new ForgotPasswordRequest("meera.krishnan@navix.example", null)))
                 .isInstanceOf(BusinessException.class)
                 .extracting("code").isEqualTo("TOO_MANY_ATTEMPTS");
+    }
+
+    /** PLAN Phase 8: an app sign-in (it names a device) gets a short access token bound to the device and a refresh token. */
+    @Test
+    void borrowerLogin_withADeviceIssuesAShortAccessTokenAndARefreshToken() {
+        when(otpService.verify("9819000001", "123456", OtpVerifierPort.LOGIN)).thenReturn(true);
+        when(mobileRepository.findById(9000001L)).thenReturn(Optional.empty());
+        java.time.Instant until = java.time.Instant.now().plus(java.time.Duration.ofDays(30));
+        when(refreshTokens.issue(9000001L, "device-0001")).thenReturn(new RefreshTokenService.Issued("rt-1", until));
+
+        var resp = controller.borrowerLogin(new AuthDtos.BorrowerLoginRequest("9819000001", "123456", "Asha",
+                "device-0001", "Pixel 6", "1.0.0")).getData();
+
+        assertThat(resp.refreshToken()).isEqualTo("rt-1");
+        assertThat(resp.expiresIn()).isEqualTo(900L);
+        assertThat(resp.refreshExpiresAt()).isEqualTo(until);
+        JwtService.Principal p = jwt.verify(resp.token());
+        assertThat(p.deviceId()).isEqualTo("device-0001");
+        assertThat(p.audience()).isEqualTo(JwtService.AUDIENCE_BORROWER);
+        verify(devices).touch(9000001L, "device-0001", "Pixel 6", null, "1.0.0");
+    }
+
+    /** The web (no device id) keeps its single token: nothing for it to refresh. */
+    @Test
+    void borrowerLogin_withoutADeviceKeepsTheWebToken() {
+        when(otpService.verify("9819000001", "123456", OtpVerifierPort.LOGIN)).thenReturn(true);
+        when(mobileRepository.findById(9000001L)).thenReturn(Optional.empty());
+
+        var resp = controller.borrowerLogin(new BorrowerLoginRequest("9819000001", "123456", null)).getData();
+
+        assertThat(resp.refreshToken()).isNull();
+        assertThat(jwt.verify(resp.token()).deviceId()).isNull();
+        verify(refreshTokens, never()).issue(anyLong(), any());
+    }
+
+    @Test
+    void borrowerRefresh_rotatesAndKeepsTheDevice() {
+        when(refreshTokens.rotate("rt-1", "device-0001")).thenReturn(new RefreshTokenService.Rotated(9000001L,
+                "device-0001", new RefreshTokenService.Issued("rt-2", java.time.Instant.now().plusSeconds(60))));
+        when(mobileRepository.findById(9000001L)).thenReturn(Optional.of(claim(9000001L, "9819000001")));
+
+        var resp = controller.borrowerRefresh(new AuthDtos.RefreshRequest("rt-1", "device-0001")).getData();
+
+        assertThat(resp.refreshToken()).isEqualTo("rt-2");
+        assertThat(jwt.verify(resp.token()).id()).isEqualTo("9000001");
+        assertThat(jwt.verify(resp.token()).deviceId()).isEqualTo("device-0001");
+    }
+
+    /** CC-38: logout ends this device's session; allDevices (signed in) ends them all; it never fails. */
+    @Test
+    void borrowerLogout_endsThisDeviceOrAllOfThem() {
+        when(refreshTokens.revoke("rt-1")).thenReturn(new RefreshTokenService.Rotated(9000001L, "device-0001", null));
+        controller.borrowerLogout(new AuthDtos.LogoutRequest("rt-1", null));
+        verify(devices).remove(9000001L, "device-0001");
+
+        controller.borrowerLogout(null);
+        assertThatThrownBy(() -> controller.borrowerLogout(new AuthDtos.LogoutRequest(null, true)))
+                .isInstanceOf(BusinessException.class);
+
+        ActorContext.set(new CurrentActor("9000001", "Asha", "BORROWER", null));
+        controller.borrowerLogout(new AuthDtos.LogoutRequest(null, true));
+        verify(refreshTokens).revokeAll(9000001L);
+        verify(devices).removeAll(9000001L);
+    }
+
+    /** CC-36: OTP sends are also capped per network address and per app install, not only per number. */
+    @Test
+    void cc36_otpRequestsAreCappedPerIpAndPerDevice() {
+        when(otpService.request(any(), any())).thenReturn(new OtpVerifierPort.OtpRequestResult(true, null, 300));
+        var http = new org.springframework.mock.web.MockHttpServletRequest();
+        http.setRemoteAddr("10.0.0.1");
+        for (int i = 0; i < 10; i++) {
+            controller.requestBorrowerOtp(new AuthDtos.OtpRequestRequest("98190000" + (10 + i), "device-0001"), http);
+        }
+        assertThatThrownBy(() -> controller.requestBorrowerOtp(
+                new AuthDtos.OtpRequestRequest("9819000099", "device-0001"), http))
+                .isInstanceOf(BusinessException.class).extracting("code").isEqualTo("TOO_MANY_ATTEMPTS");
+        // Another device on the same network still gets through, until the per-IP cap.
+        for (int i = 0; i < 19; i++) { // the per-IP count is at 11; 30 is the cap
+            controller.requestBorrowerOtp(new AuthDtos.OtpRequestRequest("98191000" + (10 + i), "device-" + (1000 + i)), http);
+        }
+        assertThatThrownBy(() -> controller.requestBorrowerOtp(
+                new AuthDtos.OtpRequestRequest("9819200001", "device-9999"), http))
+                .isInstanceOf(BusinessException.class).extracting("code").isEqualTo("TOO_MANY_ATTEMPTS");
+    }
+
+    @Test
+    void clientIpIsTheLastForwardedHop() {
+        var http = new org.springframework.mock.web.MockHttpServletRequest();
+        http.setRemoteAddr("10.0.0.9");
+        assertThat(AuthController.clientIp(http)).isEqualTo("10.0.0.9");
+        http.addHeader("X-Forwarded-For", "1.1.1.1, 203.0.113.7");
+        assertThat(AuthController.clientIp(http)).isEqualTo("203.0.113.7");
     }
 }

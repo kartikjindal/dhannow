@@ -49,11 +49,15 @@ public class SecurityConfig {
             StaffSessionRegistry staffSessionRegistry) throws Exception {
         http
             .csrf(csrf -> csrf.disable())
+            // PLAN Phase 8: the origin allowlist from WebConfig's CorsConfigurationSource; preflights skip the auth gate.
+            .cors(org.springframework.security.config.Customizer.withDefaults())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                     .requestMatchers(
                             "/api/auth/**",
                             "/api/contact",
+                            // PLAN Phase 8: the app reads minVersion, flags and contacts before anyone signs in.
+                            "/api/app/config",
                             // Provider callbacks carry no user session; each one authenticates itself
                             // against its own shared secret inside the handler.
                             "/api/webhooks/**",

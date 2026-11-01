@@ -5,6 +5,8 @@ import com.navix.auth.AuthDtos.AuthResponse;
 import com.navix.auth.AuthDtos.BorrowerLoginRequest;
 import com.navix.auth.AuthDtos.BorrowerPasswordLoginRequest;
 import com.navix.auth.AuthDtos.ForgotPasswordRequest;
+import com.navix.auth.AuthDtos.LogoutRequest;
+import com.navix.auth.AuthDtos.RefreshRequest;
 import com.navix.auth.AuthDtos.MfaEnrolRequest;
 import com.navix.auth.AuthDtos.MfaEnrolResponse;
 import com.navix.auth.AuthDtos.MessageResponse;
@@ -67,6 +69,11 @@ public class AuthController {
     private final CaptchaVerifier captcha;
     private final com.navix.config.StaffSessionRegistry staffSessionRegistry;
     private final StaffMfaService mfa;
+    private final RefreshTokenService refreshTokens;
+    private final DeviceService devices;
+    /** PLAN Phase 8: an app session's access token lifetime (the refresh token renews it). Field-injected, see below. */
+    @org.springframework.beans.factory.annotation.Value("${navix.auth.borrower-access-ttl-seconds:900}")
+    private long accessTtlSeconds = 900;
     /**
      * Same TTL {@link JwtService} issues staff tokens with — used to decide whether a stored
      * {@code active_session_id} could still back a live token (see {@link #staffLogin}).
@@ -288,9 +295,39 @@ public class AuthController {
         return ApiResponse.ok(new AuthResponse(token, id, staff.name(), staff.role().name(), null));
     }
 
+    /**
+     * OTP sends per network address / per app install per {@link #OTP_SOURCE_WINDOW}, on top of the per-mobile cap
+     * in {@link BorrowerOtpService} (CC-36: SMS pumping spreads over many numbers from one source). Generous per
+     * IP because Indian mobile carriers put many users behind one address. An app request whose Play Integrity
+     * check failed (no Play Services, CC-42, or a failed verdict) may still use OTP, under the strict caps.
+     */
+    private static final int OTP_PER_IP = 30;
+    private static final int OTP_PER_DEVICE = 10;
+    private static final int OTP_PER_IP_STRICT = 10;
+    private static final int OTP_PER_DEVICE_STRICT = 3;
+    private static final Duration OTP_SOURCE_WINDOW = Duration.ofHours(1);
+    private static final String TOO_MANY_OTPS = "Too many OTP requests.";
+    /** Mock SMS (demo, e2e) sends nothing, so there is no SMS spend for the per-source caps to protect. */
+    @org.springframework.beans.factory.annotation.Value("${navix.sms.mock:false}")
+    private boolean smsMock;
+
     /** Generate an OTP and SMS it to the borrower's mobile (UltronSMS). Call before login. */
     @PostMapping("/borrower/otp/request")
-    public ApiResponse<OtpRequestResponse> requestBorrowerOtp(@Valid @RequestBody OtpRequestRequest req) {
+    public ApiResponse<OtpRequestResponse> requestBorrowerOtp(@Valid @RequestBody OtpRequestRequest req,
+                                                              jakarta.servlet.http.HttpServletRequest http) {
+        boolean strict = captcha.androidCheck() == CaptchaVerifier.AndroidCheck.FAILED;
+        // ponytail: the web BFF forwards no client address, so every web send shares the BFF's one IP cap. Fine
+        // until Phase 10 removes the borrower web; forward X-Forwarded-For from the BFF if it ever stays.
+        if (!smsMock) {
+            limiter.hit("otp-ip:" + clientIp(http), strict ? OTP_PER_IP_STRICT : OTP_PER_IP,
+                    OTP_SOURCE_WINDOW, OTP_SOURCE_WINDOW, TOO_MANY_OTPS);
+            String device = req.deviceId() != null && !req.deviceId().isBlank()
+                    ? req.deviceId() : http.getHeader("X-Device-Id");
+            if (device != null && !device.isBlank()) {
+                limiter.hit("otp-device:" + device.trim(), strict ? OTP_PER_DEVICE_STRICT : OTP_PER_DEVICE,
+                        OTP_SOURCE_WINDOW, OTP_SOURCE_WINDOW, TOO_MANY_OTPS);
+            }
+        }
         OtpVerifierPort.OtpRequestResult result = otpService.request(req.mobile(), OtpVerifierPort.LOGIN);
         return ApiResponse.ok(new OtpRequestResponse(result.sent(), result.ttlSeconds(), result.devCode()));
     }
@@ -303,10 +340,85 @@ public class AuthController {
         }
         long customerId = claimCustomerId(req.mobile());
         String name = resolveBorrowerName(req.name(), req.mobile());
+        log.info("borrower login ok customerId={} app={}", customerId, req.deviceId() != null);
+        return ApiResponse.ok(borrowerSession(customerId, name, req.deviceId(), req.deviceName(), req.appVersion()));
+    }
+
+    /**
+     * PLAN Phase 8: spend a refresh token for a fresh pair (CC-40, transparent to the borrower). A spent token sent
+     * again revokes the whole sign-in ({@code REFRESH_REUSED}, CC-39); unknown, expired or another device's token is
+     * {@code REFRESH_INVALID}. Either way the app signs in again.
+     */
+    @PostMapping("/borrower/refresh")
+    public ApiResponse<AuthResponse> borrowerRefresh(@Valid @RequestBody RefreshRequest req) {
+        RefreshTokenService.Rotated r = refreshTokens.rotate(req.refreshToken(), req.deviceId());
+        String mobile = mobileRepository.findById(r.customerId()).map(BorrowerMobile::getMobile).orElse(null);
+        devices.touch(r.customerId(), r.deviceId(), null, null, null);
+        return ApiResponse.ok(appSession(r.customerId(), resolveBorrowerName(null, mobile), r.deviceId(), r.next()));
+    }
+
+    /**
+     * Sign out: {@code refreshToken} ends this device's session and forgets its push token; {@code allDevices} with
+     * a borrower bearer ends all of them (CC-38). Idempotent. The access token lapses on its own within 15 minutes.
+     */
+    @PostMapping("/borrower/logout")
+    public ApiResponse<MessageResponse> borrowerLogout(@RequestBody(required = false) LogoutRequest req) {
+        if (req != null && req.refreshToken() != null && !req.refreshToken().isBlank()) {
+            RefreshTokenService.Rotated owner = refreshTokens.revoke(req.refreshToken());
+            if (owner != null) {
+                devices.remove(owner.customerId(), owner.deviceId());
+            }
+        }
+        if (req != null && Boolean.TRUE.equals(req.allDevices())) {
+            var actor = ActorContext.get();
+            if (!"BORROWER".equals(actor.role())) {
+                throw new BusinessException("UNAUTHORIZED", "Sign in to sign out of all devices");
+            }
+            long customerId = Long.parseLong(actor.id());
+            refreshTokens.revokeAll(customerId);
+            devices.removeAll(customerId);
+            log.info("borrower signed out of all devices customerId={}", customerId);
+        }
+        return ApiResponse.ok(new MessageResponse("Signed out."));
+    }
+
+    /**
+     * The token(s) for a borrower sign-in. Without a device id (the web BFF) it is one long-lived token as before;
+     * the borrower web goes in Phase 10. With one (the app) it is a 15-minute access token plus a rotating refresh
+     * token bound to that device, and the device is recorded for Settings > Devices.
+     */
+    private AuthResponse borrowerSession(long customerId, String name, String deviceId, String deviceName,
+                                         String appVersion) {
         String id = String.valueOf(customerId);
-        String token = jwtService.issue(id, name, "BORROWER", JwtService.AUDIENCE_BORROWER);
-        log.info("borrower login ok customerId={}", customerId);
-        return ApiResponse.ok(new AuthResponse(token, id, name, "BORROWER", customerId));
+        if (deviceId == null || deviceId.isBlank()) {
+            String token = jwtService.issue(id, name, "BORROWER", JwtService.AUDIENCE_BORROWER);
+            return new AuthResponse(token, id, name, "BORROWER", customerId);
+        }
+        String device = DeviceService.requireDeviceId(deviceId.trim());
+        RefreshTokenService.Issued refresh = refreshTokens.issue(customerId, device);
+        devices.touch(customerId, device, deviceName, null, appVersion);
+        return appSession(customerId, name, device, refresh);
+    }
+
+    private AuthResponse appSession(long customerId, String name, String deviceId, RefreshTokenService.Issued refresh) {
+        String id = String.valueOf(customerId);
+        String token = jwtService.issueForDevice(id, name, "BORROWER", JwtService.AUDIENCE_BORROWER, deviceId,
+                accessTtlSeconds);
+        return new AuthResponse(token, id, name, "BORROWER", customerId, refresh.token(), accessTtlSeconds,
+                refresh.expiresAt());
+    }
+
+    /**
+     * The caller's address for the per-IP limit: the LAST {@code X-Forwarded-For} hop (the one the load balancer
+     * appended, so a client cannot choose it), else the socket peer.
+     */
+    static String clientIp(jakarta.servlet.http.HttpServletRequest http) {
+        String xff = http.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) {
+            String[] hops = xff.split(",");
+            return hops[hops.length - 1].trim();
+        }
+        return String.valueOf(http.getRemoteAddr());
     }
 
     /** Borrower sign-in by password (the OTP-less alternative; requires a previously set password). */
@@ -333,10 +445,8 @@ public class AuthController {
         limiter.clear(limitKey); // as on staff login: only wrong passwords count toward the three
         claimCustomerId(req.mobile()); // first successful sign-in records the claim, as before
         String name = resolveBorrowerName(null, req.mobile());
-        String id = String.valueOf(customerId);
-        String token = jwtService.issue(id, name, "BORROWER", JwtService.AUDIENCE_BORROWER);
         log.info("borrower password login ok customerId={}", customerId);
-        return ApiResponse.ok(new AuthResponse(token, id, name, "BORROWER", customerId));
+        return ApiResponse.ok(borrowerSession(customerId, name, req.deviceId(), req.deviceName(), req.appVersion()));
     }
 
     /** Set (or replace) a password for the signed-in borrower — the optional signup step / profile. */

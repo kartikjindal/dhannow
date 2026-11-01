@@ -66,6 +66,10 @@ public class TemplateRenderer {
             // Carry the NotificationType name so the gateway resolves this type's DLT Template ID.
             return new RenderedMessage(channel, subject, body, type.name());
         }
+        if (channel == NotificationChannel.PUSH) {
+            // The type rides along as the push's data so the app can route the tap (CC-53).
+            return new RenderedMessage(channel, subject, body, type.name());
+        }
         return new RenderedMessage(channel, subject, body, null);
     }
 

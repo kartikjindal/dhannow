@@ -47,7 +47,8 @@ public class JwtService {
      * tokens, which are explicitly allowed on multiple devices, and for tokens minted before this
      * feature shipped (grandfathered, see {@code StaffSessionRegistry}).
      */
-    public record Principal(String id, String name, String role, String audience, String sessionId) {
+    public record Principal(String id, String name, String role, String audience, String sessionId,
+                            String deviceId) {
     }
 
     /**
@@ -65,8 +66,22 @@ public class JwtService {
      * audiences that don't use session enforcement (borrower).
      */
     public String issue(String subjectId, String name, String role, String audience, String sessionId) {
-        long now = System.currentTimeMillis();
         long ttl = AUDIENCE_BORROWER.equals(audience) ? borrowerTtlSeconds : ttlSeconds;
+        return issue(subjectId, name, role, audience, sessionId, null, ttl);
+    }
+
+    /**
+     * PLAN Phase 8: an app session's short access token. {@code deviceId} rides as the {@code did} claim, so the
+     * devices list can mark the caller's own phone; {@code ttlSeconds} is the access TTL (15 min by default).
+     */
+    public String issueForDevice(String subjectId, String name, String role, String audience, String deviceId,
+                                 long ttlSeconds) {
+        return issue(subjectId, name, role, audience, null, deviceId, ttlSeconds);
+    }
+
+    private String issue(String subjectId, String name, String role, String audience, String sessionId,
+                         String deviceId, long ttl) {
+        long now = System.currentTimeMillis();
         var builder = Jwts.builder()
                 .subject(subjectId)
                 .claim("name", name)
@@ -76,6 +91,9 @@ public class JwtService {
                 .expiration(new Date(now + ttl * 1000));
         if (sessionId != null) {
             builder.claim("sid", sessionId);
+        }
+        if (deviceId != null) {
+            builder.claim("did", deviceId);
         }
         return builder.signWith(key).compact();
     }
@@ -87,7 +105,7 @@ public class JwtService {
         String audience = c.getAudience() != null && !c.getAudience().isEmpty()
                 ? c.getAudience().iterator().next() : null;
         return new Principal(c.getSubject(), c.get("name", String.class), c.get("role", String.class), audience,
-                c.get("sid", String.class));
+                c.get("sid", String.class), c.get("did", String.class));
     }
 
     /** Verify, swallowing failures into an {@link java.util.Optional}-style null. */

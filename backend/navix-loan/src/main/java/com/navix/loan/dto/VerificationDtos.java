@@ -43,6 +43,11 @@ public final class VerificationDtos {
     public record SelfieVerifyRequest(@NotBlank String selfieObjectKey) {
     }
 
+    /** PLAN Phase 8: the guided selfie's three uploaded frames (object keys from {@code /presign-upload}). */
+    public record SelfieFramesRequest(@NotBlank String straightKey, @NotBlank String rightKey,
+                                      @NotBlank String leftKey) {
+    }
+
     public record AgreementRequest(List<String> versions) {
     }
 

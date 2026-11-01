@@ -3,9 +3,6 @@ package com.navix.auth;
 import com.navix.common.exception.BusinessException;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import org.springframework.stereotype.Component;
 
 /**
@@ -21,35 +18,17 @@ import org.springframework.stereotype.Component;
  * use. That stopped being true when the login cap dropped to three: signing in on a second device,
  * or a test suite exercising the login form, spent the budget and locked the account out.
  *
- * <p>In-memory and single-instance, the same caveat {@link BorrowerOtpService} carries for its OTP
- * store — behind more than one task an attacker simply round-robins them. Move both to Redis
- * together if this ever scales out.
+ * <p>PLAN Phase 8: the windows live in {@link AuthStateStore} (Postgres {@code attempt_counter}), so a cap holds
+ * across every app instance and survives a restart. Before, each task kept its own map and an attacker simply
+ * round-robined them.
  */
 @Component
 public class AttemptLimiter {
 
-    /** Keys come from the caller (a mobile / an email), so the map must not grow without bound. */
-    private static final int MAX_TRACKED_KEYS = 10_000;
+    private final AuthStateStore store;
 
-    // ponytail: LRU eviction, so a flood of distinct keys can push a real one out early. Redis with
-    // per-key TTL if that ever matters; for a single task at this traffic it does not.
-    private final Map<String, Window> windows = Collections.synchronizedMap(
-            new LinkedHashMap<>(256, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, Window> eldest) {
-                    return size() > MAX_TRACKED_KEYS;
-                }
-            });
-
-    /**
-     * @param count      attempts seen inside the current counting window
-     * @param countUntil when those attempts are forgotten
-     * @param blockUntil when the current cool-off ends, or null if not blocked
-     */
-    private record Window(int count, Instant countUntil, Instant blockUntil) {
-        boolean blockedAt(Instant now) {
-            return blockUntil != null && now.isBefore(blockUntil);
-        }
+    public AttemptLimiter(AuthStateStore store) {
+        this.store = store;
     }
 
     /**
@@ -74,20 +53,19 @@ public class AttemptLimiter {
      */
     public void hit(String key, int max, Duration countWindow, Duration blockFor, String lead) {
         Instant now = Instant.now();
-        Window updated = windows.compute(key, (k, current) -> {
+        AuthStateStore.Counter updated = store.updateCounter(key, current -> {
             // Already serving a cool-off: leave it exactly as it is.
             if (current != null && current.blockedAt(now)) {
                 return current;
             }
             // The counting window is what survives between slow attempts; the expired block does not.
-            int count = current == null || now.isAfter(current.countUntil()) ? 1 : current.count() + 1;
-            Instant countUntil = current == null || now.isAfter(current.countUntil())
-                    ? now.plus(countWindow)
-                    : current.countUntil();
+            boolean fresh = current == null || current.windowOverAt(now, countWindow);
+            int count = fresh ? 1 : current.count() + 1;
+            Instant windowStart = fresh ? now : current.windowStart();
             return count > max
                     // Over the line: start the cool-off and give them a clean slate on the far side.
-                    ? new Window(0, now.plus(countWindow), now.plus(blockFor))
-                    : new Window(count, countUntil, null);
+                    ? new AuthStateStore.Counter(0, now, now.plus(blockFor))
+                    : new AuthStateStore.Counter(count, windowStart, null);
         });
         if (updated.blockedAt(now)) {
             throw new BusinessException("TOO_MANY_ATTEMPTS",
@@ -100,7 +78,7 @@ public class AttemptLimiter {
      * passwords ending in the right one leaves no penalty behind. Idempotent; unknown keys are fine.
      */
     public void clear(String key) {
-        windows.remove(key);
+        store.clearCounter(key);
     }
 
     /** "27 seconds" / "1 minute" / "4 minutes" — never "0 seconds", which reads as "retry now". */

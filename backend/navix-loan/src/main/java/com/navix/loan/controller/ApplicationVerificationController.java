@@ -16,6 +16,7 @@ import com.navix.loan.dto.VerificationDtos.PanVerifyRequest;
 import com.navix.loan.dto.VerificationDtos.PennyDropVerifyRequest;
 import com.navix.loan.dto.VerificationDtos.PresignUploadRequest;
 import com.navix.loan.dto.VerificationDtos.SalaryVerifyRequest;
+import com.navix.loan.dto.VerificationDtos.SelfieFramesRequest;
 import com.navix.loan.dto.VerificationDtos.SelfieVerifyRequest;
 import com.navix.loan.dto.VerificationDtos.UploadedDocumentsRequest;
 import com.navix.loan.service.ApplicationFlowService;
@@ -45,6 +46,7 @@ public class ApplicationVerificationController {
 
     private final ApplicationVerificationService verification;
     private final ApplicationFlowService flow;
+    private final com.navix.common.web.RedirectAllowlist redirects;
 
     @PostMapping("/pan")
     public ApiResponse<StepResult> pan(@PathVariable Long id, @Valid @RequestBody PanVerifyRequest req) {
@@ -101,7 +103,8 @@ public class ApplicationVerificationController {
     public ApiResponse<StepResult> digilockerInit(@PathVariable Long id,
                                                   @Valid @RequestBody DigilockerInitRequest req) {
         authorize(id);
-        return ApiResponse.ok(verification.digilockerInit(id, req.redirectUrl()));
+        // PLAN Phase 8 (CC-34): the provider may only return the borrower to an allowlisted address.
+        return ApiResponse.ok(verification.digilockerInit(id, redirects.require(req.redirectUrl())));
     }
 
     @GetMapping("/digilocker/status")
@@ -179,6 +182,13 @@ public class ApplicationVerificationController {
     public ApiResponse<StepResult> selfie(@PathVariable Long id, @Valid @RequestBody SelfieVerifyRequest req) {
         authorize(id);
         return ApiResponse.ok(verification.verifySelfie(id, req.selfieObjectKey()));
+    }
+
+    /** PLAN Phase 8: the app's guided selfie (straight, right, left) → REVIEW, for the staff selfie queue. */
+    @PostMapping("/selfie/frames")
+    public ApiResponse<StepResult> selfieFrames(@PathVariable Long id, @Valid @RequestBody SelfieFramesRequest req) {
+        authorize(id);
+        return ApiResponse.ok(verification.submitSelfieFrames(id, req.straightKey(), req.rightKey(), req.leftKey()));
     }
 
     /** Primary selfie path: start the Signzy liveness video journey (returns derived.videoUrl / .fallback). */

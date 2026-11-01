@@ -186,4 +186,29 @@ class ProductionConfigGuardTest {
         assertThatCode(() -> guard("dev", STRONG_SECRET, false, false, "signzy", placeholder).check())
                 .doesNotThrowAnyException();
     }
+
+    /** PLAN Phase 8: the opt-in that lets an X-Client: android request skip the challenge never runs in prod. */
+    @Test
+    void prod_rejectsAndroidWithoutIntegrity() {
+        ProductionConfigGuard g = guard("prod", STRONG_SECRET, false, false);
+        ReflectionTestUtils.setField(g, "androidWithoutIntegrity", true);
+        assertThatThrownBy(g::check).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("NAVIX_INTEGRITY_ALLOW_ANDROID_WITHOUT_CHECK");
+    }
+
+    /** PLAN Phase 8: push-fcm or play-integrity ON needs the Google key; OFF needs nothing. */
+    @Test
+    void prod_rejectsGoogleFlagsOnWithoutAServiceAccount() {
+        FeatureFlagService f = mock(FeatureFlagService.class);
+        org.mockito.Mockito.when(f.isEnabled("push-fcm", false)).thenReturn(true);
+        ProductionConfigGuard on = new ProductionConfigGuard(sms(false, false), f, LENDER, MFA);
+        ReflectionTestUtils.setField(on, "env", "prod");
+        assertThatThrownBy(on::checkGoogle).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("NAVIX_GOOGLE_SERVICE_ACCOUNT_PATH");
+        ReflectionTestUtils.setField(on, "googleKeyPath", "/run/secrets/google.json");
+        assertThatCode(on::checkGoogle).doesNotThrowAnyException();
+
+        ProductionConfigGuard off = guard("prod", STRONG_SECRET, false, false);
+        assertThatCode(off::checkGoogle).doesNotThrowAnyException();
+    }
 }

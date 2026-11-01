@@ -31,6 +31,8 @@ class BorrowerOtpServiceTest {
 
     private static final String MOBILE = "9819000001";
 
+    private final AuthStateStore STORE = new InMemoryAuthStateStore();
+
     @Mock
     private UltronSmsClient smsClient;
 
@@ -67,7 +69,7 @@ class BorrowerOtpServiceTest {
 
     @Test
     void mockMode_usesFixedCode_andNeverCallsSms() {
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(false, true), new AttemptLimiter(), BRAND);
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(false, true), new AttemptLimiter(STORE), BRAND, STORE);
         var result = service.request("9812345678", OtpVerifierPort.LOGIN);
 
         assertThat(result.sent()).isTrue();        // mock "delivery"
@@ -81,7 +83,7 @@ class BorrowerOtpServiceTest {
     @Test
     void request_sendsSms_andEchoesSixDigitCode_whenDevEchoOn() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(STORE), BRAND, STORE);
 
         OtpVerifierPort.OtpRequestResult req = service.request(MOBILE, OtpVerifierPort.LOGIN);
 
@@ -96,7 +98,7 @@ class BorrowerOtpServiceTest {
     @Test
     void request_doesNotEchoCode_whenDevEchoOff() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(false), new AttemptLimiter(), BRAND);
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(false), new AttemptLimiter(STORE), BRAND, STORE);
 
         OtpVerifierPort.OtpRequestResult req = service.request(MOBILE, OtpVerifierPort.LOGIN);
 
@@ -107,7 +109,7 @@ class BorrowerOtpServiceTest {
     @Test
     void verify_isSingleUse_andRejectsWrongCode() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(STORE), BRAND, STORE);
 
         String code = service.request(MOBILE, OtpVerifierPort.LOGIN).devCode();
 
@@ -121,7 +123,7 @@ class BorrowerOtpServiceTest {
         when(smsClient.send(anyString(), anyString(), any()))
                 .thenThrow(new SmsException("SMS gateway: error:Invalid template text"));
         when(whatsApp.sendOtp(anyString(), anyString())).thenThrow(new RuntimeException("template not approved"));
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(STORE), BRAND, STORE);
 
         OtpVerifierPort.OtpRequestResult req = service.request(MOBILE, OtpVerifierPort.LOGIN);
 
@@ -134,7 +136,7 @@ class BorrowerOtpServiceTest {
     void request_countsWhatsAppAsDelivered_whenSmsFails() {
         when(smsClient.send(anyString(), anyString(), any())).thenThrow(new SmsException("SMS gateway: DLT"));
         when(whatsApp.sendOtp(anyString(), anyString())).thenReturn("wamid.1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(STORE), BRAND, STORE);
 
         OtpVerifierPort.OtpRequestResult req = service.request(MOBILE, OtpVerifierPort.LOGIN);
 
@@ -145,7 +147,7 @@ class BorrowerOtpServiceTest {
     @Test
     void verify_locksOutAfterFiveWrongAttempts() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(STORE), BRAND, STORE);
 
         String code = service.request(MOBILE, OtpVerifierPort.LOGIN).devCode();
 
@@ -159,7 +161,7 @@ class BorrowerOtpServiceTest {
     @Test
     void loginAndBureauConsentOtps_forSameMobile_doNotCollide() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(STORE), BRAND, STORE);
 
         String loginCode = service.request(MOBILE, OtpVerifierPort.LOGIN).devCode();
         String bureauCode = service.request(MOBILE, OtpVerifierPort.BUREAU_CONSENT).devCode();
@@ -177,7 +179,7 @@ class BorrowerOtpServiceTest {
     @Test
     void loginAndBureauConsentOtps_haveSeparateSendBudgets() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(STORE), BRAND, STORE);
 
         // Exhaust the LOGIN send budget (MAX_SENDS = 5) for this mobile.
         for (int i = 0; i < 5; i++) {

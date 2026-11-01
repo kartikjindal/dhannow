@@ -42,6 +42,7 @@ public class OfferController {
 
     private final OfferService offer;
     private final ApplicationFlowService flow;
+    private final com.navix.common.web.RedirectAllowlist redirects;
 
     @PostMapping("/amount")
     public ApiResponse<ApplicationView> chooseAmount(@PathVariable Long id,
@@ -95,6 +96,9 @@ public class OfferController {
     public ApiResponse<StepResult> esignInit(@PathVariable Long id,
                                              @Valid @RequestBody EsignInitRequest req) {
         authorize(id);
+        // PLAN Phase 8 (CC-34): the signing journey may only return the borrower to an allowlisted address.
+        redirects.require(req.successRedirectUrl());
+        redirects.require(req.failureRedirectUrl());
         return ApiResponse.ok(offer.esignInit(id, req));
     }
 

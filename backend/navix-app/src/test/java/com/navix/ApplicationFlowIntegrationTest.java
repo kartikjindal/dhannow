@@ -824,7 +824,7 @@ class ApplicationFlowIntegrationTest {
     // ---- PLAN Phase 5: documents ------------------------------------------------------
 
     private static final String ESIGN_INIT =
-            "{\"successRedirectUrl\":\"https://app/ok\",\"failureRedirectUrl\":\"https://app/no\"}";
+            "{\"successRedirectUrl\":\"https://dhannow.com/app/cb/esign?r=ok\",\"failureRedirectUrl\":\"https://dhannow.com/app/cb/esign?r=no\"}";
 
     /**
      * KFS → acknowledge → e-sign → the signed pack is the AGREEMENT; after the Accountant confirms, the

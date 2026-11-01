@@ -33,6 +33,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
      *  can confirm it's clearing the CALLER's own session, not one that superseded it. */
     public static final String STAFF_SESSION_ID_ATTR = "navix.staffSessionId";
 
+    /** Request attribute carrying an app access token's {@code did} claim (PLAN Phase 8): the caller's own device. */
+    public static final String DEVICE_ID_ATTR = "navix.deviceId";
+
     private final JwtService jwtService;
     private final StaffSessionRegistry staffSessionRegistry;
 
@@ -71,6 +74,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             if (principal != null && principal.id() != null) {
                 if (JwtService.AUDIENCE_STAFF.equals(principal.audience())) {
                     request.setAttribute(STAFF_SESSION_ID_ATTR, principal.sessionId());
+                } else if (principal.deviceId() != null) {
+                    request.setAttribute(DEVICE_ID_ATTR, principal.deviceId());
                 }
                 String acting = JwtService.AUDIENCE_STAFF.equals(principal.audience())
                         ? ActingRole.normalize(principal.role(), request.getHeader(ActingRole.HEADER)) : null;

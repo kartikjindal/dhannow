@@ -16,7 +16,7 @@ class AttemptLimiterTest {
 
     @Test
     void allowsUpToTheCap_thenThrows() {
-        AttemptLimiter limiter = new AttemptLimiter();
+        AttemptLimiter limiter = new AttemptLimiter(new InMemoryAuthStateStore());
 
         for (int i = 0; i < 3; i++) {
             assertThatCode(() -> limiter.hit("otp:9819000001", 3, WINDOW, WINDOW, MESSAGE))
@@ -30,7 +30,7 @@ class AttemptLimiterTest {
 
     @Test
     void raisesTooManyAttempts_soTheBffCanSurfaceIt() {
-        AttemptLimiter limiter = new AttemptLimiter();
+        AttemptLimiter limiter = new AttemptLimiter(new InMemoryAuthStateStore());
         limiter.hit("k", 1, WINDOW, WINDOW, MESSAGE);
 
         assertThatThrownBy(() -> limiter.hit("k", 1, WINDOW, WINDOW, MESSAGE))
@@ -41,7 +41,7 @@ class AttemptLimiterTest {
     /** One borrower exhausting their cap must never lock anyone else out. */
     @Test
     void countsEachKeyIndependently() {
-        AttemptLimiter limiter = new AttemptLimiter();
+        AttemptLimiter limiter = new AttemptLimiter(new InMemoryAuthStateStore());
         limiter.hit("otp:9819000001", 1, WINDOW, WINDOW, MESSAGE);
 
         assertThatCode(() -> limiter.hit("otp:9919000002", 1, WINDOW, WINDOW, MESSAGE))
@@ -54,7 +54,7 @@ class AttemptLimiterTest {
      */
     @Test
     void allowsAgainOnceTheWindowHasPassed() throws Exception {
-        AttemptLimiter limiter = new AttemptLimiter();
+        AttemptLimiter limiter = new AttemptLimiter(new InMemoryAuthStateStore());
         Duration shortWindow = Duration.ofMillis(150);
 
         limiter.hit("staff:a@b.example", 1, shortWindow, shortWindow, MESSAGE);
@@ -73,7 +73,7 @@ class AttemptLimiterTest {
      */
     @Test
     void attemptsWhileBlockedDoNotExtendTheWait() throws Exception {
-        AttemptLimiter limiter = new AttemptLimiter();
+        AttemptLimiter limiter = new AttemptLimiter(new InMemoryAuthStateStore());
         Duration shortWindow = Duration.ofMillis(250);
 
         limiter.hit("staff:c@d.example", 1, shortWindow, shortWindow, MESSAGE);
@@ -95,7 +95,7 @@ class AttemptLimiterTest {
      */
     @Test
     void messageNamesTheActualRemainingWait() {
-        AttemptLimiter limiter = new AttemptLimiter();
+        AttemptLimiter limiter = new AttemptLimiter(new InMemoryAuthStateStore());
         limiter.hit("staff:e@f.example", 1, Duration.ofSeconds(30), Duration.ofSeconds(30), "Too many sign-in attempts.");
 
         assertThatThrownBy(() -> limiter.hit("staff:e@f.example", 1, Duration.ofSeconds(30),
@@ -117,7 +117,7 @@ class AttemptLimiterTest {
      */
     @Test
     void countsAttemptsSpacedWiderThanTheCoolOff() throws Exception {
-        AttemptLimiter limiter = new AttemptLimiter();
+        AttemptLimiter limiter = new AttemptLimiter(new InMemoryAuthStateStore());
         Duration countWindow = Duration.ofSeconds(30); // long memory
         Duration coolOff = Duration.ofMillis(50);      // short wait
 
@@ -140,7 +140,7 @@ class AttemptLimiterTest {
      */
     @Test
     void clearForgetsEarlierAttempts() {
-        AttemptLimiter limiter = new AttemptLimiter();
+        AttemptLimiter limiter = new AttemptLimiter(new InMemoryAuthStateStore());
         Duration window = Duration.ofSeconds(30);
 
         limiter.hit("staff:g@h.example", 3, window, window, MESSAGE);
@@ -161,14 +161,14 @@ class AttemptLimiterTest {
     /** Clearing a key nobody has touched must not blow up. */
     @Test
     void clearIsSafeOnAnUnknownKey() {
-        AttemptLimiter limiter = new AttemptLimiter();
+        AttemptLimiter limiter = new AttemptLimiter(new InMemoryAuthStateStore());
         assertThatCode(() -> limiter.clear("staff:never-seen")).doesNotThrowAnyException();
     }
 
     /** A long window reads in minutes, not "900 seconds" — the OTP send cap still uses one. */
     @Test
     void longWaitsAreReportedInMinutes() {
-        AttemptLimiter limiter = new AttemptLimiter();
+        AttemptLimiter limiter = new AttemptLimiter(new InMemoryAuthStateStore());
         limiter.hit("otp:9819000003", 1, Duration.ofMinutes(15), Duration.ofMinutes(15), MESSAGE);
 
         assertThatThrownBy(() -> limiter.hit("otp:9819000003", 1, Duration.ofMinutes(15), Duration.ofMinutes(15), MESSAGE))

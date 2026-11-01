@@ -173,6 +173,7 @@ class JourneyServiceTest {
         when(profileRepository.findByApplicationId(APP)).thenReturn(Optional.empty());
         assertThat(journey.current(APP).step()).isEqualTo("START");
         assertThat(journey.current(APP).route()).isEqualTo("/signup/start");
+        assertThat(journey.current(APP).stepKey()).isEqualTo("signup.start"); // PLAN Phase 8
     }
 
     @Test
@@ -294,6 +295,7 @@ class JourneyServiceTest {
         app.setStatus(ApplicationStatus.KYC_PENDING);
         assertThat(journey.current(APP).step()).isEqualTo("DONE");
         assertThat(journey.current(APP).route()).isEqualTo("/loan/status");
+        assertThat(journey.current(APP).stepKey()).isEqualTo("status");
     }
 
     // ---- the Phase-3 offer journey (V46) -----------------------------------
@@ -325,6 +327,7 @@ class JourneyServiceTest {
         // PLAN Phase 5: the KFS (after the summary) holds until it is acknowledged.
         assertThat(journey.current(APP).step()).isEqualTo("OFFER_KFS");
         assertThat(journey.current(APP).route()).isEqualTo("/loan/kfs");
+        assertThat(journey.current(APP).stepKey()).isEqualTo("offer.kfs");
 
         kfsAcknowledged();
         assertThat(journey.current(APP).step()).isEqualTo("OFFER_SELFIE");
@@ -500,5 +503,17 @@ class JourneyServiceTest {
         v.setCheckType(type);
         v.setStatus(ApplicationVerificationService.PASS);
         return v;
+    }
+
+    /** PLAN Phase 8: every step has a stable app key; the web route is kept alongside it. */
+    @Test
+    void everyStepHasAnAppStepKey() {
+        for (JourneyService.Step step : JourneyService.Step.values()) {
+            assertThat(step.stepKey()).isEqualTo(step.seg == null ? "status" : "signup." + step.seg);
+        }
+        for (JourneyService.OfferStep step : JourneyService.OfferStep.values()) {
+            assertThat(step.stepKey()).isEqualTo(step.seg == null ? "status" : "offer." + step.seg);
+        }
+        assertThat(JourneyService.OfferStep.OFFER_SELFIE.stepKey()).isEqualTo("offer.selfie");
     }
 }

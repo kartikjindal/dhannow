@@ -60,6 +60,11 @@ public class JourneyService {
         public String route() {
             return seg == null ? "/loan/status" : "/signup/" + seg;
         }
+
+        /** PLAN Phase 8: the platform-neutral key the app maps to its own screen ({@code signup.bank}, {@code status}). */
+        public String stepKey() {
+            return seg == null ? STATUS_KEY : "signup." + seg;
+        }
     }
 
     /**
@@ -99,7 +104,15 @@ public class JourneyService {
         public String route() {
             return seg == null ? "/loan/status" : "/loan/" + seg;
         }
+
+        /** PLAN Phase 8: {@code offer.kfs}, {@code offer.selfie} ... or {@code status} once the offer is accepted. */
+        public String stepKey() {
+            return seg == null ? STATUS_KEY : "offer." + seg;
+        }
     }
+
+    /** The {@code stepKey} once the borrower has nothing left to do in a journey (the web's {@code /loan/status}). */
+    public static final String STATUS_KEY = "status";
 
     /**
      * Where the borrower is, and which steps their journey actually has.
@@ -107,9 +120,12 @@ public class JourneyService {
      * <p>{@code steps} is not a constant: a re-apply drops the screens whose evidence carried over
      * from the prior advance (V47), so its journey is genuinely shorter and {@code index}/{@code
      * total} count against that shorter list rather than a fixed eleven.
+     *
+     * <p>{@code route} is the web path; {@code stepKey} (PLAN Phase 8) is what the app maps to its own screens, so
+     * the web's URLs can change without breaking it.
      */
     public record JourneyView(String step, String route, int index, int total, List<String> completed,
-                              List<String> steps) {
+                              List<String> steps, String stepKey) {
     }
 
     private final LoanApplicationRepository applicationRepository;
@@ -136,7 +152,7 @@ public class JourneyService {
             int index = steps.indexOf(step);
             return new JourneyView(step.name(), step.route(),
                     index >= 0 ? index : completed.size(), steps.size(), completed,
-                    steps.stream().map(Enum::name).toList());
+                    steps.stream().map(Enum::name).toList(), step.stepKey());
         }
         Step step = currentStep(app);
         List<Step> steps = java.util.Arrays.stream(Step.values()).filter(s -> s != Step.DONE).toList();
@@ -145,7 +161,7 @@ public class JourneyService {
                 .map(Enum::name)
                 .toList();
         return new JourneyView(step.name(), step.route(), step.ordinal(), steps.size(), completed,
-                steps.stream().map(Enum::name).toList());
+                steps.stream().map(Enum::name).toList(), step.stepKey());
     }
 
     /**

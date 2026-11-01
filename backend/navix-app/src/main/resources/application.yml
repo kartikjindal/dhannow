@@ -187,7 +187,48 @@ navix:
   auth:
     secret: ${AUTH_SECRET:navix-local-dev-secret-change-me}
     ttl-seconds: ${AUTH_TTL_SECONDS:86400}
+    # The web BFF's borrower token (no refresh). The app gets the short access token below instead.
     borrower-ttl-seconds: ${BORROWER_AUTH_TTL_SECONDS:604800}
+    # PLAN Phase 8: app sessions. Access JWT 15 min; refresh token 30 days, rotated on every use.
+    borrower-access-ttl-seconds: ${NAVIX_APP_ACCESS_TTL_SECONDS:900}
+    refresh-ttl-days: ${NAVIX_APP_REFRESH_TTL_DAYS:30}
+
+  # PLAN Phase 8: Play Integrity on app sign-in, switched by the play-integrity feature flag (seeded OFF).
+  # allow-android-without-check: with the flag OFF, may an X-Client: android request skip Turnstile? Default false
+  # (the header is client-supplied, so true lets any bot skip the challenge). Only matters where Turnstile is on.
+  integrity:
+    package-name: ${NAVIX_INTEGRITY_PACKAGE:com.dhannow.app}
+    allow-android-without-check: ${NAVIX_INTEGRITY_ALLOW_ANDROID_WITHOUT_CHECK:false}
+
+  # Google service-account JSON key file (FCM push and Play Integrity). A path only, mounted from SSM / secrets;
+  # never commit a key. Blank = both report "not configured".
+  google:
+    service-account-path: ${NAVIX_GOOGLE_SERVICE_ACCOUNT_PATH:}
+
+  # PLAN Phase 8: browser origins allowed by CORS. dev-origins are added outside NAVIX_ENV=prod only.
+  cors:
+    allowed-origins: ${NAVIX_CORS_ORIGINS:https://dhannow.com,https://staff.dhannow.com}
+    dev-origins: ${NAVIX_CORS_DEV_ORIGINS:http://localhost:3000}
+
+  # PLAN Phase 8: GET /api/app/config (CC-52, Phase 10a W1). flags = the feature flags the app may read.
+  mobile:
+    min-version: ${NAVIX_APP_MIN_VERSION:1.0.0}
+    latest-version: ${NAVIX_APP_LATEST_VERSION:1.0.0}
+    maintenance: ${NAVIX_APP_MAINTENANCE:false}
+    site-base-url: ${NAVIX_SITE_BASE_URL:https://dhannow.com}
+    flags: loan-extension,emi-conversion,payment-gateway,play-integrity,push-fcm,digio-mandate,onboarding-paused
+    legal:
+      - { key: terms, title: Terms and conditions, path: /terms.html }
+      - { key: consent, title: Consent, path: /consent.html }
+      - { key: privacy, title: Privacy policy, path: /privacy.html }
+      - { key: fair-practices, title: Fair practices code, path: /fair-practices.html }
+      - { key: faq, title: Questions and answers, path: /faq.html }
+      - { key: grievance, title: Grievance redressal, path: /grievance.html }
+      - { key: contact, title: Contact us, path: /contact.html }
+      - { key: cookie-policy, title: Cookie policy, path: /cookie-policy.html }
+      - { key: repayment-policy, title: Repayment policy, path: /repayment-policy.html }
+      - { key: payment-refund-policy, title: Payment and refund policy, path: /payment-refund-policy.html }
+      - { key: kfs-policy, title: Key fact statement policy, path: /kfs-policy.html }
 
   # Staff two-step sign-in (TOTP, PLAN Phase 7). Required for these roles while enforce is on; prod refuses to boot
   # with enforce off or without a key. The key is base64 of 32 random bytes (openssl rand -base64 32), from SSM
@@ -210,9 +251,13 @@ navix:
     # checked, logged as a warning at boot — success + action still are.
     hostnames: ${NAVIX_CAPTCHA_HOSTNAMES:}
 
-  # App-level URLs. frontend-base-url builds the password-reset links carried in emails.
+  # App-level URLs. frontend-base-url builds the links carried in emails and SMS (PLAN Phase 8: the public site,
+  # whose app links open the app). redirect-allowlist: the only places DigiLocker / e-sign may return the borrower
+  # to (CC-34, URL prefixes); redirect-allowlist-dev is added outside NAVIX_ENV=prod (the local web).
   app:
-    frontend-base-url: ${NAVIX_APP_BASE_URL:http://localhost:3000}
+    frontend-base-url: ${NAVIX_APP_BASE_URL:https://dhannow.com}
+    redirect-allowlist: ${NAVIX_REDIRECT_ALLOWLIST:https://dhannow.com/app/cb/}
+    redirect-allowlist-dev: ${NAVIX_REDIRECT_ALLOWLIST_DEV:http://localhost:3000/}
 
   # Daily payment-reminder sweep (PaymentReminderScheduler). Spring cron: sec min hour dom mon dow.
   reminders:

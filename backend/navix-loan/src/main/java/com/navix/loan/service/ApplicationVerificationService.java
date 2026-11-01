@@ -282,6 +282,10 @@ public class ApplicationVerificationService {
     // Derived bureau_phone rows (V80); swallows its own failures so it can never break a pull.
     private final BureauPhoneIndexer bureauPhones;
 
+    /** PLAN Phase 8: judges the guided selfie. Field-injected so the unit tests' constructor stays as it was. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.navix.common.verification.LivenessPort liveness = new com.navix.common.verification.ManualReviewLiveness();
+
     /** Borrower-safe view of one step (never carries bureau score / raw PII). */
     /**
      * One check's result as every surface sees it.
@@ -1452,11 +1456,16 @@ public class ApplicationVerificationService {
 
     /**
      * Consent sessions one application may start in a rolling 24 hours before we stop offering
-     * DigiLocker and route the borrower to the Aadhaar-card upload instead. Five is generous for a
-     * borrower having genuine trouble and still an order of magnitude below the 62 sessions one
-     * application accumulated against a DigiLocker outage in the Sep-2026 audit.
+     * DigiLocker and route the borrower to the Aadhaar-card upload instead. PLAN Phase 8 (CC-33): three
+     * tries, then the manual upload (EdgeKyc); navix allowed five.
      */
-    private static final int MAX_DIGILOCKER_SESSIONS_PER_DAY = 5;
+    private static final int MAX_DIGILOCKER_SESSIONS_PER_DAY = 3;
+
+    /** PLAN Phase 8: selfie captures one application may submit before the step waits for staff (server cap). */
+    static final int MAX_SELFIE_ATTEMPTS = 3;
+    /** The guided selfie's side frames: document types next to {@link #SELFIE}, which holds the straight one. */
+    public static final String SELFIE_RIGHT = "SELFIE_RIGHT";
+    public static final String SELFIE_LEFT = "SELFIE_LEFT";
 
     /** Minimum gap between two mints on one application. Every mint is a billable provider call. */
     private static final Duration CHALLENGE_MINT_COOLDOWN = Duration.ofSeconds(60);
@@ -2423,7 +2432,20 @@ public class ApplicationVerificationService {
     /** Penny-drop bank verify + name-at-bank match (payout gate). */
     @Transactional
     public StepResult verifyPennyDrop(Long appId, String accountNumber, String ifsc) {
-        return verifyPennyDrop(appId, accountNumber, ifsc, false);
+        // PLAN Phase 8: the signup bank step counts toward the same 3-strikes / 12-hour lock as the payout account
+        // (CC-27), server-side; before, only the web screen limited retries here.
+        Long customerId = requireApplication(appId).getCustomerId();
+        if (pennyDropGuard.lockedUntil(customerId).isPresent()) {
+            throw new BusinessException("PENNY_DROP_LOCKED",
+                    "Too many failed attempts. Please try again after " + PennyDropGuard.LOCK.toHours() + " hours.");
+        }
+        boolean alreadyPassed = passed(appId, PENNY_DROP).isPresent();
+        StepResult result = verifyPennyDrop(appId, accountNumber, ifsc, false);
+        if (!alreadyPassed) {
+            boolean ok = PASS.equals(result.status());
+            pennyDropGuard.record(customerId, appId, accountNumber, ifsc, ok, ok ? null : result.message());
+        }
+        return result;
     }
 
     /**
@@ -2565,14 +2587,8 @@ public class ApplicationVerificationService {
             throw new BusinessException("SELFIE_REQUIRED", "selfieObjectKey is required");
         }
         requireApplication(appId);
-        // The key comes from the client. It must be one this application's own selfie upload was issued
-        // (same folder buildApplicationKey mints) — otherwise a borrower could name another applicant's
-        // stored selfie, pass liveness on that person's face and have it filed as their own.
-        String issued = storage.buildApplicationKey(appId, SELFIE, "jpg");
-        String ownFolder = issued.substring(0, issued.lastIndexOf('/') + 1);
-        if (!selfieObjectKey.startsWith(ownFolder) || selfieObjectKey.contains("..")) {
-            throw new BusinessException("INVALID_SELFIE_KEY", "That selfie upload does not belong to this application");
-        }
+        int attempt = nextSelfieAttempt(appId);
+        requireOwnSelfieKey(appId, selfieObjectKey);
         String imageUrl = storage.presignDownload(selfieObjectKey);
         String ref = ref(appId, SELFIE);
 
@@ -2598,6 +2614,7 @@ public class ApplicationVerificationService {
             derived.put("faceMatch", false);
             derived.put("providerError", true);
             derived.put("fallback", true);
+            derived.put(SELFIE_ATTEMPTS, attempt);
             return view(upsert(appId, SELFIE, REVIEW, "DIGITAP", null, ref, null, null, selfieObjectKey,
                     derived,
                     "We couldn't run the face check right now — you can continue; our team will review your selfie."));
@@ -2610,12 +2627,88 @@ public class ApplicationVerificationService {
         derived.put("confidence", r.confidence());
         derived.put("personImageBlurry", r.personImageBlurry());
         derived.put("multipleFaces", r.multipleFaces());
+        derived.put(SELFIE_ATTEMPTS, attempt);
         // Fail → flagged for manual review (not hard block); approver decides.
         String status = live ? PASS : REVIEW;
         Long score = r.confidence() != null ? Math.round(r.confidence() * 100) : null;
         String msg = live ? "Liveness check passed" : "Liveness check low — manual review";
         return view(upsert(appId, SELFIE, status, r.provider(), r.txnId(), ref, null, score, selfieObjectKey,
                 derived, msg));
+    }
+
+    /** {@code derived} key: selfie captures used on this row (reset when staff reopen or rule on it). */
+    static final String SELFIE_ATTEMPTS = "selfieAttempts";
+
+    /**
+     * PLAN Phase 8, the app's guided selfie: three frames (straight, right, left) already uploaded through
+     * {@code /presign-upload} with docType {@code SELFIE}. All three are filed as documents and judged by the
+     * {@link com.navix.common.verification.LivenessPort}; in v1 that is {@code ManualReviewLiveness}, so the row is
+     * REVIEW and the case sits in the staff "Selfie review" queue. Three submissions per application at most.
+     */
+    @Transactional
+    public StepResult submitSelfieFrames(Long appId, String straightKey, String rightKey, String leftKey) {
+        requireApplication(appId);
+        int attempt = nextSelfieAttempt(appId);
+        for (String key : List.of(straightKey == null ? "" : straightKey, rightKey == null ? "" : rightKey,
+                leftKey == null ? "" : leftKey)) {
+            requireOwnSelfieKey(appId, key);
+        }
+        if (new java.util.HashSet<>(List.of(straightKey, rightKey, leftKey)).size() != 3) {
+            throw new BusinessException("SELFIE_FRAMES_REQUIRED", "Take all three photos: straight, right and left");
+        }
+        Map<String, String> frames = new LinkedHashMap<>();
+        frames.put("straight", straightKey);
+        frames.put("right", rightKey);
+        frames.put("left", leftKey);
+        for (Map.Entry<String, String> f : frames.entrySet()) {
+            ApplicationDocument doc = new ApplicationDocument();
+            doc.setApplicationId(appId);
+            doc.setDocType("straight".equals(f.getKey()) ? SELFIE : "right".equals(f.getKey()) ? SELFIE_RIGHT : SELFIE_LEFT);
+            doc.setFileName("selfie-" + f.getKey() + ".jpg");
+            doc.setContentType("image/jpeg");
+            doc.setS3ObjectKey(f.getValue());
+            documentRepo.save(doc);
+        }
+        var verdict = liveness.assess(new com.navix.common.verification.LivenessPort.Frames(straightKey, rightKey, leftKey));
+        Map<String, Object> derived = new LinkedHashMap<>();
+        derived.put("frameStraight", straightKey);
+        derived.put("frameRight", rightKey);
+        derived.put("frameLeft", leftKey);
+        derived.put("guided", true);
+        derived.put(SELFIE_ATTEMPTS, attempt);
+        return view(upsert(appId, SELFIE, verdict.status(), verdict.provider(), null, ref(appId, SELFIE), null, null,
+                straightKey, derived, verdict.message()));
+    }
+
+    /**
+     * The key comes from the client. It must be one this application's own selfie upload was issued (same folder
+     * buildApplicationKey mints), otherwise a borrower could name another applicant's stored selfie and have it
+     * filed as their own.
+     */
+    private void requireOwnSelfieKey(Long appId, String objectKey) {
+        String issued = storage.buildApplicationKey(appId, SELFIE, "jpg");
+        String ownFolder = issued.substring(0, issued.lastIndexOf('/') + 1);
+        if (objectKey == null || !objectKey.startsWith(ownFolder) || objectKey.contains("..")) {
+            throw new BusinessException("INVALID_SELFIE_KEY", "That selfie upload does not belong to this application");
+        }
+    }
+
+    /** Captures counted on the SELFIE row; a row staff reopened starts again from zero. */
+    int selfieAttemptsUsed(Long appId) {
+        return verificationRepo.findByApplicationIdAndCheckType(appId, SELFIE)
+                .filter(row -> row.getReopenedAt() == null)
+                .map(row -> intValue(fromJson(row.getDerived()).get(SELFIE_ATTEMPTS)))
+                .orElse(0);
+    }
+
+    /** The number of the capture about to be submitted, refused past {@link #MAX_SELFIE_ATTEMPTS} (server cap). */
+    private int nextSelfieAttempt(Long appId) {
+        int used = selfieAttemptsUsed(appId);
+        if (used >= MAX_SELFIE_ATTEMPTS) {
+            throw new BusinessException("SELFIE_ATTEMPTS_EXCEEDED",
+                    "You have used all " + MAX_SELFIE_ATTEMPTS + " selfie tries. Our team will check your photos.");
+        }
+        return used + 1;
     }
 
     /**
@@ -2644,6 +2737,7 @@ public class ApplicationVerificationService {
             derived.put("token", s.txnId());
             derived.put("faceMatch", matchImageUrl != null);
             derived.put("fallback", false);
+            derived.put(SELFIE_ATTEMPTS, selfieAttemptsUsed(appId));
             return view(upsert(appId, SELFIE, PENDING, s.provider(), s.txnId(), ref, null, null, null,
                     derived, "Liveness session started"));
         } catch (RuntimeException signzyUnavailable) {
@@ -2709,6 +2803,7 @@ public class ApplicationVerificationService {
         derived.put("faceMatch", faceMatchAttempted);
         derived.put("faceMatched", r.faceMatched());
         derived.put("matchPercentage", r.matchPercentage());
+        derived.put(SELFIE_ATTEMPTS, selfieAttemptsUsed(appId));
         String status = pass ? PASS : REVIEW;
         Long score = r.livenessScore() != null ? Math.round(r.livenessScore() * 100) : null;
         String msg = faceMatchAttempted
