@@ -3,15 +3,21 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/api.dart';
+import '../../core/files.dart';
 import '../../core/format.dart';
 import '../../core/theme/theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/widgets.dart';
 import 'common.dart';
 
-/// Confirming the account starts disbursal. eNACH flags are OFF, so B11 is skipped.
-Future<void> _confirmAndGo(BuildContext context, Future<bool> Function(Future<void> Function()) act) async {
-  if (await act(api.confirmDisbursalAccount) && context.mounted) context.go('/loan/status');
+typedef Account = ({String no, String ifsc, String holder});
+
+/// Confirming the account starts disbursal. eNACH flags are OFF, so B11 is skipped. [account]
+/// null is the account on file; [proof] is a cheque or passbook checked by hand.
+Future<void> _confirmAndGo(BuildContext context, Future<bool> Function(Future<void> Function()) act, {Account? account, PickedFile? proof}) async {
+  if (await act(() => api.confirmDisbursalAccount(accountNo: account?.no, ifsc: account?.ifsc, holder: account?.holder, proof: proof)) && context.mounted) {
+    context.go('/loan/status');
+  }
 }
 
 /// B10 Where to send the money: the salary account from sign-up.
@@ -65,14 +71,18 @@ class _PayoutScreenState extends State<PayoutScreen> with Busy {
 
 /// "Not able to verify your account?": cancelled cheque or passbook, checked by hand (B10, B10b).
 class BankProofCard extends StatefulWidget {
-  const BankProofCard({super.key});
+  const BankProofCard({super.key, this.account});
+
+  /// B10b: the typed account, or null while the form is not valid (it shows why). Not set on B10:
+  /// the proof is for the account on file.
+  final Account? Function()? account;
 
   @override
   State<BankProofCard> createState() => _BankProofCardState();
 }
 
 class _BankProofCardState extends State<BankProofCard> with Busy {
-  bool _added = false;
+  PickedFile? _proof;
 
   @override
   Widget build(BuildContext context) => DnPanel(
@@ -81,9 +91,19 @@ class _BankProofCardState extends State<BankProofCard> with Busy {
             title: 'Not able to verify your account?',
             meta: 'Upload a cancelled cheque or your bank passbook instead — we’ll verify it manually before your loan is sent.',
           ),
-          UploadSlot(label: 'Cheque or passbook', added: _added, onTap: () => setState(() => _added = true)),
+          UploadSlot(label: 'Cheque or passbook', added: _proof != null, onTap: () async {
+            final f = await pickFile(context, PickFrom.files, name: 'bank_proof');
+            if (f != null && mounted) setState(() => _proof = f);
+          }),
           const SizedBox(height: 12),
-          DnButton.outline('Upload proof & continue', loading: busy, onPressed: _added ? () => _confirmAndGo(context, act) : null),
+          DnButton.outline('Upload proof & continue', loading: busy, onPressed: _proof == null
+              ? null
+              : () {
+                  final typed = widget.account;
+                  final account = typed?.call();
+                  if (typed != null && account == null) return;
+                  _confirmAndGo(context, act, account: account, proof: _proof);
+                }),
         ]),
       );
 }
@@ -127,7 +147,7 @@ class _OtherAccountScreenState extends State<OtherAccountScreen> with Busy {
         step: 10,
         of: 11,
         bottom: OfferAction('Verify & confirm', trust: false, loading: busy, onPressed: () {
-          if (_validate()) _confirmAndGo(context, act);
+          if (_validate()) _confirmAndGo(context, act, account: _typed);
         }),
         children: [
           DnField(
@@ -154,9 +174,11 @@ class _OtherAccountScreenState extends State<OtherAccountScreen> with Busy {
             child: DnButton.text('Use my salary account instead', onPressed: busy ? null : () => context.canPop() ? context.pop() : context.go('/loan/disbursal-account')),
           ),
           const SizedBox(height: 8),
-          const BankProofCard(),
+          BankProofCard(account: () => _validate() ? _typed : null),
         ],
       );
+
+  Account get _typed => (no: _acct.text, ifsc: _ifsc.text, holder: _name.text.trim());
 }
 
 class _Upper extends TextInputFormatter {
@@ -182,7 +204,7 @@ class _MandateScreenState extends State<MandateScreen> with Busy {
         step: 11,
         of: 11,
         bottom: OfferAction(_ok == false ? 'Try again' : 'Continue to your bank', loading: busy || _ok == true, onPressed: () async {
-          final ok = await act(api.simulate);
+          final ok = await act(api.startMandate);
           if (!context.mounted) return;
           setState(() => _ok = ok);
           if (ok) context.go('/loan/status');

@@ -286,11 +286,12 @@ class _EmailBlockState extends State<_EmailBlock> with Busy {
     setState(() => _err = emailError(_email.text));
     if (_err != null) return;
     run(() async {
-      try {
-        await api.sendOtp(_email.text.trim());
-      } on ApiException catch (e) {
-        if (widget.work && e.code == 'EMAIL_UNDELIVERABLE') return _set(EmailStatus.undeliverable);
-        rethrow;
+      // A work address that can't receive mail is recorded as undeliverable (the credit team checks
+      // the employer another way); a personal one must verify.
+      final delivered = await api.sendEmailCode(_email.text.trim(), work: widget.work);
+      if (!delivered) {
+        if (widget.work) return _set(EmailStatus.undeliverable);
+        throw const ApiException('EMAIL_UNDELIVERABLE');
       }
       _status == EmailStatus.sent ? _resend.used() : _resend.start();
       _set(EmailStatus.sent);
@@ -299,7 +300,7 @@ class _EmailBlockState extends State<_EmailBlock> with Busy {
 
   void _verify(String code) => run(() async {
     try {
-      await api.verifyOtp(code);
+      await api.verifyEmailCode(code, work: widget.work);
     } on ApiException catch (e) {
       if (!mounted) return;
       if (e.code == 'OTP_LOCKED') {
@@ -416,7 +417,10 @@ class _SalaryAccountScreenState extends State<SalaryAccountScreen> with Busy {
     super.dispose();
   }
 
-  void _add() => setState(() => _files.add(PickedFile('Bank_statement_${_files.length + 1}.pdf')));
+  Future<void> _add() async {
+    final f = await pickFile(context, PickFrom.files, name: 'Bank_statement_${_files.length + 1}');
+    if (f != null) setState(() => _files.add(f));
+  }
 
   void _continue() {
     setState(() {
@@ -435,7 +439,7 @@ class _SalaryAccountScreenState extends State<SalaryAccountScreen> with Busy {
       'pdfPassword': _pdfPw.text,
     };
     run(() async {
-      await api.saveStep('bank', data);
+      await api.saveStep('bank', data, files: {for (final (i, f) in _files.indexed) 'statement$i': f});
       savedSteps['bank'] = {...data, 'account': maskTail(_account.text), 'pdfPassword': ''};
       if (mounted) context.push('/signup/payslips');
     });
@@ -568,13 +572,14 @@ class _PayslipsScreenState extends State<PayslipsScreen> with Busy {
     super.dispose();
   }
 
-  // ponytail: no picker in the demo; a tap "picks" a payslip named after its month.
-  void _pick(int i, bool photo) {
+  Future<void> _pick(int i, bool photo) async {
     final now = DateTime.now();
     final month = dayMonth(DateTime(now.year, now.month - 1 - i)).split(' ').last;
-    final f = PickedFile('Payslip_$month.${photo ? 'jpg' : 'pdf'}');
+    // The picker refuses a file over the limit with a toast; the tile error is for the demo's stand-ins.
+    final f = await pickFile(context, photo ? PickFrom.camera : PickFrom.files, name: 'Payslip_$month');
+    if (f == null || !mounted) return;
     setState(() {
-      _errs[i] = uploadError(f.name, f.bytes);
+      _errs[i] = uploadProblem(f);
       if (_errs[i] == null) _files[i] = f;
       _err = null;
     });
@@ -583,7 +588,7 @@ class _PayslipsScreenState extends State<PayslipsScreen> with Busy {
   void _continue() {
     if (_files.contains(null)) return setState(() => _err = 'Upload all 3 salary slips to continue.');
     run(() async {
-      await saveStep('payslips', {for (var i = 0; i < 3; i++) 'slip${i + 1}': _files[i]!.name});
+      await saveStep('payslips', {for (var i = 0; i < 3; i++) 'slip${i + 1}': _files[i]!.name, 'pdfPassword': _pdfPw.text}, files: {for (var i = 0; i < 3; i++) 'slip${i + 1}': _files[i]!});
       if (mounted) context.push('/signup/aadhaar');
     });
   }

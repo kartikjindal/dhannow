@@ -1,4 +1,6 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -58,9 +60,15 @@ class _AgreementScreenState extends State<AgreementScreen> with Busy {
                 ? null
                 : Column(mainAxisSize: MainAxisSize.min, children: [
                     OfferAction('Sign with Aadhaar', loading: busy, onPressed: () async {
-                      if (await act(api.sign) && context.mounted) {
+                      final ok = await act(api.sign, quiet: const {'ESIGN_UNAVAILABLE'});
+                      if (!context.mounted) return;
+                      if (ok) {
                         showDnToast(context, 'Agreement signed');
                         context.go('/loan/sanctioned');
+                      } else if (lastError?.code == 'ESIGN_UNAVAILABLE') {
+                        // The provider is down: drawing is the fallback the server offers.
+                        showDnToast(context, lastError!.message);
+                        context.push('/loan/sign-draw');
                       }
                     }),
                     DnButton.text('Can’t use Aadhaar? Sign by drawing', onPressed: busy ? null : () => context.push('/loan/sign-draw')),
@@ -135,7 +143,8 @@ class _SignDrawScreenState extends State<SignDrawScreen> with Busy {
               setState(() => _empty = true);
               return;
             }
-            if (await act(api.sign) && context.mounted) context.go('/loan/sanctioned');
+            final png = demoControls ? Uint8List(0) : await signaturePng(_strokes);
+            if (await act(() => api.signDrawn(png)) && context.mounted) context.go('/loan/sanctioned');
           }),
           DnButton.text('Use Aadhaar e-sign instead', onPressed: busy ? null : () => context.canPop() ? context.pop() : context.go('/loan/sanction-letter')),
         ]),
@@ -161,6 +170,32 @@ class _SignDrawScreenState extends State<SignDrawScreen> with Busy {
           if (busy) ...[const SizedBox(height: DnTokens.gap), const DnBanner(title: 'Saving signature…', icon: Icons.hourglass_top_rounded)],
         ],
       );
+}
+
+/// The drawn strokes as a PNG on white, cropped to the ink with a margin (`offer/esign`).
+Future<Uint8List> signaturePng(List<List<Offset>> strokes) async {
+  final points = strokes.expand((s) => s);
+  var box = Rect.fromPoints(points.first, points.first);
+  for (final p in points) {
+    box = box.expandToInclude(Rect.fromPoints(p, p));
+  }
+  box = box.inflate(16);
+  final rec = ui.PictureRecorder();
+  final canvas = Canvas(rec)
+    ..drawColor(Colors.white, BlendMode.src)
+    ..translate(-box.left, -box.top);
+  final ink = Paint()
+    ..color = Colors.black
+    ..strokeWidth = 2.6
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round
+    ..style = PaintingStyle.stroke;
+  for (final s in strokes) {
+    s.length == 1 ? canvas.drawCircle(s.first, 1.3, ink) : canvas.drawPath(Path()..addPolygon(s, false), ink);
+  }
+  final image = await rec.endRecording().toImage(box.width.ceil(), box.height.ceil());
+  final data = await image.toByteData(format: ui.ImageByteFormat.png);
+  return data!.buffer.asUint8List();
 }
 
 /// The drawing box. It claims the pointer at once so strokes don't scroll the page.

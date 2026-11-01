@@ -231,7 +231,7 @@ class ExtensionPayScreen extends StatelessWidget {
                     style: DnText.hint,
                   ),
                   onSubmit: ({required utr, required paidOn, paise, required screenshot}) async {
-                    await api.payExtension(utr: utr, paidOn: paidOn);
+                    await api.payExtension(utr: utr, paidOn: paidOn, screenshot: screenshot);
                     if (context.mounted) context.go('/extension/done');
                   },
                 ),

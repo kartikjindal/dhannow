@@ -5,12 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/api.dart';
+import '../../core/files.dart';
 import '../../core/theme/theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/widgets.dart';
 import 'common.dart';
 
-/// B3 Verify with DigiLocker. The custom-tab round trip is simulated; three failures open E10.
+/// B3 Verify with DigiLocker in a Custom Tab; three failures (or the day's sessions used up) open E10.
 class DigilockerScreen extends StatefulWidget {
   const DigilockerScreen({super.key});
 
@@ -22,13 +23,13 @@ class _DigilockerScreenState extends State<DigilockerScreen> with Busy {
   int _fails = 0;
 
   Future<void> _connect() async {
-    if (await act(api.simulate)) {
+    if (await act(api.verifyDigilocker, quiet: const {'DIGILOCKER_EXHAUSTED'})) {
       if (mounted) context.push('/loan/references');
       return;
     }
     if (!mounted) return;
     setState(() => _fails++);
-    if (_fails >= 3) context.push('/loan/digilocker/upload');
+    if (_fails >= 3 || lastError?.code == 'DIGILOCKER_EXHAUSTED') context.push('/loan/digilocker/upload');
   }
 
   @override
@@ -92,8 +93,10 @@ class AadhaarUploadScreen extends StatefulWidget {
 }
 
 class _AadhaarUploadScreenState extends State<AadhaarUploadScreen> with Busy {
-  bool _front = false;
-  bool _back = false;
+  PickedFile? _front;
+  PickedFile? _back;
+
+  Future<PickedFile?> _pick(String side) => pickFile(context, PickFrom.files, name: 'Aadhaar_$side');
 
   @override
   Widget build(BuildContext context) => StepScaffold(
@@ -104,10 +107,10 @@ class _AadhaarUploadScreenState extends State<AadhaarUploadScreen> with Busy {
           'Upload & continue',
           trust: false,
           loading: busy,
-          onPressed: !(_front && _back)
+          onPressed: _front == null || _back == null
               ? null
               : () async {
-                  if (await act(api.simulate) && context.mounted) context.push('/loan/references');
+                  if (await act(() => api.uploadAadhaar(_front!, _back!)) && context.mounted) context.push('/loan/references');
                 },
         ),
         children: [
@@ -118,9 +121,15 @@ class _AadhaarUploadScreenState extends State<AadhaarUploadScreen> with Busy {
             style: DnText.body,
           ),
           const SizedBox(height: 16),
-          UploadSlot(label: 'Front side', added: _front, onTap: () => setState(() => _front = true)),
+          UploadSlot(label: 'Front side', added: _front != null, onTap: () async {
+            final f = await _pick('front');
+            if (f != null && mounted) setState(() => _front = f);
+          }),
           const SizedBox(height: 10),
-          UploadSlot(label: 'Back side', added: _back, onTap: () => setState(() => _back = true)),
+          UploadSlot(label: 'Back side', added: _back != null, onTap: () async {
+            final f = await _pick('back');
+            if (f != null && mounted) setState(() => _back = f);
+          }),
           const SizedBox(height: 6),
           Align(
             alignment: Alignment.centerLeft,
@@ -319,10 +328,10 @@ const _poses = [
   ('Turn left', 'Then you’re done'),
 ];
 
-/// B6b Guided capture: straight, right, left, then upload for staff review.
+/// B6b Guided capture: straight, right, left, then upload for staff review (v1: REVIEW).
 ///
-/// ponytail: no camera plugin yet, so a button stands in for each pose; the camera preview and the
-/// `LivenessPort` check replace it when the selfie API ships.
+/// ponytail: each pose is one photo from the phone's own front camera (`image_picker`, no camera
+/// plugin or preview); swap in a live preview with the `camera` package if guidance needs it.
 class SelfieCaptureScreen extends StatefulWidget {
   const SelfieCaptureScreen({super.key});
 
@@ -332,15 +341,29 @@ class SelfieCaptureScreen extends StatefulWidget {
 
 class _SelfieCaptureScreenState extends State<SelfieCaptureScreen> with Busy {
   int _pose = 0;
+  final _frames = <PickedFile>[];
 
   static const _prompts = ['Look straight at the camera', 'Slowly turn your head right', 'Slowly turn your head left'];
 
   Future<void> _capture() async {
     if (_pose < 3) {
+      final f = await pickFile(context, PickFrom.selfie, name: 'selfie-${['straight', 'right', 'left'][_pose]}');
+      if (f == null || !mounted) return;
       HapticFeedback.lightImpact();
-      setState(() => _pose++);
+      setState(() {
+        _frames.add(f);
+        _pose++;
+      });
     }
-    if (_pose == 3 && await act(api.uploadSelfie) && mounted) context.push('/loan/sanction-letter');
+    if (_pose < 3) return;
+    String? status;
+    final ok = await act(() async => status = await api.uploadSelfie(_frames), quiet: const {'SELFIE_ATTEMPTS_EXCEEDED'});
+    if (!mounted) return;
+    // Failed to send (offline, server): the frames stay, and "Try again" sends them again.
+    if (!ok && lastError?.code != 'SELFIE_ATTEMPTS_EXCEEDED') return;
+    // REVIEW: staff check the photos; out of tries: staff check the last ones. Either way, carry on.
+    showDnToast(context, ok && status == 'PASS' ? 'Selfie verified' : (lastError?.message ?? 'Photos sent. Our team will check them.'));
+    context.push('/loan/sanction-letter');
   }
 
   @override
@@ -359,7 +382,7 @@ class _SelfieCaptureScreenState extends State<SelfieCaptureScreen> with Busy {
         const SizedBox(height: 4),
         Text(done ? 'All done' : _prompts[_pose], style: DnText.section.copyWith(fontSize: 18)),
         const SizedBox(height: 4),
-        const Text('Keep your face inside the circle. It moves on by itself.', style: DnText.body),
+        const Text('Tap Capture, take the photo with your front camera, then come back here.', style: DnText.body),
         const SizedBox(height: 18),
         Center(child: _Oval(progress: _pose / 3, pose: _pose)),
         const SizedBox(height: 18),

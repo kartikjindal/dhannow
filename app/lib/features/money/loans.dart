@@ -230,7 +230,7 @@ class ReloanScreen extends StatelessWidget {
                   const SizedBox(height: 14),
                   DnLevelBar(level: level.level, labels: [for (final p in level.ladderPaise) '${p ~/ 100000}k'], dark: true),
                   const SizedBox(height: 18),
-                  DnButton('Borrow again', arrow: true, block: true, onPressed: () => context.go('/loan/amount')),
+                  const _BorrowAgain(),
                 ]),
               ),
               const SizedBox(height: 12),
@@ -328,4 +328,32 @@ class _Receipt extends StatelessWidget {
       DnButton.ghost('Back to dashboard', block: true, onPressed: () => context.go('/dashboard')),
     ]);
   }
+}
+
+/// C10: starts the new application on the saved KYC (`POST /api/applications/reborrow`), then the
+/// offer journey; past delinquency lands on A14.
+class _BorrowAgain extends StatefulWidget {
+  const _BorrowAgain();
+
+  @override
+  State<_BorrowAgain> createState() => _BorrowAgainState();
+}
+
+class _BorrowAgainState extends State<_BorrowAgain> {
+  bool _busy = false;
+
+  Future<void> _go() async {
+    setState(() => _busy = true);
+    try {
+      final stage = await api.reborrow();
+      if (mounted) context.go(stage == Stage.rejected ? '/application-rejected' : '/loan/amount');
+    } on ApiException catch (e) {
+      if (mounted) showApiError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => DnButton('Borrow again', arrow: true, block: true, loading: _busy, onPressed: _go);
 }

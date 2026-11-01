@@ -1,4 +1,8 @@
+import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart' show ChangeNotifier;
+
+import '../files.dart';
 
 import '../brand.dart';
 import 'demo_api.dart';
@@ -53,9 +57,20 @@ abstract class Api extends ChangeNotifier {
   Future<({Stage stage, String route})> journey();
 
   // ---- onboarding (A1–A13) ----
-  Future<void> saveStep(String step, [Map<String, Object?> data = const {}]);
+  /// Saves one sign-up step; [files] are uploaded first (statements, payslips, card sides).
+  Future<void> saveStep(String step, Map<String, Object?> data, {Map<String, PickedFile> files = const {}});
+
+  /// A6: emails a code to the address. False when a work address can't receive it (marked
+  /// undeliverable; the credit team checks the employer another way).
+  Future<bool> sendEmailCode(String email, {required bool work});
+  Future<void> verifyEmailCode(String code, {required bool work});
   Future<void> submitApplication({DateTime? dob});
-  Future<void> answerQuestion(String answer);
+
+  /// A13: the bureau's question and options, or null when there is none to answer.
+  Future<({String question, List<String> options})?> creditQuestion();
+
+  /// [answer] null: "I don't recognise any of these" (the credit team takes it from here).
+  Future<void> answerQuestion(String? answer);
 
   // ---- profile and level ----
   Future<Customer> me();
@@ -66,15 +81,36 @@ abstract class Api extends ChangeNotifier {
   Future<Quote> quote(int principalPaise);
   Future<void> chooseAmount(int paise);
   Future<void> acceptKfs();
+  /// B8 Aadhaar e-sign in a Custom Tab; returns once the server has the signature.
   Future<void> sign();
+
+  /// B8b: the drawn signature as a PNG.
+  Future<void> signDrawn(Uint8List png);
   Future<void> saveReferences(List<({String name, String mobile, String relation})> refs);
-  Future<void> uploadSelfie();
+  /// B6b: the three guided frames (straight, right, left). Returns the check's status; `REVIEW`
+  /// means staff look at them (v1 has no automatic liveness).
+  Future<String> uploadSelfie(List<PickedFile> frames);
+
+  /// B3: DigiLocker in a Custom Tab; throws when it did not complete.
+  Future<void> verifyDigilocker();
+
+  /// E10: both sides of the Aadhaar card, checked by hand.
+  Future<void> uploadAadhaar(PickedFile front, PickedFile back);
+
+  /// B11: eNACH in a Custom Tab (flags OFF in v1).
+  Future<void> startMandate();
   Future<void> saveAddress(String address);
-  Future<void> confirmDisbursalAccount();
+  /// B10: the account on file, or a different one ([accountNo], [ifsc], [holder]) checked with
+  /// ₹1, or by hand from a cheque or passbook [proof].
+  Future<void> confirmDisbursalAccount({String? accountNo, String? ifsc, String? holder, PickedFile? proof});
   Future<List<StatusStep>> applicationStatus();
 
-  /// Offer steps whose provider hand-off (DigiLocker, e-sign, eNACH) is not in the app yet.
+  /// Location capture for B7 (not in the app yet: the typed address is the way in).
   Future<void> simulate();
+
+  /// C10 Borrow again: a new application on the saved KYC. Returns where it landed (offer, or
+  /// rejected for past delinquency).
+  Future<Stage> reborrow();
 
   // ---- loan, repay, documents (C1–C14) ----
   Future<Loan?> currentLoan();
@@ -85,7 +121,8 @@ abstract class Api extends ChangeNotifier {
   /// A short-lived link to one document (5 minutes), opened in the browser.
   Future<String?> documentUrl(LoanDoc doc);
   Future<PayTo> payTo();
-  Future<void> submitPayment({required String utr, required DateTime paidOn, required int paise, bool screenshot = false});
+  /// C6. The server needs the payment [screenshot] from a borrower.
+  Future<void> submitPayment({required String utr, required DateTime paidOn, required int paise, PickedFile? screenshot});
   Future<List<Notice>> notices();
 
   // ---- extension (C12–C12d), EMI (C13) ----
@@ -95,7 +132,7 @@ abstract class Api extends ChangeNotifier {
   /// [reason] `NOT_NOW` or `DID_NOT_ASK` (EXT: the borrower never asked for it).
   Future<void> declineExtension(String reason);
   Future<void> confirmExtension(String otp);
-  Future<void> payExtension({required String utr, required DateTime paidOn});
+  Future<void> payExtension({required String utr, required DateTime paidOn, PickedFile? screenshot});
   Future<EmiOffer?> emiOffer();
   Future<void> sendEmiOtp(EmiOffer offer);
   Future<void> acceptEmi(EmiOffer offer, String otp);

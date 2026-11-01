@@ -17,13 +17,19 @@ extension OfferApi on Api {
 mixin Busy<T extends StatefulWidget> on State<T> {
   bool busy = false;
 
-  Future<bool> act(Future<void> Function() call) async {
+  /// The failure of the last [act], for screens that branch on it.
+  ApiException? lastError;
+
+  /// [quiet] codes are left to the caller (no toast).
+  Future<bool> act(Future<void> Function() call, {Set<String> quiet = const {}}) async {
     setState(() => busy = true);
+    lastError = null;
     try {
       await call();
       return true;
     } on ApiException catch (e) {
-      if (mounted) {
+      lastError = e;
+      if (mounted && !quiet.contains(e.code)) {
         if (e.code == 'OFFLINE') {
         context.push('/offline');
       } else if (e.code == 'SERVER_ERROR') {
@@ -112,10 +118,7 @@ class OfferAction extends StatelessWidget {
       ]);
 }
 
-/// A photo/file slot (E10 Aadhaar sides, B10 bank proof).
-///
-/// ponytail: no picker plugin yet, so a tap marks the slot added; the system photo picker (CC-56)
-/// and client-side compression (CC-49) arrive with the upload API.
+/// A photo/file slot (E10 Aadhaar sides, B10 bank proof); [onTap] opens the picker.
 class UploadSlot extends StatelessWidget {
   const UploadSlot({super.key, required this.label, required this.added, required this.onTap});
   final String label;

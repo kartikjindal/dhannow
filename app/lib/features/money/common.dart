@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/api.dart';
+import '../../core/files.dart';
 import '../../core/format.dart';
 import '../../core/theme/theme.dart';
 import '../../core/theme/tokens.dart';
@@ -197,7 +198,7 @@ class PaidForm extends StatefulWidget {
   final int? maxPaise;
   final DateTime? firstDate;
   final Widget? footer;
-  final Future<void> Function({required String utr, required DateTime paidOn, int? paise, required bool screenshot}) onSubmit;
+  final Future<void> Function({required String utr, required DateTime paidOn, int? paise, required PickedFile screenshot}) onSubmit;
 
   @override
   State<PaidForm> createState() => _PaidFormState();
@@ -208,7 +209,8 @@ class _PaidFormState extends State<PaidForm> {
   late final _amount = TextEditingController(text: widget.maxPaise == null ? null : _paiseText(widget.maxPaise!));
   final _date = TextEditingController();
   late DateTime _paidOn = _today;
-  bool _shot = false;
+  PickedFile? _shot;
+  String? _shotError;
   bool _busy = false;
   String? _refError;
   String? _amountError;
@@ -260,17 +262,19 @@ class _PaidFormState extends State<PaidForm> {
         amountError = 'You owe ${inr(widget.maxPaise!)}. Enter up to that amount';
       }
     }
+    final shotError = _shot == null ? 'Attach the screenshot of your payment' : null;
     setState(() {
       _refError = refError;
       _amountError = amountError;
+      _shotError = shotError;
     });
-    if (refError != null || amountError != null) return;
+    if (refError != null || amountError != null || shotError != null) return;
     setState(() => _busy = true);
     try {
-      await widget.onSubmit(utr: _ref.text.trim().toUpperCase(), paidOn: _paidOn, paise: paise, screenshot: _shot);
+      await widget.onSubmit(utr: _ref.text.trim().toUpperCase(), paidOn: _paidOn, paise: paise, screenshot: _shot!);
     } on ApiException catch (e) {
       if (!mounted) return;
-      if (e.code == 'UTR_DUPLICATE') {
+      if (e.code == 'UTR_DUPLICATE' || e.code == 'DUPLICATE_UTR') {
         setState(() => _refError = e.message);
       } else {
         showApiError(context, e);
@@ -320,9 +324,23 @@ class _PaidFormState extends State<PaidForm> {
             ),
           ],
           const SizedBox(height: 14),
-          const Text('Payment screenshot (optional)', style: DnText.label),
+          const Text('Payment screenshot', style: DnText.label),
           const SizedBox(height: 7),
-          _ShotTile(attached: _shot, onTap: () => setState(() => _shot = !_shot)),
+          _ShotTile(
+            attached: _shot != null,
+            onTap: () async {
+              if (_shot != null) return setState(() => _shot = null);
+              final f = await pickFile(context, PickFrom.images, name: 'payment');
+              if (f != null && mounted) {
+                setState(() {
+                  _shot = f;
+                  _shotError = null;
+                });
+              }
+            },
+          ),
+          if (_shotError != null)
+            Padding(padding: const EdgeInsets.only(top: 6), child: Text(_shotError!, style: const TextStyle(fontSize: 12, color: DnTokens.err))),
           const SizedBox(height: 18),
           DnButton(widget.buttonLabel, block: true, loading: _busy, onPressed: _submit),
           const SizedBox(height: 10),
@@ -331,8 +349,7 @@ class _PaidFormState extends State<PaidForm> {
       );
 }
 
-/// ponytail: simulated attach (no file_picker in pubspec yet); add the system photo picker (CC-56)
-/// when uploads land.
+/// The payment screenshot: the server needs one with every borrower payment.
 class _ShotTile extends StatelessWidget {
   const _ShotTile({required this.attached, required this.onTap});
   final bool attached;
@@ -355,7 +372,7 @@ class _ShotTile extends StatelessWidget {
             child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
               Icon(attached ? Icons.check_circle_rounded : Icons.add_photo_alternate_outlined, size: 20, color: attached ? DnTokens.ok : DnTokens.slate),
               const SizedBox(width: 8),
-              Flexible(child: Text(attached ? 'Screenshot attached · tap to remove' : 'Attach screenshot · image under 8 MB', style: DnText.strong)),
+              Flexible(child: Text(attached ? 'Screenshot attached · tap to remove' : 'Attach screenshot · JPG or PNG up to 5 MB', style: DnText.strong)),
             ]),
           ),
         ),

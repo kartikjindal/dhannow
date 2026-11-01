@@ -130,11 +130,21 @@ void main() {
   testWidgets('C6 → C7: a valid reference records the payment', (t) async {
     await _pump(t, '/repay');
     await _enter(t, 'UPI reference / UTR', '429011238876');
+    await _tap(t, find.textContaining('Attach screenshot'));
     await _tap(t, find.widgetWithText(DnButton, 'I’ve paid'));
     expect(_path, '/repay/sent');
     expect(api.loan!.repayment, Repayment.pendingVerification);
     expect(find.text('Payment recorded'), findsOneWidget);
     expect(find.text('PENDING VERIFICATION'), findsOneWidget);
+  });
+
+  testWidgets('C6: the payment screenshot is required (the server refuses a payment without one)', (t) async {
+    await _pump(t, '/repay');
+    await _enter(t, 'UPI reference / UTR', '429011238876');
+    await _tap(t, find.widgetWithText(DnButton, 'I’ve paid'));
+    expect(_path, '/repay');
+    expect(find.text('Attach the screenshot of your payment'), findsOneWidget);
+    expect(api.loan!.repayment, Repayment.unpaid);
   });
 
   testWidgets('C6: a short reference is refused before any call', (t) async {
@@ -149,6 +159,7 @@ void main() {
   testWidgets('C6: an already used reference shows the message on the field', (t) async {
     await _pump(t, '/repay');
     await _enter(t, 'UPI reference / UTR', '000000000000');
+    await _tap(t, find.textContaining('Attach screenshot'));
     await _tap(t, find.widgetWithText(DnButton, 'I’ve paid'));
     expect(_path, '/repay');
     expect(find.text(const ApiException('UTR_DUPLICATE').message), findsOneWidget);
@@ -175,6 +186,7 @@ void main() {
     await _tap(t, confirm);
     expect(_path, '/extension/pay');
     await _enter(t, 'UPI reference / UTR', '429017733201');
+    await _tap(t, find.textContaining('Attach screenshot'));
     await _tap(t, find.byWidgetPredicate((w) => w is DnButton && w.label.startsWith('I’ve paid')));
     expect(_path, '/extension/done');
     expect(find.textContaining('Loan extended to'), findsOneWidget);

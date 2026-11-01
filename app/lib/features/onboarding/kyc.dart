@@ -19,16 +19,18 @@ class _CardSides extends StatelessWidget {
   final void Function(bool front, PickedFile? file) onChanged;
   final TextEditingController pdfPw;
 
-  // ponytail: no picker in the demo; Take photo gives a JPG, Choose file a PDF.
-  PickedFile _fake(String side, bool photo) => PickedFile('${name.split(' ').first}_$side.${photo ? 'jpg' : 'pdf'}');
+  Future<void> _pick(BuildContext context, bool front, bool photo) async {
+    final f = await pickFile(context, photo ? PickFrom.camera : PickFrom.files, name: '${name.split(' ').first}_${front ? 'front' : 'back'}');
+    if (f != null) onChanged(front, f);
+  }
 
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      UploadTile(title: 'Front of $name', file: front, onPick: (p) => onChanged(true, _fake('front', p)), onRemove: () => onChanged(true, null)),
+      UploadTile(title: 'Front of $name', file: front, onPick: (p) => _pick(context, true, p), onRemove: () => onChanged(true, null)),
       const SizedBox(height: 10),
-      UploadTile(title: 'Back of $name', file: back, onPick: (p) => onChanged(false, _fake('back', p)), onRemove: () => onChanged(false, null)),
+      UploadTile(title: 'Back of $name', file: back, onPick: (p) => _pick(context, false, p), onRemove: () => onChanged(false, null)),
       if ((front?.pdf ?? false) || (back?.pdf ?? false)) ...[const SizedBox(height: 16), PdfPasswordField(controller: pdfPw, what: 'card file is')],
     ],
   );
@@ -62,7 +64,7 @@ class _AadhaarScreenState extends State<AadhaarScreen> with Busy {
     });
     if (_numberErr != null || _err != null) return;
     run(() async {
-      await api.saveStep('aadhaar', {'aadhaar': _number.text, 'front': _front!.name, 'back': _back!.name, 'pdfPassword': _pdfPw.text});
+      await api.saveStep('aadhaar', {'aadhaar': _number.text, 'front': _front!.name, 'back': _back!.name, 'pdfPassword': _pdfPw.text}, files: {'front': _front!, 'back': _back!});
       savedSteps['aadhaar'] = {'last4': _number.text.substring(8)};
       if (mounted) context.push('/signup/pan-card');
     });
@@ -117,7 +119,7 @@ class _PanCardScreenState extends State<PanCardScreen> with Busy {
   void _continue() {
     if (_front == null || _back == null) return setState(() => _err = 'Upload both the front and the back of your PAN card to continue.');
     run(() async {
-      await saveStep('pan-card', {'front': _front!.name, 'back': _back!.name});
+      await saveStep('pan-card', {'front': _front!.name, 'back': _back!.name, 'pdfPassword': _pdfPw.text}, files: {'front': _front!, 'back': _back!});
       if (mounted) context.push('/signup/consent');
     });
   }

@@ -121,9 +121,10 @@ void main() {
     expect(passwordError('abc12345!'), isNull);
     expect(passwordError('abcdefgh'), isNotNull);
     // CC-49: PDFs over 5 MB are refused; photos are compressed instead.
-    expect(uploadError('slip.pdf', 6 * 1024 * 1024), isNotNull);
-    expect(uploadError('slip.pdf', 4 * 1024 * 1024), isNull);
-    expect(uploadError('slip.jpg', 6 * 1024 * 1024), isNull);
+    expect(uploadProblem(const PickedFile('slip.pdf', bytes: 6 * 1024 * 1024)), isNotNull);
+    expect(uploadProblem(const PickedFile('slip.pdf', bytes: 4 * 1024 * 1024)), isNull);
+    expect(uploadProblem(const PickedFile('slip.jpg', bytes: 6 * 1024 * 1024)), isNotNull); // the server's 5 MB is for photos too
+    expect(uploadProblem(const PickedFile('slip.heic')), isNotNull);
   });
 
   testWidgets('A1: Terms only tick on Agree, PAN is checked, Continue saves and sends the code', (t) async {

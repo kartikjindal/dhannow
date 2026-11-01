@@ -32,7 +32,7 @@ class _SubmittedScreenState extends State<SubmittedScreen> with Busy {
     setState(() => _uanErr = _uan.text.isEmpty || _uan.text.length == 12 ? null : 'Enter all 12 digits of your UAN, or leave it empty.');
     if (_uanErr != null) return;
     run(() async {
-      await api.saveStep('address-proof', {for (final MapEntry(:key, :value) in _files.entries) key: value.name, if (_uan.text.isNotEmpty) 'uan': _uan.text});
+      await api.saveStep('address-proof', {for (final MapEntry(:key, :value) in _files.entries) key: value.name, if (_uan.text.isNotEmpty) 'uan': _uan.text}, files: _files);
       if (mounted) showDnToast(context, 'Saved');
     });
   }
@@ -82,7 +82,10 @@ class _SubmittedScreenState extends State<SubmittedScreen> with Busy {
               UploadTile(
                 title: p,
                 file: _files[p],
-                onPick: (photo) => setState(() => _files[p] = PickedFile('${p.replaceAll(' ', '_')}.${photo ? 'jpg' : 'pdf'}')),
+                onPick: (photo) async {
+                  final f = await pickFile(context, photo ? PickFrom.camera : PickFrom.files, name: p.replaceAll(' ', '_'));
+                  if (f != null) setState(() => _files[p] = f);
+                },
                 onRemove: () => setState(() => _files.remove(p)),
               ),
               const SizedBox(height: 10),
@@ -126,17 +129,14 @@ class CreditQuestionScreen extends StatefulWidget {
   State<CreditQuestionScreen> createState() => _CreditQuestionScreenState();
 }
 
-// ponytail: demo question until the bureau challenge endpoint lands (Phase 2); the server sends
-// the question and options.
-const _question = 'Which of these lenders have you had a loan or card with?';
-const _options = ['HDFC Bank', 'Bajaj Finance', 'ICICI Bank', 'None of these'];
-
 class _CreditQuestionScreenState extends State<CreditQuestionScreen> with Busy {
-  bool _loaded = false;
+  ({String question, List<String> options})? _q;
   String? _pick;
   String? _done;
 
-  void _answer(String answer, String endState) => run(() async {
+  bool get _loaded => _q != null;
+
+  void _answer(String? answer, String endState) => run(() async {
     await api.answerQuestion(answer);
     if (mounted) setState(() => _done = endState);
   });
@@ -160,8 +160,10 @@ class _CreditQuestionScreenState extends State<CreditQuestionScreen> with Busy {
               block: true,
               loading: busy,
               onPressed: () => run(() async {
-                await api.simulate(); // TODO(phase-11): the question from verify/bureau `derived.bureauChallenge`
-                if (mounted) setState(() => _loaded = true);
+                final q = await api.creditQuestion();
+                if (!mounted) return;
+                // No question waiting (answered elsewhere, or closed by the bureau): the team has it.
+                q == null ? setState(() => _done = 'Thanks — we’ll take it from here') : setState(() => _q = q);
               }),
             )
           : Column(
@@ -173,7 +175,7 @@ class _CreditQuestionScreenState extends State<CreditQuestionScreen> with Busy {
                 DnButton.ghost(
                   'I don’t recognise any of these',
                   block: true,
-                  onPressed: busy ? null : () => _answer('none', 'Thanks — we’ll take it from here'),
+                  onPressed: busy ? null : () => _answer(null, 'Thanks — we’ll take it from here'),
                 ),
               ],
             ),
@@ -183,9 +185,9 @@ class _CreditQuestionScreenState extends State<CreditQuestionScreen> with Busy {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(_question, style: DnText.section),
+                Text(_q!.question, style: DnText.section),
                 const SizedBox(height: 12),
-                for (final o in _options) ...[DnChoiceCard(title: o, selected: _pick == o, onTap: () => setState(() => _pick = o)), const SizedBox(height: 8)],
+                for (final o in _q!.options) ...[DnChoiceCard(title: o, selected: _pick == o, onTap: () => setState(() => _pick = o)), const SizedBox(height: 8)],
               ],
             ),
           ),

@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -42,7 +43,7 @@ String uuid4() {
 /// every failure to an [ApiException]: no connection → OFFLINE (E3), 5xx → SERVER_ERROR with the
 /// `X-Request-Id` (E4), 401 → one refresh, then SESSION_EXPIRED (E5).
 class ApiClient {
-  ApiClient({required String baseUrl, KeyStore? store, HttpClientAdapter? adapter, this.appVersion, this.deviceName = 'Android phone'})
+  ApiClient({required String baseUrl, KeyStore? store, this.adapter, this.appVersion, this.deviceName = 'Android phone'})
       : store = store ?? SecureStore(),
         dio = Dio(BaseOptions(
           baseUrl: baseUrl,
@@ -52,8 +53,11 @@ class ApiClient {
           validateStatus: (_) => true,
           headers: {'X-Client': 'android', 'Accept': 'application/json'},
         )) {
-    if (adapter != null) dio.httpClientAdapter = adapter;
+    if (adapter != null) dio.httpClientAdapter = adapter!;
   }
+
+  /// Tests swap the transport.
+  final HttpClientAdapter? adapter;
 
   static const _kRefresh = 'refresh_token';
   static const _kDevice = 'device_id';
@@ -165,6 +169,22 @@ class ApiClient {
     }
   }
 
+  final _plain = Dio(BaseOptions(connectTimeout: const Duration(seconds: 15), sendTimeout: const Duration(minutes: 2), validateStatus: (_) => true));
+
+  /// PUT [data] to a presigned storage URL: no auth header, the same Content-Type the URL was
+  /// signed for.
+  Future<void> putBytes(String url, Uint8List data, String contentType) async {
+    if (adapter != null) _plain.httpClientAdapter = adapter!;
+    final Response<dynamic> r;
+    try {
+      r = await _plain.put<dynamic>(url, data: Stream.value(data), options: Options(headers: {Headers.contentTypeHeader: contentType, Headers.contentLengthHeader: data.length}));
+    } on DioException catch (e) {
+      throw ApiException('OFFLINE', null, e.message);
+    }
+    final status = r.statusCode ?? 0;
+    if (status < 200 || status >= 300) throw ApiException('UPLOAD_FAILED', null, 'storage $status');
+  }
+
   static dynamic _unwrap(Response<dynamic> r) {
     final status = r.statusCode ?? 0;
     final requestId = r.headers.value('x-request-id');
@@ -174,6 +194,7 @@ class ApiClient {
     if (error is Map) throw ApiException('${error['code'] ?? 'UNKNOWN'}', requestId, error['message'] as String?);
     if (status == 401 || status == 403) throw ApiException(status == 401 ? 'SESSION_EXPIRED' : 'FORBIDDEN', requestId);
     if (status < 200 || status >= 300) throw ApiException('HTTP_$status', requestId);
-    return body is Map ? body['data'] : body;
+    // `/api/storage/*` answers without the envelope.
+    return body is Map && (body.containsKey('success') || body.containsKey('data')) ? body['data'] : body;
   }
 }

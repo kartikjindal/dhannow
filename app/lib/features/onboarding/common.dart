@@ -1,4 +1,6 @@
 import 'package:dhannow/core/api/api.dart';
+import 'package:dhannow/core/files.dart';
+export 'package:dhannow/core/files.dart' show PickedFile, PickFrom, pickFile, uploadHint, uploadProblem;
 import 'package:dhannow/features/start/auth.dart' show passwordProblem;
 import 'package:dhannow/core/theme/theme.dart';
 import 'package:dhannow/core/theme/tokens.dart';
@@ -25,8 +27,8 @@ const _demoSaved = {
 Map<String, String> saved(String step) => savedSteps[step] ?? (api.onboardingDone.contains(step) ? _demoSaved[step] : null) ?? const {};
 
 /// `api.saveStep` that also remembers the data for view mode.
-Future<void> saveStep(String step, Map<String, String> data) async {
-  await api.saveStep(step, data);
+Future<void> saveStep(String step, Map<String, String> data, {Map<String, PickedFile> files = const {}}) async {
+  await api.saveStep(step, data, files: files);
   savedSteps[step] = data;
 }
 
@@ -120,20 +122,6 @@ bool _verhoeff(String n) {
     c = d[c][p[i % 8][digits[i]]];
   }
   return c == 0;
-}
-
-/// CC-49: images are compressed to 1.5 MB on the phone; a PDF over 5 MB is refused before upload.
-const uploadHint = 'PDF or photo (JPG, PNG, HEIC) up to 5 MB';
-
-String? uploadError(String name, int bytes) =>
-    name.toLowerCase().endsWith('.pdf') && bytes > 5 * 1024 * 1024 ? 'This PDF is over 5 MB. Choose a smaller file or take a photo instead.' : null;
-
-/// A picked file. The demo has no picker: a tap adds a named fake file.
-class PickedFile {
-  const PickedFile(this.name, {this.bytes = 420 * 1024});
-  final String name;
-  final int bytes;
-  bool get pdf => name.toLowerCase().endsWith('.pdf');
 }
 
 final digitsOnly = [FilteringTextInputFormatter.digitsOnly];

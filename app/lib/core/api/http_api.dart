@@ -1,7 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../files.dart';
 import '../format.dart';
 import 'api.dart';
 import 'client.dart';
@@ -21,6 +26,12 @@ class HttpApi extends Api {
 
   /// The app opens E5 when this fires (wired in `main.dart`).
   void Function()? onSessionExpired;
+
+  /// DigiLocker, e-sign and eNACH pages: a Custom Tab, returning when the borrower is back.
+  Future<void> Function(String url) openProvider = openInCustomTab;
+
+  /// Wait between status reads after a provider hand-off (the provider's webhook can lag).
+  Duration pollDelay = const Duration(seconds: 2);
 
   static const _kIntro = 'intro_seen';
   static const _kMobile = 'mobile';
@@ -180,6 +191,8 @@ class HttpApi extends Api {
     final apps = ((await c.get('/api/applications/mine')) as List).cast<Map<String, dynamic>>();
     _app = apps.firstOrNull;
     _journey = _app == null ? null : await c.get('$_a/journey') as Map<String, dynamic>;
+    // A bureau question waits where sign-up stopped short of submit (A13 after a restart too).
+    _question = _status == 'DRAFT' && _journey?['stepKey'] == 'signup.submitted' && await _challenge() != null;
     final open = apps.where((a) => a['loanId'] != null && !const {'CLOSED', 'WRITTEN_OFF', 'CANCELLED'}.contains(a['status'])).firstOrNull;
     _loan = open == null ? null : await _fetchLoan(open, open: true);
   }
@@ -305,7 +318,7 @@ class HttpApi extends Api {
   }
 
   @override
-  Future<void> saveStep(String step, [Map<String, Object?> data = const {}]) => _do(() async {
+  Future<void> saveStep(String step, Map<String, Object?> data, {Map<String, PickedFile> files = const {}}) => _do(() async {
         final d = {for (final e in data.entries) e.key: '${e.value ?? ''}'};
         switch (step) {
           case 'start':
@@ -327,26 +340,83 @@ class HttpApi extends Api {
             _app = await c.post('$_a/self-employed') as Map<String, dynamic>;
           case 'employer':
             await _profile({'employer': d['company'], 'monthlySalaryPaise': _rupees(d['salary'])});
+            await _keepDraft({'salaryPaise': '${_rupees(d['salary']) ?? ''}'});
             await _advance('EMPLOYER');
           case 'email':
-            // TODO(phase-11): the email OTP checks (verify/email/otp, verify/official-email/otp) on A6.
+            // The codes were checked on the screen (sendEmailCode / verifyEmailCode).
             await _keepDraft({'officialEmail': d['work'] ?? ''});
             await _profile({'email': d['personal'], 'officialEmail': d['work']});
             await _advance('EMAIL');
           case 'bank':
             await _profile({'salaryBank': d['bank'], 'salaryAccountNumber': d['account'], 'salaryIfsc': d['ifsc'], 'salaryAccountMobile': d['mobile']});
-            // Statements go up through verify/presign-upload; there is no file picker yet.
-            throw const ApiException('NOT_IN_APP_YET');
+            if (files.isNotEmpty) await _saveDocs('BANK_STATEMENT', files.values, d['pdfPassword']);
+            await _advance('BANK');
+          case 'payslips':
+            final keys = [for (final f in files.values) await _upload(f, 'SALARY_SLIP')];
+            final r = await c.post('$_a/verify/salary', {
+              'monthlySalaryPaise': await _salaryPaise(),
+              'slipObjectKeys': keys,
+              'filePassword': _blankNull(d['pdfPassword']),
+            }) as Map<String, dynamic>?;
+            if (r?['status'] == 'FAIL') throw ApiException('SALARY_NOT_VERIFIED', null, r?['message'] as String?);
+            await _advance('PAYSLIPS');
           case 'aadhaar':
             await _profile({'aadhaar': d['aadhaar']});
-            throw const ApiException('NOT_IN_APP_YET'); // card sides need the upload port
+            await _saveDocs('AADHAAR_CARD_FRONT', [files['front']!], d['pdfPassword']);
+            await _saveDocs('AADHAAR_CARD_BACK', [files['back']!], d['pdfPassword']);
+            await _advance('AADHAAR');
+          case 'pan-card':
+            await _saveDocs('PAN_CARD_FRONT', [files['front']!], d['pdfPassword']);
+            await _saveDocs('PAN_CARD_BACK', [files['back']!], d['pdfPassword']);
+            await _advance('PAN_CARD');
+          case 'address-proof':
+            // ponytail: uploaded into the application's folder, as the web did; no endpoint files these
+            // doc types yet (backend gap), so staff find them only in storage.
+            for (final e in files.entries) {
+              await _upload(e.value, switch (e.key) { 'Gas bill' => 'GAS_BILL', 'Rent agreement' => 'RENT_AGREEMENT', _ => 'ELECTRICITY_BILL' });
+            }
+            final uan = d['uan'];
+            if (uan != null && uan.isNotEmpty) {
+              await c.put('$_a/profile/self', {'uan': uan});
+              await c.post('$_a/verify/employment');
+            }
           default:
-            // payslips, pan-card, address-proof (uploads) and the onboarding-paused form, whose
-            // server takes the full Aadhaar number where A1b asks for the last four.
+            // 'apply' (onboarding paused): the server takes the full Aadhaar number, A1b the last four.
             throw const ApiException('NOT_IN_APP_YET');
         }
         notifyListeners();
       });
+
+  @override
+  Future<bool> sendEmailCode(String email, {required bool work}) => _do(() => _otp(() async {
+        await _draftId();
+        await _profile({work ? 'officialEmail' : 'email': email});
+        if (work) await _keepDraft({'officialEmail': email});
+        final r = await c.post('$_a/verify/${work ? 'official-email' : 'email'}/otp') as Map<String, dynamic>?;
+        return r?['sent'] != false;
+      }));
+
+  @override
+  Future<void> verifyEmailCode(String code, {required bool work}) =>
+      _do(() => _otp(() async => c.post('$_a/verify/${work ? 'official-email' : 'email'}/otp/confirm', {'otp': code})));
+
+  Future<int?> _salaryPaise() async {
+    final kept = int.tryParse(_draft['salaryPaise'] ?? '');
+    if (kept != null) return kept;
+    final p = await c.get('$_a/profile') as Map<String, dynamic>;
+    return (p['monthlySalaryPaise'] as num?)?.toInt();
+  }
+
+  /// The open bureau question on the BUREAU check (`verify/summary`), or null.
+  Future<({String question, List<String> options})?> _challenge() async {
+    final rows = ((await c.get('$_a/verify/summary')) as List).cast<Map<String, dynamic>>();
+    final d = (rows.where((r) => r['checkType'] == 'BUREAU').firstOrNull?['derived'] as Map?) ?? const {};
+    if (d['bureauChallenge'] != true || d['bureauChallengeExhausted'] == true) return null;
+    return (question: '${d['bureauChallengeQuestion'] ?? ''}', options: [for (final o in (d['bureauChallengeOptions'] as List? ?? const [])) '$o']);
+  }
+
+  @override
+  Future<({String question, List<String> options})?> creditQuestion() => _do(_challenge);
 
   @override
   Future<void> submitApplication({DateTime? dob}) => _do(() => _otp(() async {
@@ -380,8 +450,14 @@ class HttpApi extends Api {
   }
 
   @override
-  Future<void> answerQuestion(String answer) => _do(() async {
-        await c.post('$_a/verify/bureau/challenge/answer', {'answer': answer});
+  Future<void> answerQuestion(String? answer) => _do(() async {
+        if (answer == null) {
+          await c.post('$_a/verify/bureau/challenge/skip');
+        } else {
+          await c.post('$_a/verify/bureau/challenge/answer', {'answer': answer});
+          // A refused answer leaves the question open (the server says so in the row, not an error).
+          if (await _challenge() != null) throw const ApiException('BUREAU_CHALLENGE_ANSWER_INVALID');
+        }
         _question = false;
         await _submitKyc();
         await _reload();
@@ -419,7 +495,8 @@ class HttpApi extends Api {
 
   @override
   Future<void> chooseAmount(int paise) => _do(() async {
-        await c.post('$_a/offer/amount', {'amountPaise': paise});
+        // A legacy PRE_APPROVED re-borrow applies straight to disbursal; everyone else walks the offer.
+        await (_status == 'PRE_APPROVED' ? c.post('$_a/apply', {'amountPaise': paise}) : c.post('$_a/offer/amount', {'amountPaise': paise}));
         _chosen = paise;
         notifyListeners();
       });
@@ -430,9 +507,82 @@ class HttpApi extends Api {
         await c.post('$_a/offer/kfs/ack');
       });
 
-  // The Aadhaar e-sign needs a custom tab, the drawn signature its PNG: both ports are to come.
   @override
-  Future<void> sign() async => throw const ApiException('NOT_IN_APP_YET');
+  Future<void> sign() => _do(() async {
+        await c.post('$_a/offer/sanction-letter'); // the pack being signed
+        final r = await c.post('$_a/offer/esign/init', {
+          'successRedirectUrl': '$callbackBase/esign?outcome=success',
+          'failureRedirectUrl': '$callbackBase/esign?outcome=failure',
+        }) as Map<String, dynamic>;
+        final url = _derived(r)['url'];
+        if (_derived(r)['fallback'] == true || url == null) throw const ApiException('ESIGN_UNAVAILABLE');
+        await openProvider('$url');
+        await _poll('$_a/offer/esign/status', 'ESIGN_INCOMPLETE');
+        await _reload();
+      });
+
+  @override
+  Future<void> signDrawn(Uint8List png) => _do(() async {
+        await c.post('$_a/offer/sanction-letter');
+        final r = await c.post('$_a/offer/esign', {'signatureDataUrl': 'data:image/png;base64,${base64Encode(png)}'}) as Map<String, dynamic>;
+        if (r['status'] != 'PASS') throw ApiException('ESIGN_INCOMPLETE', null, r['message'] as String?);
+        await _reload();
+      });
+
+  static Map _derived(Map<String, dynamic>? r) => (r?['derived'] as Map?) ?? const {};
+
+  /// After a hand-off: read [path] until it is PASS (the provider's webhook can lag a few seconds).
+  Future<Map<String, dynamic>> _poll(String path, String failCode) async {
+    for (var i = 0;; i++) {
+      final s = await c.get(path) as Map<String, dynamic>;
+      if (s['status'] == 'PASS') return s;
+      if (s['status'] == 'FAIL' || i == 2) throw ApiException(failCode, null, s['message'] as String?);
+      await Future<void>.delayed(pollDelay);
+    }
+  }
+
+  @override
+  Future<void> verifyDigilocker() => _do(() async {
+        final r = await c.post('$_a/verify/digilocker/init', {'redirectUrl': '$callbackBase/digilocker'}) as Map<String, dynamic>;
+        if (_derived(r)['sessionsExhausted'] == true) throw const ApiException('DIGILOCKER_EXHAUSTED');
+        final url = _derived(r)['url'] ?? (throw const ApiException('DIGILOCKER_FAILED'));
+        await openProvider('$url');
+        for (var i = 0;; i++) {
+          final s = _derived(await c.get('$_a/verify/digilocker/status') as Map<String, dynamic>);
+          if (s['failed'] == true) throw const ApiException('DIGILOCKER_FAILED');
+          if (s['completed'] == true) break;
+          if (i == 2) throw const ApiException('DIGILOCKER_INCOMPLETE');
+          await Future<void>.delayed(pollDelay);
+        }
+        final done = await c.post('$_a/verify/digilocker/complete') as Map<String, dynamic>;
+        if (done['status'] == 'FAIL') throw const ApiException('DIGILOCKER_FAILED');
+        await _advance('OFFER_DIGILOCKER');
+      });
+
+  @override
+  Future<void> uploadAadhaar(PickedFile front, PickedFile back) => _do(() async {
+        await _saveDocs('AADHAAR_FRONT', [front], null);
+        await _saveDocs('AADHAAR_BACK', [back], null);
+        await c.post('$_a/verify/aadhaar-manual');
+        await _advance('OFFER_DIGILOCKER');
+      });
+
+  @override
+  Future<void> startMandate() => _do(() async {
+        final r = await c.post('$_a/offer/mandate/init') as Map<String, dynamic>;
+        final url = _derived(r)['url'];
+        if (url != null) await openProvider('$url');
+        await _poll('$_a/offer/mandate/status', 'MANDATE_INCOMPLETE');
+        await _reload();
+      });
+
+  @override
+  Future<Stage> reborrow() => _do(() async {
+        _app = await c.post('/api/applications/reborrow') as Map<String, dynamic>;
+        _chosen = null;
+        await _reload();
+        return stage;
+      });
 
   static const _relations = {'Parent', 'Spouse', 'Sibling', 'Relative', 'Friend', 'Colleague', 'Manager', 'Neighbour'};
 
@@ -445,9 +595,13 @@ class HttpApi extends Api {
         });
       });
 
-  // Three guided frames go up through presign-upload, then verify/selfie/frames: needs the camera port.
   @override
-  Future<void> uploadSelfie() async => throw const ApiException('NOT_IN_APP_YET');
+  Future<String> uploadSelfie(List<PickedFile> frames) => _do(() async {
+        final keys = [for (final f in frames) await _upload(f, 'SELFIE')];
+        final r = await c.post('$_a/verify/selfie/frames', {'straightKey': keys[0], 'rightKey': keys[1], 'leftKey': keys[2]}) as Map<String, dynamic>;
+        await _advance('OFFER_SELFIE');
+        return '${r['status']}';
+      });
 
   @override
   Future<void> saveAddress(String address) => _do(() async {
@@ -456,11 +610,21 @@ class HttpApi extends Api {
         await _advance('OFFER_ADDRESS');
       });
 
-  /// B10: the account the server has on file (salary account, or the last one paid), sent back as is.
+  /// B10: the account on file (salary account, or the last one paid) sent back as is, or the one
+  /// typed on B10b; with [proof] the cheque or passbook is filed and checked by hand.
   @override
-  Future<void> confirmDisbursalAccount() => _do(() async {
-        final v = await c.get('$_a/offer/disbursal-account') as Map<String, dynamic>;
-        _app = await c.post('$_a/offer/disbursal-account', {'accountNumber': v['accountNumber'], 'ifsc': v['ifsc'], 'holderName': v['holderName'], 'bank': v['bank']}) as Map<String, dynamic>;
+  Future<void> confirmDisbursalAccount({String? accountNo, String? ifsc, String? holder, PickedFile? proof}) => _do(() async {
+        if (proof != null) await _saveDocs('BANK_PROOF', [proof], null);
+        final Map<String, dynamic> v = accountNo == null
+            ? await c.get('$_a/offer/disbursal-account') as Map<String, dynamic>
+            : {'accountNumber': accountNo, 'ifsc': ifsc, 'holderName': holder};
+        _app = await c.post('$_a/offer/disbursal-account', {
+          'accountNumber': v['accountNumber'],
+          'ifsc': v['ifsc'],
+          'holderName': v['holderName'],
+          'bank': v['bank'],
+          'useBankProof': proof != null,
+        }) as Map<String, dynamic>;
         await _reload();
       });
 
@@ -488,7 +652,7 @@ class HttpApi extends Api {
         ];
       });
 
-  // DigiLocker and eNACH open the provider in a custom tab: not in the app yet.
+  // B7 "Use my location": needs geolocator (not added). The typed address works.
   @override
   Future<void> simulate() async => throw const ApiException('NOT_IN_APP_YET');
 
@@ -570,8 +734,11 @@ class HttpApi extends Api {
         return PayTo(upiId: '${v['upiId'] ?? ''}', accountName: '${v['accountName'] ?? ''}', accountNo: '${v['accountNumber'] ?? ''}', ifsc: '${v['ifsc'] ?? ''}', bank: '${v['bankName'] ?? ''}');
       });
 
-  Future<void> _pay({required String purpose, required int paise, required String utr, required DateTime paidOn, String? extensionId}) async {
+  Future<void> _pay({required String purpose, required int paise, required String utr, required DateTime paidOn, String? extensionId, PickedFile? screenshot}) async {
     final l = _loan ?? (throw const ApiException('LOAN_NOT_ACTIVE'));
+    if (screenshot == null) throw const ApiException('PAYMENT_PROOF_REQUIRED');
+    // One upload per picked screenshot, so a retry sends the same proof with the same key.
+    final proof = _proofKeys[screenshot] ??= await _uploadProof(screenshot);
     final body = {
       'amountPaise': paise,
       'method': 'UPI',
@@ -579,16 +746,43 @@ class HttpApi extends Api {
       'paidOn': _iso(paidOn),
       'purpose': purpose,
       'extensionId': ?extensionId,
-      // TODO(phase-11): 'proofUrl' (REPAYMENT_PROOF upload) once the photo picker lands; the
-      // server refuses a borrower payment without it (PAYMENT_PROOF_REQUIRED).
+      'proofUrl': proof,
     };
     await _once('pay|${l.id}|${jsonEncode(body)}', (key) => c.post('/api/loan/${l.id}/repayments', body, {'Idempotency-Key': key}));
     await _reload();
   }
 
   @override
-  Future<void> submitPayment({required String utr, required DateTime paidOn, required int paise, bool screenshot = false}) =>
-      _do(() => _pay(purpose: 'REPAYMENT', paise: paise, utr: utr, paidOn: paidOn));
+  Future<void> submitPayment({required String utr, required DateTime paidOn, required int paise, PickedFile? screenshot}) =>
+      _do(() => _pay(purpose: 'REPAYMENT', paise: paise, utr: utr, paidOn: paidOn, screenshot: screenshot));
+
+  final _proofKeys = Expando<String>();
+
+  /// Presign (`/api/storage`, REPAYMENT_PROOF) → PUT → the key the payment carries.
+  Future<String> _uploadProof(PickedFile f) async {
+    final p = await c.post('/api/storage/presign-upload', {'category': 'REPAYMENT_PROOF', 'filename': f.name, 'contentType': f.contentType}) as Map<String, dynamic>;
+    await c.putBytes('${p['url']}', _bytes(f), f.contentType);
+    return '${p['key']}';
+  }
+
+  /// Presign (application folder, [docType]) → PUT → key.
+  Future<String> _upload(PickedFile f, String docType) async {
+    final problem = uploadProblem(f);
+    if (problem != null) throw ApiException('UPLOAD_REFUSED', null, problem);
+    final p = await c.post('$_a/verify/presign-upload', {'docType': docType, 'fileName': f.name, 'contentType': f.contentType}) as Map<String, dynamic>;
+    await c.putBytes('${p['url']}', _bytes(f), f.contentType);
+    return '${p['key']}';
+  }
+
+  static Uint8List _bytes(PickedFile f) => f.data ?? (throw const ApiException('UPLOAD_FAILED'));
+
+  /// Uploads [files] and files them under [docType] on the application.
+  Future<void> _saveDocs(String docType, Iterable<PickedFile> files, String? password) async {
+    final keys = [for (final f in files) await _upload(f, docType)];
+    await c.post('$_a/verify/documents', {'docType': docType, 'objectKeys': keys, 'filePassword': _blankNull(password)});
+  }
+
+  static String? _blankNull(String? v) => v == null || v.isEmpty ? null : v;
 
   @override
   Future<List<Notice>> notices() => _do(() async {
@@ -642,9 +836,9 @@ class HttpApi extends Api {
       }));
 
   @override
-  Future<void> payExtension({required String utr, required DateTime paidOn}) => _do(() async {
+  Future<void> payExtension({required String utr, required DateTime paidOn, PickedFile? screenshot}) => _do(() async {
         final o = _loan?.pendingExtension ?? (throw const ApiException('EXTENSION_EXPIRED'));
-        await _pay(purpose: 'EXTENSION', paise: o.totalPaise, utr: utr, paidOn: paidOn, extensionId: o.id);
+        await _pay(purpose: 'EXTENSION', paise: o.totalPaise, utr: utr, paidOn: paidOn, extensionId: o.id, screenshot: screenshot);
       });
 
   @override
@@ -737,6 +931,25 @@ class HttpApi extends Api {
       grievance: contact(v['grievance'], fallbackConfig.grievance),
       legal: [for (final l in (v['legal'] as List? ?? const [])) LegalLink('${l['key']}', '${l['title']}', '${l['url']}')],
     );
+  }
+}
+
+/// Where providers send the borrower back (the server's redirect allowlist, CC-34). The Android
+/// app link on this path brings the app forward; [openInCustomTab] then returns.
+const callbackBase = 'https://dhannow.com/app/cb';
+
+/// Opens [url] in a Custom Tab (`url_launcher` in-app browser view) and completes when the app is
+/// back in front: the callback app link, or the borrower closing the tab. The caller then reads
+/// the status from the server; nothing is taken from the callback URL itself.
+Future<void> openInCustomTab(String url) async {
+  final back = Completer<void>();
+  final listener = AppLifecycleListener(onResume: () => back.isCompleted ? null : back.complete());
+  try {
+    final ok = await launchUrl(Uri.parse(url), mode: LaunchMode.inAppBrowserView).catchError((_) => false);
+    if (!ok) throw const ApiException('HANDOFF_FAILED');
+    await back.future;
+  } finally {
+    listener.dispose();
   }
 }
 

@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:dhannow/core/api/api.dart';
 import 'package:dhannow/core/api/client.dart';
 import 'package:dhannow/core/api/http_api.dart';
+import 'package:dhannow/core/files.dart';
+import 'package:dhannow/features/offer/sign.dart' show signaturePng;
 import 'package:dhannow/core/theme/theme.dart';
 import 'package:dhannow/features/money/extension_status_card.dart';
 import 'package:dio/dio.dart';
@@ -15,13 +17,13 @@ import 'package:flutter_test/flutter_test.dart';
 /// One canned answer per request; [handle] sees every request the client makes.
 class FakeAdapter implements HttpClientAdapter {
   FakeAdapter(this.handle);
-  final FutureOr<(int, Object?, Map<String, String>)> Function(RequestOptions o) handle;
+  final FutureOr<(int, Object?, Map<String, String>)?> Function(RequestOptions o) handle;
   final requests = <RequestOptions>[];
 
   @override
   Future<ResponseBody> fetch(RequestOptions o, Stream<Uint8List>? body, Future<void>? cancel) async {
     requests.add(o);
-    final (status, json, headers) = await handle(o);
+    final (status, json, headers) = (await handle(o))!;
     return ResponseBody.fromString(jsonEncode(json), status, headers: {
       Headers.contentTypeHeader: ['application/json'],
       for (final e in headers.entries) e.key: [e.value],
@@ -141,6 +143,123 @@ void main() {
       final j = await api.journey();
       expect(j.stage, Stage.offerFlow);
       expect(j.route, '/loan/kfs');
+    });
+  });
+
+  group('uploads and hand-offs (Phase 11b)', () {
+    final jpg = PickedFile('shot.jpg', bytes: 3, data: Uint8List.fromList([1, 2, 3]));
+
+    /// An HttpApi signed in on application 7 with an open loan 11; [extra] answers anything else.
+    Future<(HttpApi, FakeAdapter)> signedIn(FutureOr<(int, Object?, Map<String, String>)?> Function(RequestOptions o)? extra) async {
+      final store = MemoryStore()..values['refresh_token'] = 'r';
+      final a = FakeAdapter((o) {
+        switch (o.path) {
+          case '/api/applications/mine':
+            return (200, ok([{'id': 7, 'status': 'ACTIVE', 'loanId': 11}]), <String, String>{});
+          case '/api/applications/7/journey':
+            return (200, ok({'stepKey': 'status', 'completed': []}), <String, String>{});
+          case '/api/loan/11':
+            return (200, ok({'id': 11, 'principalPaise': 100000, 'processingFeePaise': 10000, 'gstPaise': 1800, 'netDisbursedPaise': 74200, 'totalRepayablePaise': 100000, 'disbursedOn': '2026-11-01', 'dueDate': '2026-11-15', 'lifecycleStatus': 'ACTIVE'}), <String, String>{});
+          case '/api/loan/11/outstanding':
+            return (200, ok({'verifiedPaise': 0, 'penaltyPaise': 0}), <String, String>{});
+        }
+        if (o.uri.host == 'bucket.test') return (200, null, <String, String>{});
+        return extra?.call(o) ?? (404, fail('NOT_FOUND'), <String, String>{});
+      });
+      final api = HttpApi(client(a, store))..pollDelay = Duration.zero;
+      await api.journey();
+      return (api, a);
+    }
+
+    test('a payment uploads its screenshot (presign → PUT) once, and a retry reuses proof and key', () async {
+      var pays = 0;
+      final (api, a) = await signedIn((o) {
+        // /api/storage answers without the envelope.
+        if (o.path == '/api/storage/presign-upload') return (200, {'key': 'loan/repayment-proof/k1.jpg', 'url': 'https://bucket.test/put?sig=1', 'method': 'PUT', 'expiresInSeconds': 300}, <String, String>{});
+        if (o.path == '/api/loan/11/repayments') {
+          pays++;
+          if (pays == 1) throw const SocketException('down');
+          return (200, ok({'id': 5, 'status': 'PENDING_VERIFICATION'}), <String, String>{});
+        }
+        return null;
+      });
+      await expectLater(api.submitPayment(utr: '429011238876', paidOn: DateTime(2026, 11, 2), paise: 100000, screenshot: jpg), throwsA(isA<ApiException>()));
+      await api.submitPayment(utr: '429011238876', paidOn: DateTime(2026, 11, 2), paise: 100000, screenshot: jpg);
+
+      final presigns = a.requests.where((r) => r.path == '/api/storage/presign-upload').toList();
+      expect(presigns, hasLength(1), reason: 'the retry reuses the uploaded proof');
+      expect(presigns.single.data, {'category': 'REPAYMENT_PROOF', 'filename': 'shot.jpg', 'contentType': 'image/jpeg'});
+      final put = a.requests.singleWhere((r) => r.uri.host == 'bucket.test');
+      expect(put.method, 'PUT');
+      expect(put.headers[Headers.contentTypeHeader], 'image/jpeg');
+      expect(put.headers['Authorization'], isNull, reason: 'never send the token to storage');
+      final payments = a.requests.where((r) => r.path == '/api/loan/11/repayments').toList();
+      expect((payments.last.data as Map)['proofUrl'], 'loan/repayment-proof/k1.jpg');
+      expect(payments.first.headers['Idempotency-Key'], payments.last.headers['Idempotency-Key']);
+    });
+
+    test('a payment without a screenshot, or a file over 5 MB, is refused before any call', () async {
+      final (api, a) = await signedIn(null);
+      final before = a.requests.length;
+      await expectLater(api.submitPayment(utr: '429011238876', paidOn: DateTime(2026, 11, 2), paise: 100000), throwsA(isA<ApiException>().having((e) => e.code, 'code', 'PAYMENT_PROOF_REQUIRED')));
+      final big = PickedFile('slip.pdf', bytes: 6 * 1024 * 1024, data: Uint8List(1));
+      await expectLater(api.saveStep('pan-card', const {}, files: {'front': big, 'back': big}), throwsA(isA<ApiException>().having((e) => e.code, 'code', 'UPLOAD_REFUSED')));
+      expect(a.requests.length, before);
+    });
+
+    test('guided selfie: three SELFIE uploads, then verify/selfie/frames with the three keys (REVIEW)', () async {
+      var n = 0;
+      final (api, a) = await signedIn((o) => switch (o.path) {
+            '/api/applications/7/verify/presign-upload' => (200, ok({'key': 'applications/7/selfie/${++n}.jpg', 'url': 'https://bucket.test/$n'}), <String, String>{}),
+            '/api/applications/7/verify/selfie/frames' => (200, ok({'checkType': 'SELFIE', 'status': 'REVIEW'}), <String, String>{}),
+            '/api/applications/7/journey/OFFER_SELFIE' => (200, ok({'stepKey': 'offer.address'}), <String, String>{}),
+            _ => null,
+          });
+      expect(await api.uploadSelfie([jpg, jpg, jpg]), 'REVIEW');
+      final frames = a.requests.singleWhere((r) => r.path.endsWith('/selfie/frames'));
+      expect(frames.data, {'straightKey': 'applications/7/selfie/1.jpg', 'rightKey': 'applications/7/selfie/2.jpg', 'leftKey': 'applications/7/selfie/3.jpg'});
+      expect(a.requests.where((r) => r.path.endsWith('/presign-upload')).map((r) => (r.data as Map)['docType']), everyElement('SELFIE'));
+    });
+
+    test('DigiLocker: the provider page opens with the allowlisted return, then status is read back', () async {
+      var polls = 0;
+      final (api, a) = await signedIn((o) => switch (o.path) {
+            '/api/applications/7/verify/digilocker/init' => (200, ok({'status': 'PENDING', 'derived': {'url': 'https://digilocker.test/s/1'}}), <String, String>{}),
+            '/api/applications/7/verify/digilocker/status' => (200, ok({'derived': {'completed': ++polls > 1, 'failed': false}}), <String, String>{}),
+            '/api/applications/7/verify/digilocker/complete' => (200, ok({'status': 'PASS'}), <String, String>{}),
+            '/api/applications/7/journey/OFFER_DIGILOCKER' => (200, ok({'stepKey': 'offer.references'}), <String, String>{}),
+            _ => null,
+          });
+      final opened = <String>[];
+      api.openProvider = (url) async => opened.add(url);
+      await api.verifyDigilocker();
+      expect(opened, ['https://digilocker.test/s/1']);
+      expect((a.requests.firstWhere((r) => r.path.endsWith('/digilocker/init')).data as Map)['redirectUrl'], startsWith('https://dhannow.com/app/cb/'));
+      expect(polls, 2, reason: 'a lagging status is read again');
+      expect(a.requests.any((r) => r.path.endsWith('/journey/OFFER_DIGILOCKER')), isTrue);
+    });
+
+    test('A13: the question comes from the bureau check; a refused answer keeps it open', () async {
+      final summary = [
+        {'checkType': 'BUREAU', 'status': 'REVIEW', 'derived': {'bureauChallenge': true, 'bureauChallengeQuestion': 'Which lender?', 'bureauChallengeOptions': ['A', 'B']}},
+      ];
+      final (api, _) = await signedIn((o) => switch (o.path) {
+            '/api/applications/7/verify/summary' => (200, ok(summary), <String, String>{}),
+            '/api/applications/7/verify/bureau/challenge/answer' => (200, ok({'status': 'REVIEW'}), <String, String>{}),
+            _ => null,
+          });
+      final q = await api.creditQuestion();
+      expect(q!.question, 'Which lender?');
+      expect(q.options, ['A', 'B']);
+      await expectLater(api.answerQuestion('A'), throwsA(isA<ApiException>().having((e) => e.code, 'code', 'BUREAU_CHALLENGE_ANSWER_INVALID')));
+    });
+
+    testWidgets('the drawn signature becomes a PNG', (t) async {
+      final png = await t.runAsync(() => signaturePng([
+            [const Offset(10, 10), const Offset(60, 40)],
+            [const Offset(80, 20)],
+          ]));
+      expect(png!.sublist(0, 4), [0x89, 0x50, 0x4E, 0x47]);
     });
   });
 

@@ -1,3 +1,6 @@
+import 'dart:typed_data';
+
+import '../files.dart';
 import '../format.dart';
 import 'api.dart';
 
@@ -165,7 +168,7 @@ class DemoApi extends Api {
 
   /// Saves one sign-up step. Data stays on the server; the demo only records that it is done.
   @override
-  Future<void> saveStep(String step, [Map<String, Object?> data = const {}]) => _call(() {
+  Future<void> saveStep(String step, Map<String, Object?> data, {Map<String, PickedFile> files = const {}}) => _call(() {
         _onboardingDone.add(step);
         notifyListeners();
       });
@@ -178,7 +181,22 @@ class DemoApi extends Api {
       });
 
   @override
-  Future<void> answerQuestion(String answer) => _call(() {
+  Future<bool> sendEmailCode(String email, {required bool work}) => _call(() {
+        _otpTries = 0;
+        // Demo: a work address on example.org can't receive mail (A6 undeliverable path).
+        return !(work && email.endsWith('@example.org'));
+      });
+
+  @override
+  Future<void> verifyEmailCode(String code, {required bool work}) => verifyOtp(code);
+
+  @override
+  Future<({String question, List<String> options})?> creditQuestion() => _call(() => _scenario == Scenario.question
+      ? (question: 'Which of these lenders have you had a loan or card with?', options: const ['HDFC Bank', 'Bajaj Finance', 'ICICI Bank', 'None of these'])
+      : null);
+
+  @override
+  Future<void> answerQuestion(String? answer) => _call(() {
         _scenario = Scenario.inReview;
         notifyListeners();
       });
@@ -223,16 +241,35 @@ class DemoApi extends Api {
   Future<void> acceptKfs() => _call(() {});
   @override
   Future<void> sign() => _call(() {});
+
+  @override
+  Future<void> signDrawn(Uint8List png) => _call(() {});
   @override
   Future<void> saveReferences(List<({String name, String mobile, String relation})> refs) => _call(() {});
   @override
-  Future<void> uploadSelfie() => _call(() {});
+  Future<String> uploadSelfie(List<PickedFile> frames) => _call(() => 'REVIEW');
+
+  @override
+  Future<void> verifyDigilocker() => _call(() {});
+
+  @override
+  Future<void> uploadAadhaar(PickedFile front, PickedFile back) => _call(() {});
+
+  @override
+  Future<void> startMandate() => _call(() {});
+
+  @override
+  Future<Stage> reborrow() => _call(() {
+        if (_loan != null) throw const ApiException('ACTIVE_LOAN');
+        setScenario(Scenario.offer);
+        return Stage.offer;
+      });
   @override
   Future<void> saveAddress(String address) => _call(() {});
 
   /// B10: confirm where the money goes. Moves the application to disbursal (B12).
   @override
-  Future<void> confirmDisbursalAccount() => _call(() {
+  Future<void> confirmDisbursalAccount({String? accountNo, String? ifsc, String? holder, PickedFile? proof}) => _call(() {
         final p = _chosenPaise ?? _level.maxPaise;
         _loan = _loanAt(Lifecycle.disbursementPending, principal: p, daysLeft: 14);
         _scenario = Scenario.disbursal;
@@ -295,7 +332,7 @@ class DemoApi extends Api {
   /// C6: the borrower reports a payment. The Accountant verifies it later (on-time is judged by
   /// [paidOn], the bank credit date, not the verification time).
   @override
-  Future<void> submitPayment({required String utr, required DateTime paidOn, required int paise, bool screenshot = false}) => _call(() {
+  Future<void> submitPayment({required String utr, required DateTime paidOn, required int paise, PickedFile? screenshot}) => _call(() {
         if (utr == '000000000000') throw const ApiException('UTR_DUPLICATE');
         final l = _loan;
         if (l == null) return;
@@ -355,7 +392,7 @@ class DemoApi extends Api {
 
   /// C12b: the borrower pays the extension charge; the Accountant verifies, then due moves (C12c).
   @override
-  Future<void> payExtension({required String utr, required DateTime paidOn}) => _call(() {
+  Future<void> payExtension({required String utr, required DateTime paidOn, PickedFile? screenshot}) => _call(() {
         final l = _loan!;
         final q = _quote(l.quote.principalPaise);
         final ext = Extension(n: l.extensionsUsed + 1, chargePaise: q.deductionsPaise + l.latePaise, oldDue: l.dueAt, newDue: l.dueAt.add(const Duration(days: 14)), status: ExtensionStatus.verified, utr: utr);

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api/api.dart';
 import '../../core/brand.dart';
+import '../../core/files.dart';
 import '../../core/format.dart';
 import '../../core/links.dart';
 import '../../core/theme/theme.dart';
@@ -457,8 +458,7 @@ class CameraDeniedScreen extends StatelessWidget {
     title: 'Allow camera to continue',
     body: 'We need the camera only for your selfie and document photos. It never turns on by itself.',
     primary: 'Open settings',
-    // ponytail: demo has no permission plugin; the release build opens Android app settings here.
-    onPrimary: () => showDnToast(context, 'In the release app this opens Android settings.'),
+    onPrimary: () => demoControls ? showDnToast(context, 'In the release app this opens Android settings.') : openAppSettings(),
     secondary: selfie ? null : 'Upload a file instead',
     onSecondary: () => context.canPop() ? context.pop('file') : context.go('/dashboard'),
   );
