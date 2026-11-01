@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.navix</groupId>
+        <artifactId>navix-finance</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>navix-loan</artifactId>
+    <packaging>jar</packaging>
+    <name>navix-loan</name>
+    <description>Loan lifecycle, documents and loan math for DhanBoost</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.navix</groupId>
+            <artifactId>navix-common</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Server-side one-page credit-brief PDF. -->
+        <dependency>
+            <groupId>com.github.librepdf</groupId>
+            <artifactId>openpdf</artifactId>
+        </dependency>
+
+        <!--
+          Streaming .xlsx reader for the bulk lead import. Deliberately NOT Apache POI: POI's
+          XSSFWorkbook materialises the whole sheet, which a 200k-row list cannot afford on a
+          2 GB task (aws.md: cpu 1024 / mem 2048). fastexcel-reader walks rows one at a time.
+        -->
+        <dependency>
+            <groupId>org.dhatim</groupId>
+            <artifactId>fastexcel-reader</artifactId>
+            <version>0.18.4</version>
+        </dependency>
+
+        <!-- Writer half of the same library: builds the .xlsx fixtures the parser tests read. -->
+        <dependency>
+            <groupId>org.dhatim</groupId>
+            <artifactId>fastexcel</artifactId>
+            <version>0.18.4</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+          For LeadImportScaleIT only, which drives the real batch-insert path against a disposable
+          PostgreSQL. The app itself gets the driver from navix-app at runtime.
+        -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Property tests for the DhanNow money math (LoanMathDhanNowTest). Test scope only. -->
+        <dependency>
+            <groupId>net.jqwik</groupId>
+            <artifactId>jqwik</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Coverage gate (PLAN Phase 1 step 1 / Phase 12): the DhanNow engine classes need 80% line
+                 coverage from this module's unit tests. Navix code is reported but not gated. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>check-engine</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <includes>
+                                <include>com/navix/loan/service/LoanMath*</include>
+                                <include>com/navix/loan/service/PricingService*</include>
+                                <include>com/navix/loan/service/CreditLevelService*</include>
+                                <include>com/navix/loan/domain/PricingSnapshot*</include>
+                                <include>com/navix/loan/domain/ProductSnapshot*</include>
+                            </includes>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.80</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

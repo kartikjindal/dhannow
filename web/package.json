@@ -1,0 +1,61 @@
+{
+  "name": "navix-frontend",
+  "version": "0.0.1",
+  "private": true,
+  "//browserslist": "Modern targets only — every listed version natively supports the Baseline features Next was otherwise polyfilling (Array.prototype.at/flat/flatMap, Object.fromEntries/hasOwn, String trimStart/End). Trims ~11 KiB of legacy JS. Covers ~98%+ of 2026 traffic (all versions ship since early 2022).",
+  "browserslist": [
+    "chrome >= 94",
+    "edge >= 94",
+    "firefox >= 93",
+    "safari >= 15.4",
+    "ios_saf >= 15.4",
+    "opera >= 80"
+  ],
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.62.0",
+    "clsx": "2.1.1",
+    "d3-geo": "^3.1.1",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^3.8.4",
+    "lucide-react": "0.469.0",
+    "next": "15.1.12",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "react-hook-form": "7.54.0",
+    "recharts": "^2.15.0",
+    "tailwind-merge": "2.6.0",
+    "topojson-client": "^3.1.0",
+    "zod": "3.24.1",
+    "zustand": "5.0.2"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "jsdom": "^25.0.1",
+    "@playwright/test": "^1.61.1",
+    "@types/d3-geo": "^3.1.0",
+    "@types/node": "22.10.2",
+    "@types/react": "19.0.0",
+    "@types/react-dom": "19.0.0",
+    "@types/topojson-client": "^3.1.5",
+    "autoprefixer": "10.4.20",
+    "eslint": "8.57.1",
+    "eslint-config-next": "15.1.12",
+    "playwright": "^1.61.0",
+    "postcss": "8.4.49",
+    "tailwindcss": "3.4.17",
+    "tsx": "^4.19.2",
+    "typescript": "5.7.2",
+    "vitest": "^3.0.5"
+  }
+}

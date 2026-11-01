@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.4.1</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.navix</groupId>
+    <artifactId>navix-finance</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>navix-finance</name>
+    <description>DhanBoost - salary-linked single-repayment lending platform (Maven multi-module backend)</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <maven.compiler.release>21</maven.compiler.release>
+        <!-- Docker Engine 29 rejects the API version older Testcontainers clients send (HTTP 400). -->
+        <testcontainers.version>1.21.4</testcontainers.version>
+        <!-- Tests run in IST (the product zone). Windows JVMs report the legacy "Asia/Calcutta" alias,
+             which the postgres:16 image rejects as a session TimeZone. -->
+        <argLine>-Duser.timezone=Asia/Kolkata</argLine>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Pinned: springdoc is NOT managed by the Spring Boot BOM -->
+        <springdoc.version>2.7.0</springdoc.version>
+        <!-- Spring Cloud AWS 3.3.x aligns with Spring Boot 3.4 -->
+        <spring-cloud-aws.version>3.3.0</spring-cloud-aws.version>
+        <!-- OpenPDF (LGPL/MPL) — server-side PDF for the credit brief -->
+        <openpdf.version>1.3.43</openpdf.version>
+        <!-- DhanNow Phase 1 gates (test scope only): coverage, architecture rules, property tests. -->
+        <jacoco.version>0.8.12</jacoco.version>
+        <archunit.version>1.4.1</archunit.version>
+        <jqwik.version>1.9.2</jqwik.version>
+    </properties>
+
+    <modules>
+        <module>navix-common</module>
+        <module>navix-iam</module>
+        <module>navix-onboarding</module>
+        <module>navix-kyc</module>
+        <module>navix-verification</module>
+        <module>navix-income-risk</module>
+        <module>navix-loan</module>
+        <module>navix-collections</module>
+        <module>navix-storage</module>
+        <module>navix-notification</module>
+        <module>navix-app</module>
+    </modules>
+
+    <!-- Shared across every module. Test starter (JUnit 5 + AssertJ + Mockito)
+         so any module can have src/test; version managed by the Spring Boot parent. -->
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Spring Cloud AWS BOM: manages S3, SSM Parameter Store, and the
+                 underlying AWS SDK v2 versions so child modules declare starters
+                 without versions. -->
+            <dependency>
+                <groupId>io.awspring.cloud</groupId>
+                <artifactId>spring-cloud-aws-dependencies</artifactId>
+                <version>${spring-cloud-aws.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- Pin springdoc-openapi so child modules can declare it without a version.
+                 Versions for spring-boot starters, lombok, postgresql and flyway-core
+                 are managed by the Spring Boot parent BOM and must NOT be pinned here. -->
+            <dependency>
+                <groupId>org.springdoc</groupId>
+                <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+                <version>${springdoc.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.github.librepdf</groupId>
+                <artifactId>openpdf</artifactId>
+                <version>${openpdf.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.tngtech.archunit</groupId>
+                <artifactId>archunit-junit5</artifactId>
+                <version>${archunit.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.jqwik</groupId>
+                <artifactId>jqwik</artifactId>
+                <version>${jqwik.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <!-- JaCoCo on every module: the agent prepends itself to the argLine property above and
+                 `verify` writes target/site/jacoco. The coverage CHECK is only in navix-loan, scoped to
+                 the DhanNow engine classes (PLAN Phase 1, step 1). -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

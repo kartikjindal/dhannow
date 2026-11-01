@@ -1,0 +1,80 @@
+package com.navix.auth;
+
+import jakarta.validation.constraints.NotBlank;
+
+/** Request/response records for the real auth endpoints (P6). */
+public final class AuthDtos {
+
+    private AuthDtos() {
+    }
+
+    /**
+     * {@code force} = "sign me in here and end the other session" — sent only after the caller has
+     * seen a {@code SESSION_CONFLICT} and the user picked "Continue here". A boxed {@code Boolean}
+     * (not primitive) so an older client that omits the field is treated as {@code false}, not a
+     * bind error.
+     *
+     * <p>{@code captchaToken} is the Cloudflare Turnstile response. Deliberately un-annotated for the
+     * same reason as {@code force}: whether a missing token matters is
+     * {@link CaptchaVerifier}'s call (it is unconfigured, and so ignored, in dev/CI), not bean
+     * validation's.
+     */
+    public record StaffLoginRequest(@NotBlank String email, @NotBlank String password, Boolean force,
+                                    String captchaToken) {
+    }
+
+    /**
+     * Borrower login: mobile + the OTP delivered by SMS (UltronSMS gateway).
+     *
+     * <p>There is deliberately NO {@code customerId} here — the identity is derived server-side from
+     * the OTP-verified mobile. A client-supplied id was trusted verbatim, so anyone who could verify
+     * an OTP on their own handset could mint a token for any other customer.
+     */
+    public record BorrowerLoginRequest(@NotBlank String mobile, @NotBlank String otp, String name) {
+    }
+
+    /** Request an OTP be generated + SMS-delivered to {@code mobile}. */
+    public record OtpRequestRequest(@NotBlank String mobile) {
+    }
+
+    /** OTP-request outcome: whether the SMS went out + ttl. {@code devCode} is set only when
+     *  {@code navix.sms.dev-echo=true} (local testing without a handset). */
+    public record OtpRequestResponse(boolean sent, int ttlSeconds, String devCode) {
+    }
+
+    /** Issued token + the identity it carries (the BFF stores the token in an httpOnly cookie). */
+    public record AuthResponse(String token, String id, String name, String role, Long customerId) {
+    }
+
+    /** Borrower sign-in by password (the OTP-less alternative). {@code captchaToken}: see
+     *  {@link StaffLoginRequest}. */
+    public record BorrowerPasswordLoginRequest(@NotBlank String mobile, @NotBlank String password,
+                                               String captchaToken) {
+    }
+
+    /** Set/replace a password for the signed-in borrower (optional signup step / profile). */
+    public record SetPasswordRequest(@NotBlank String password) {
+    }
+
+    /** Forgot-password: the email that must match an account before a reset link is sent — the link
+     *  only ever goes to that inbox, so owning it is the proof; no mobile is asked.
+     *  {@code captchaToken}: see {@link StaffLoginRequest}. */
+    public record ForgotPasswordRequest(@NotBlank String email, String captchaToken) {
+    }
+
+    /** Reset-password landing: the one-time token from the email link + the chosen new password. */
+    public record ResetPasswordRequest(@NotBlank String token, @NotBlank String password) {
+    }
+
+    /**
+     * Staff invite activation: the one-time token from the invite email, the invitee's display name,
+     * the password they choose, and an optional contact mobile (enables their own forgot-password).
+     */
+    public record AcceptInviteRequest(@NotBlank String token, @NotBlank String name,
+                                      @NotBlank String password, String mobile) {
+    }
+
+    /** A generic, non-enumerating acknowledgement (forgot/reset/set responses). */
+    public record MessageResponse(String message) {
+    }
+}

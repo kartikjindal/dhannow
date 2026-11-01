@@ -1,0 +1,5 @@
+# Test-only values, reviewed 2026-11-01. Neither is a real credential.
+# A made-up 32-char AUTH_SECRET that ProductionConfigGuardTest must accept as "strong".
+backend/navix-app/src/test/java/com/navix/config/ProductionConfigGuardTest.java:generic-api-key:20
+# A fake "eyJ...abc.def" token the log redactor must mask.
+backend/navix-verification/src/test/java/com/navix/verification/support/ProviderLogRedactorTest.java:generic-api-key:16

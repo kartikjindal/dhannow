@@ -1,0 +1,144 @@
+import * as React from "react";
+import {
+  paiseToINR,
+  type ApplicationView,
+  type LoanView,
+  type OutstandingView,
+} from "@/lib/api/applications";
+import { buildCostBreakdown, dueDateFromSalary, daysBetween } from "@/lib/calc/loan-math";
+import { formatDate } from "@/lib/utils";
+
+/**
+ * The shared loan cost-breakdown `<dl>` — principal → fee/GST → net disbursed →
+ * total repayable → accrued interest/penalty → paid → outstanding. Extracted
+ * from the retired loan dialog so the journey step popups, drawer and detail
+ * page render identical figures.
+ *
+ * `outstanding` (the penalty/prepayment-aware `OutstandingView`) is optional:
+ * when absent the itemized interest/penalty/paid rows are omitted and the
+ * outstanding falls back to the loan's cached `outstandingPaise`.
+ */
+export function LoanBreakdown({
+  loan,
+  outstanding,
+}: {
+  loan: LoanView;
+  outstanding?: OutstandingView | null;
+}) {
+  const out = outstanding;
+  return (
+    <dl className="grid grid-cols-2 gap-x-6 gap-y-1">
+      <Row label="Principal" value={paiseToINR(loan.principalPaise)} />
+      <Row label="Processing fee" value={paiseToINR(loan.processingFeePaise)} />
+      <Row label="GST" value={paiseToINR(loan.gstPaise)} />
+      <Row label="Net disbursed" value={paiseToINR(loan.netDisbursedPaise)} />
+      {/* When `outstanding` is present, relabel to make the distinction explicit: this figure is
+          the contracted on-time total (no penalty), not what's owed today (item 3b). */}
+      <Row
+        label={out ? "Contracted repayable (on-time)" : "Total repayable"}
+        value={paiseToINR(loan.totalRepayablePaise)}
+      />
+      {/* Day counts come from the backend breakdown (they're what the amount was actually charged
+          over — interest includes the one-day grace, then stops; penalty starts after grace and is capped at 30). Older
+          backends omit them, so the label degrades to the bare figure. */}
+      {out && (
+        <Row
+          label={out.interestDays != null ? `Interest accrued (${out.interestDays}d)` : "Interest accrued"}
+          value={paiseToINR(out.interestPaise ?? 0)}
+        />
+      )}
+      {out && (out.penaltyPaise ?? 0) > 0 && (
+        <Row
+          label={out.penaltyDays != null ? `Late penalty (${out.penaltyDays}d)` : "Late penalty"}
+          value={paiseToINR(out.penaltyPaise ?? 0)}
+        />
+      )}
+      {out && <Row label="Paid (verified)" value={paiseToINR(out.verifiedPaise ?? 0)} />}
+      <Row
+        label={out ? "Amount due today" : "Outstanding"}
+        value={paiseToINR(out ? out.outstandingPaise : loan.outstandingPaise)}
+        strong
+      />
+      {out?.settledAmountPaise != null && (
+        <Row label="Settlement (full & final)" value={paiseToINR(out.settledAmountPaise)} />
+      )}
+      {/* The two dates the money hangs off. Every figure above is "as of" one of them — reading a
+          balance without knowing when it falls due is guesswork. */}
+      <Row label="Disbursed on" value={loan.disbursedOn ? formatDate(loan.disbursedOn) : "—"} />
+      <Row
+        label="Repayment due"
+        value={loan.dueDate ? formatDate(loan.dueDate) : "—"}
+        hint="On the borrower's salary day"
+      />
+      {/* Only once it is actually settled — on a live loan the row would be a permanent dash. */}
+      {loan.closedOn && <Row label="Closed on" value={formatDate(loan.closedOn)} />}
+    </dl>
+  );
+}
+
+function Row({
+  label,
+  value,
+  strong,
+  hint,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  hint?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <dt className="text-muted">
+        {label}
+        {hint && <span className="block text-xs text-muted/80">{hint}</span>}
+      </dt>
+      <dd className={strong ? "font-semibold text-navy" : "text-ink"}>{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * The projected (pre-disbursement) cost breakdown for a requested amount — the
+ * same `<dl>` the DISBURSEMENT/ACTIVE stages show with real figures, but computed
+ * client-side from `buildCostBreakdown` over the salary-linked tenure estimate.
+ * Shared by the credit step popup and the unified detail page's Cost card.
+ *
+ * Returns a muted note when no amount has been requested yet. The tenure is
+ * estimated from the salary-credit day (falling back to a nominal 30-day cycle);
+ * final figures are set at disbursal.
+ */
+export function ProjectedCostBreakdown({ app }: { app: ApplicationView }) {
+  const amount = app.amountRequestedPaise;
+  if (amount == null) {
+    return <p className="text-muted">No amount has been requested yet.</p>;
+  }
+
+  // Estimate tenure from the salary-linked due date; fall back to a nominal cycle.
+  let tenureDays = 30;
+  if (app.salaryCreditDay != null) {
+    const today = new Date();
+    const due = dueDateFromSalary({ disbursedOn: today, salaryDay: app.salaryCreditDay });
+    const d = daysBetween(today, due);
+    if (d > 0) tenureDays = d;
+  }
+  // buildCostBreakdown is linear, so integer-paise in → integer-paise out.
+  const b = buildCostBreakdown(amount, tenureDays);
+
+  return (
+    <>
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-1">
+        <Row label="Principal" value={paiseToINR(b.principal)} />
+        <Row label="Processing fee" value={paiseToINR(b.processingFee)} />
+        <Row label="GST" value={paiseToINR(b.gstOnFee)} />
+        <Row label="Net disbursed" value={paiseToINR(b.netDisbursed)} />
+        <Row label={`Interest (${tenureDays}d)`} value={paiseToINR(b.interest)} />
+        <Row label="Total repayable" value={paiseToINR(b.totalRepayable)} strong />
+      </dl>
+      <p className="mt-2 text-xs text-muted">
+        Projection at the requested amount over an estimated {tenureDays}-day tenure. Final figures are
+        set at disbursal.
+      </p>
+    </>
+  );
+}

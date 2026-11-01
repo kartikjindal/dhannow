@@ -1,0 +1,845 @@
+package com.navix.loan.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.navix.common.collections.SettlementDirectory;
+import com.navix.common.exception.BusinessException;
+import com.navix.common.storage.DocumentStoragePort;
+import com.navix.loan.domain.ConfigStatus;
+import com.navix.loan.domain.LoanStatus;
+import com.navix.loan.domain.PaymentMethod;
+import com.navix.loan.domain.PaymentStatus;
+import com.navix.loan.entity.Loan;
+import com.navix.loan.entity.Payment;
+import com.navix.loan.repository.CreditLevelHistoryRepository;
+import com.navix.loan.repository.CreditLevelRepository;
+import com.navix.loan.repository.LoanRepository;
+import com.navix.loan.repository.PaymentRepository;
+import com.navix.loan.repository.PricingConfigRepository;
+import com.navix.loan.repository.ProductConfigRepository;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+@ExtendWith(MockitoExtension.class)
+class RepaymentServiceTest {
+
+    @Mock
+    private PaymentRepository paymentRepository;
+    @Mock
+    private LoanRepository loanRepository;
+    @Mock
+    private ApplicationFlowService applicationFlowService;
+    @Mock
+    private SettlementDirectory settlementDirectory;
+    @Mock
+    private DsaCommissionService dsaCommissionService;
+    @Mock
+    private DocumentStoragePort storage;
+    @Mock
+    private CreditLevelService creditLevels;
+
+    private RepaymentService repaymentService;
+
+    /**
+     * The service reasons in IST (the ledger's calendar), so the fixtures must too. Anchoring them
+     * to the JVM default instead made this suite pass in India and fail on a UTC CI runner every
+     * evening after 18:30 IST — the two clocks are on different dates in that window, which is the
+     * exact drift the IST switch exists to remove.
+     */
+    private static final java.time.ZoneId IST = java.time.ZoneId.of("Asia/Kolkata");
+
+    private static LocalDate today() {
+        return LocalDate.now(IST);
+    }
+
+    @BeforeEach
+    void setUp() {
+        repaymentService = new RepaymentService(paymentRepository, loanRepository, TestPricing.navix(),
+                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage,
+                creditLevels);
+    }
+
+    /**
+     * A loan due TODAY, disbursed 27 days ago — 1,000,000 principal + 1%/day × 27 = 1,270,000.
+     *
+     * <p>Dates are relative on purpose. With absolute ones this fixture silently rots: once the due
+     * date slides into the past, {@code outstandingAsOf} adds a 2%/day late penalty, the balance
+     * exceeds totalRepayable, and the "fully paid closes the loan" test fails for a reason that has
+     * nothing to do with the code under test. Anchor to now() and the tenure stays 27 days forever.
+     */
+    private static final LocalDate DUE = today();
+    private static final LocalDate DISBURSED = DUE.minusDays(27);
+
+    private Loan activeLoan() {
+        Loan loan = new Loan();
+        loan.setCustomerId(7L);
+        loan.setPrincipal(1_000_000L);
+        loan.setDisbursedOn(DISBURSED);
+        loan.setDueDate(DUE); // 27-day tenure
+        loan.setTotalRepayable(1_270_000L);
+        loan.setOutstanding(1_270_000L);
+        loan.setStatus(LoanStatus.ACTIVE);
+        return loan;
+    }
+
+    /**
+     * A borrower may only pay down their own loan. Without the guard, borrower A could post a
+     * payment onto borrower B's loan and the only thing between it and a real balance reduction was
+     * an accountant not noticing.
+     */
+    @Test
+    void aBorrowerCannotRecordAPaymentOnSomeoneElsesLoan() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan())); // owned by customer 7
+        com.navix.common.security.ActorContext.set(
+                new com.navix.common.security.CurrentActor("99", "Someone Else", "BORROWER"));
+        try {
+            assertThatThrownBy(() -> repaymentService.recordPayment(
+                    1L, 500_000L, PaymentMethod.UPI, "TXN-X", null, DUE))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("your own loan");
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
+    }
+
+    @Test
+    void theOwningBorrowerCanRecordTheirOwnPaymentWithAScreenshotAttached() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan())); // customer 7
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(0L);
+        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        com.navix.common.security.ActorContext.set(
+                new com.navix.common.security.CurrentActor("7", "Asha", "BORROWER"));
+        try {
+            assertThat(repaymentService.recordPayment(
+                    1L, 500_000L, PaymentMethod.UPI, "TXN-OK", "loan/repayment-proof/1.jpg", DUE)
+                    .getStatus()).isEqualTo(PaymentStatus.PENDING_VERIFICATION);
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
+    }
+
+    /**
+     * The screenshot is mandatory for the borrower's own submission — without it there is nothing an
+     * accountant can verify a claimed transfer against before it reduces a real balance.
+     */
+    @Test
+    void aBorrowerCannotRecordAPaymentWithoutAScreenshot() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan())); // customer 7
+        com.navix.common.security.ActorContext.set(
+                new com.navix.common.security.CurrentActor("7", "Asha", "BORROWER"));
+        try {
+            assertThatThrownBy(() -> repaymentService.recordPayment(
+                    1L, 500_000L, PaymentMethod.UPI, "TXN-OK", "  ", DUE))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("screenshot");
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
+    }
+
+    /**
+     * Staff recording on a borrower's behalf (branch walk-in, phoned-in reference) has no upload to
+     * attach — the screenshot requirement must stay scoped to the BORROWER actor only.
+     */
+    @Test
+    void staffCanRecordAPaymentWithoutAScreenshot() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(0L);
+        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        com.navix.common.security.ActorContext.set(
+                new com.navix.common.security.CurrentActor("40", "Accountant Rao", "ACCOUNTANT"));
+        try {
+            assertThat(repaymentService.recordPayment(1L, 500_000L, PaymentMethod.UPI, "TXN-WALKIN", null, DUE)
+                    .getStatus()).isEqualTo(PaymentStatus.PENDING_VERIFICATION);
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
+    }
+
+    @Test
+    void recordsPendingPartialPayment() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(0L);
+        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        Payment p = repaymentService.recordPayment(1L, 500_000L, PaymentMethod.UPI, "TXN1", null, DUE);
+
+        assertThat(p.getStatus()).isEqualTo(PaymentStatus.PENDING_VERIFICATION);
+        assertThat(p.getAmount()).isEqualTo(500_000L);
+        assertThat(p.isPartial()).isTrue(); // 500k < 1.27m remaining
+    }
+
+    @Test
+    void recordIsIdempotentOnTxnRef() {
+        Payment existing = new Payment();
+        existing.setLoanId(1L);
+        existing.setTxnRef("DUP");
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.findFirstByLoanIdAndTxnRef(1L, "DUP")).thenReturn(Optional.of(existing));
+
+        Payment p = repaymentService.recordPayment(1L, 500_000L, PaymentMethod.UPI, "DUP", null, null);
+
+        assertThat(p).isSameAs(existing);
+    }
+
+    @Test
+    void rejectsPaymentOnSettledLoan() {
+        Loan closed = activeLoan();
+        closed.setStatus(LoanStatus.CLOSED);
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(closed));
+
+        assertThatThrownBy(() -> repaymentService.recordPayment(1L, 100_000L, PaymentMethod.UPI, "T", null, null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("settled");
+    }
+
+    @Test
+    void verifyClosesLoanWhenFullyPaid() {
+        Loan loan = activeLoan();
+        Payment payment = new Payment();
+        payment.setLoanId(1L);
+        payment.setAmount(1_270_000L);
+        payment.setStatus(PaymentStatus.PENDING_VERIFICATION);
+        when(paymentRepository.findById(99L)).thenReturn(Optional.of(payment));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(1_270_000L);
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        repaymentService.verifyPayment(99L);
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.VERIFIED);
+        assertThat(loan.getOutstanding()).isZero();
+        assertThat(loan.getStatus()).isEqualTo(LoanStatus.CLOSED);
+        // Full repayment also closes the application aggregate (ACTIVE → CLOSED).
+        verify(applicationFlowService).closeForLoan(1L);
+    }
+
+    /**
+     * The bug this guards: closure used to be judged at {@code today()} — the moment the
+     * accountant clicked verify. A borrower who paid the full amount on the due date but was verified
+     * two days later was charged two more days of interest, so the balance never reached zero, the
+     * loan stayed open, and every later recompute moved the target another day out.
+     */
+    @Test
+    void verifyClosesAsOfThePaymentDateNotTheVerificationDate() {
+        Loan loan = activeLoan();
+        loan.setDueDate(today().minusDays(2));
+        loan.setDisbursedOn(loan.getDueDate().minusDays(27));
+        LocalDate paidOn = loan.getDueDate(); // paid on the due date; verified two days later
+        Payment payment = verifiedPayment(1_270_000L, paidOn);
+        when(paymentRepository.findById(99L)).thenReturn(Optional.of(payment));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.findByLoanId(1L)).thenReturn(java.util.List.of(payment));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(1_270_000L);
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        repaymentService.verifyPayment(99L);
+
+        assertThat(loan.getStatus()).isEqualTo(LoanStatus.CLOSED);
+        assertThat(loan.getOutstanding()).isZero();
+        // Frozen on the day the money moved — not the day the paperwork caught up.
+        assertThat(loan.getClosedOn()).isEqualTo(paidOn);
+        verify(applicationFlowService).closeForLoan(1L);
+        // CC-05: the ladder judges on-time by the bank date too, not the verification date.
+        verify(creditLevels).onLoanClosed(loan, paidOn.atStartOfDay(IST).toInstant(), false);
+    }
+
+    /** Several verified payments settle the debt as of the last one. */
+    @Test
+    void verifyClosesAsOfTheLatestVerifiedPaymentDate() {
+        Loan loan = activeLoan();
+        loan.setDueDate(today().minusDays(3));
+        loan.setDisbursedOn(loan.getDueDate().minusDays(27));
+        Payment first = verifiedPayment(270_000L, loan.getDueDate().minusDays(5));
+        Payment last = verifiedPayment(1_000_000L, loan.getDueDate());
+        when(paymentRepository.findById(99L)).thenReturn(Optional.of(last));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.findByLoanId(1L)).thenReturn(java.util.List.of(first, last));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(1_270_000L);
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        repaymentService.verifyPayment(99L);
+
+        assertThat(loan.getClosedOn()).isEqualTo(last.getPaidOn());
+    }
+
+    /** A part payment settles nothing: the loan stays open and keeps accruing to today. */
+    @Test
+    void verifyPartialPaymentLeavesTheLoanOpenAndAccruingToToday() {
+        Loan loan = activeLoan();
+        loan.setDueDate(today().minusDays(2));
+        loan.setDisbursedOn(loan.getDueDate().minusDays(27));
+        Payment payment = verifiedPayment(500_000L, loan.getDueDate());
+        when(paymentRepository.findById(99L)).thenReturn(Optional.of(payment));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.findByLoanId(1L)).thenReturn(java.util.List.of(payment));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(500_000L);
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        repaymentService.verifyPayment(99L);
+
+        assertThat(loan.getStatus()).isEqualTo(LoanStatus.ACTIVE);
+        assertThat(loan.getClosedOn()).isNull();
+        // Today's figure, including the late penalty that has run since the due date.
+        assertThat(loan.getOutstanding())
+                .isEqualTo(repaymentService.outstandingAsOf(1L, today()));
+        verify(applicationFlowService, never()).closeForLoan(anyLong());
+        verify(creditLevels, never()).onLoanClosed(any(), any(), anyBoolean());
+    }
+
+    /** Re-verifying on a loan that is already CLOSED must not move the credit ladder a second time. */
+    @Test
+    void anAlreadyClosedLoanDoesNotMoveTheLadderAgain() {
+        Loan loan = activeLoan();
+        loan.setStatus(LoanStatus.CLOSED);
+        Payment payment = verifiedPayment(1_270_000L, DUE);
+        when(paymentRepository.findById(99L)).thenReturn(Optional.of(payment));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.findByLoanId(1L)).thenReturn(List.of(payment));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(1_270_000L);
+        when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        repaymentService.verifyPayment(99L);
+
+        verify(creditLevels, never()).onLoanClosed(any(), any(), anyBoolean());
+    }
+
+    /**
+     * A DhanNow (UPFRONT) loan owes the principal only: no interest accrues (it was deducted at
+     * disbursal) and the late charge runs on the principal from the day after the due date.
+     */
+    @Test
+    void anUpfrontLoanOwesThePrincipalPlusAnyLateCharge() {
+        RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, dhanNowPricing(),
+                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage,
+                creditLevels);
+        Loan loan = dhanNowLoan(today().minusDays(2));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+
+        RepaymentService.OutstandingBreakdown b = dhanNow.outstandingBreakdownAsOf(1L, today());
+
+        assertThat(b.interestPaise()).isZero();
+        assertThat(b.interestDays()).isZero();
+        assertThat(b.penaltyDays()).isEqualTo(2);
+        assertThat(b.penaltyPaise()).isEqualTo(4_000L);
+        assertThat(b.outstandingPaise()).isEqualTo(104_000L);
+        assertThat(dhanNow.outstandingAsOf(1L, loan.getDueDate())).isEqualTo(100_000L);
+    }
+
+    /**
+     * PLAN Phase 2: a part payment leaves the loan open and the ladder alone; the full repayment on the
+     * due date then closes it on time and moves the customer up one level.
+     */
+    @Test
+    void partialThenFullOnTimeRepaymentMovesUpOneLevel() {
+        PricingService pricing = dhanNowPricing();
+        CreditLevelRepository levels = org.mockito.Mockito.mock(CreditLevelRepository.class);
+        CreditLevelHistoryRepository history = org.mockito.Mockito.mock(CreditLevelHistoryRepository.class);
+        CreditLevelService ladder = new CreditLevelService(levels, history, pricing, java.time.Clock.system(IST));
+        RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, pricing,
+                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage, ladder);
+        Loan loan = dhanNowLoan(today());
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        com.navix.loan.entity.CreditLevel l1 = new com.navix.loan.entity.CreditLevel();
+        l1.setCustomerId(7L);
+        l1.setLevel((short) 1);
+        when(levels.findById(7L)).thenReturn(Optional.of(l1));
+
+        Payment part = verifiedPayment(40_000L, today().minusDays(3));
+        when(paymentRepository.findById(98L)).thenReturn(Optional.of(part));
+        when(paymentRepository.findByLoanId(1L)).thenReturn(List.of(part));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(40_000L);
+        dhanNow.verifyPayment(98L);
+        assertThat(loan.getStatus()).isEqualTo(LoanStatus.ACTIVE);
+        verify(history, never()).save(any());
+
+        Payment rest = verifiedPayment(60_000L, today());
+        when(paymentRepository.findById(99L)).thenReturn(Optional.of(rest));
+        when(paymentRepository.findByLoanId(1L)).thenReturn(List.of(part, rest));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(100_000L);
+        dhanNow.verifyPayment(99L);
+
+        assertThat(loan.getStatus()).isEqualTo(LoanStatus.CLOSED);
+        assertThat(l1.getLevel()).isEqualTo((short) 2);
+        assertThat(l1.getMaxPaise()).isEqualTo(200_000L);
+        org.mockito.ArgumentCaptor<com.navix.loan.entity.CreditLevelHistory> row =
+                org.mockito.ArgumentCaptor.forClass(com.navix.loan.entity.CreditLevelHistory.class);
+        verify(history).save(row.capture());
+        assertThat(row.getValue().getReason()).isEqualTo(com.navix.loan.domain.CreditLevelReason.ON_TIME_REPAID);
+    }
+
+    /** The V92/V93 seed rows behind ids 1. */
+    private static PricingService dhanNowPricing() {
+        PricingConfigRepository pricingRepo = org.mockito.Mockito.mock(PricingConfigRepository.class);
+        ProductConfigRepository productRepo = org.mockito.Mockito.mock(ProductConfigRepository.class);
+        lenient().when(pricingRepo.findById(1L)).thenReturn(Optional.of(
+                TestPricing.pricingRow(1L, 1, LoanMath.DHANNOW_SEED_PRICING, ConfigStatus.ACTIVE)));
+        lenient().when(productRepo.findById(1L)).thenReturn(Optional.of(TestPricing.seedProductRow(1L, ConfigStatus.ACTIVE)));
+        lenient().when(productRepo.findFirstByStatus(ConfigStatus.ACTIVE))
+                .thenReturn(Optional.of(TestPricing.seedProductRow(1L, ConfigStatus.ACTIVE)));
+        return new PricingService(pricingRepo, productRepo);
+    }
+
+    /** ₹1,000 on the DhanNow v1 terms, due on {@code due}. */
+    private static Loan dhanNowLoan(LocalDate due) {
+        Loan loan = new Loan();
+        loan.setId(1L);
+        loan.setCustomerId(7L);
+        loan.setPrincipal(100_000L);
+        loan.setDisbursedOn(due.minusDays(14));
+        loan.setDueDate(due);
+        loan.setDueAt(LoanMath.dueAt(due, com.navix.loan.domain.ProductSnapshot.SEED));
+        loan.setGraceDays(0);
+        loan.setPricingVersionId(1L);
+        loan.setProductVersionId(1L);
+        loan.setTotalRepayable(100_000L);
+        loan.setOutstanding(100_000L);
+        loan.setStatus(LoanStatus.ACTIVE);
+        return loan;
+    }
+
+    /** A payment date is a money input: it cannot be in the future, for anyone. */
+    @Test
+    void recordRejectsAFuturePaymentDate() {
+        withActor("9", "ADMIN", () -> {
+            when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+            assertThatThrownBy(() -> repaymentService.recordPayment(1L, 100_000L, PaymentMethod.UPI,
+                    "T1", "proof", today().plusDays(5)))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("future");
+        });
+    }
+
+    /**
+     * The borrower's app sends its own local date, so a handset ahead of IST posts tomorrow for a
+     * payment made now. That must not fail — but it must not buy a free day of interest either, so
+     * the date is clamped back to today rather than trusted.
+     */
+    @Test
+    void aDayOfClockSkewIsClampedRatherThanRejected() {
+        withActor("7", "BORROWER", () -> {
+            when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+            when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+            Payment saved = repaymentService.recordPayment(1L, 100_000L, PaymentMethod.UPI,
+                    "T1", "proof", today().plusDays(1));
+
+            assertThat(saved.getPaidOn()).isEqualTo(today());
+        });
+    }
+
+    /** Nor before the disbursal that created the debt. */
+    @Test
+    void recordRejectsAPaymentDatedBeforeDisbursal() {
+        withActor("9", "ADMIN", () -> {
+            Loan loan = activeLoan();
+            when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+            assertThatThrownBy(() -> repaymentService.recordPayment(1L, 100_000L, PaymentMethod.UPI,
+                    "T1", "proof", loan.getDisbursedOn().minusDays(1)))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("disbursed");
+        });
+    }
+
+    /** Self-service backdating is how an overdue borrower would erase their own late penalty. */
+    @Test
+    void borrowerCannotBackdateBeyondTheRecentWindow() {
+        withActor("7", "BORROWER", () -> {
+            when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+            assertThatThrownBy(() -> repaymentService.recordPayment(1L, 100_000L, PaymentMethod.UPI,
+                    "T1", "proof", today().minusDays(20)))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("too far in the past");
+        });
+    }
+
+    /** ADMIN backdates legitimately — a walk-in, a bank line reconciled days later. */
+    @Test
+    void adminMayBackdateBeyondTheBorrowerWindow() {
+        withActor("9", "ADMIN", () -> {
+            Loan loan = activeLoan();
+            when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+            when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+            LocalDate paidOn = today().minusDays(20);
+            Payment saved = repaymentService.recordPayment(1L, 100_000L, PaymentMethod.UPI,
+                    "T1", null, paidOn);
+
+            assertThat(saved.getPaidOn()).isEqualTo(paidOn);
+            assertThat(saved.getStatus()).isEqualTo(PaymentStatus.PENDING_VERIFICATION);
+        });
+    }
+
+    private Payment verifiedPayment(long amountPaise, LocalDate paidOn) {
+        Payment payment = new Payment();
+        payment.setLoanId(1L);
+        payment.setAmount(amountPaise);
+        payment.setPaidOn(paidOn);
+        payment.setStatus(PaymentStatus.VERIFIED);
+        return payment;
+    }
+
+    private void withActor(String id, String role, Runnable body) {
+        com.navix.common.security.ActorContext.set(
+                new com.navix.common.security.CurrentActor(id, "Test Actor", role));
+        try {
+            body.run();
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
+    }
+
+    @Test
+    void rejectPaymentSetsRejectedAndLeavesBalanceUnchanged() {
+        Payment payment = new Payment();
+        payment.setLoanId(1L);
+        payment.setAmount(500_000L);
+        payment.setStatus(PaymentStatus.PENDING_VERIFICATION);
+        when(paymentRepository.findById(99L)).thenReturn(Optional.of(payment));
+        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+
+        repaymentService.rejectPayment(99L, "WRONG_REFERENCE", "UTR didn't match");
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.REJECTED);
+        assertThat(payment.getRejectionReason()).isEqualTo("WRONG_REFERENCE");
+        assertThat(payment.getRejectionNote()).isEqualTo("UTR didn't match");
+        // A rejected payment never affected the balance, so the loan is not recomputed/closed.
+        verify(loanRepository, never()).save(any());
+        verify(applicationFlowService, never()).closeForLoan(anyLong());
+    }
+
+    @Test
+    void rejectPaymentRequiresAReason() {
+        assertThatThrownBy(() -> repaymentService.rejectPayment(99L, null, null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("required");
+        assertThatThrownBy(() -> repaymentService.rejectPayment(99L, "", null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("required");
+    }
+
+    @Test
+    void rejectPaymentValidatesTheReasonCode() {
+        assertThatThrownBy(() -> repaymentService.rejectPayment(99L, "NOT_A_REAL_REASON", null))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void rejectVerifiedPaymentFails() {
+        Payment payment = new Payment();
+        payment.setLoanId(1L);
+        payment.setAmount(500_000L);
+        payment.setStatus(PaymentStatus.VERIFIED);
+        when(paymentRepository.findById(99L)).thenReturn(Optional.of(payment));
+
+        assertThatThrownBy(() -> repaymentService.rejectPayment(99L, "OTHER", null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("verified");
+    }
+
+    @Test
+    void outstandingAsOfReflectsPrepaymentAndPenalty() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(eq(1L), eq(PaymentStatus.VERIFIED))).thenReturn(0L);
+
+        // Prepay on day 10: interest only to day 10 → ₹11,000
+        assertThat(repaymentService.outstandingAsOf(1L, DISBURSED.plusDays(10))).isEqualTo(1_100_000L);
+
+        // 5 days past due: full 27d interest + penalty for (5 − 1 grace) = 4 days
+        assertThat(repaymentService.outstandingAsOf(1L, DUE.plusDays(5))).isEqualTo(1_360_000L);
+    }
+
+    @Test
+    void graceDayAddsOneDayOfInterestWithoutPenalty() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(eq(1L), eq(PaymentStatus.VERIFIED))).thenReturn(0L);
+
+        var due = repaymentService.outstandingBreakdownAsOf(1L, DUE);
+        var grace = repaymentService.outstandingBreakdownAsOf(1L, DUE.plusDays(1));
+        var firstPenaltyDay = repaymentService.outstandingBreakdownAsOf(1L, DUE.plusDays(2));
+
+        assertThat(due.outstandingPaise()).isEqualTo(1_270_000L);
+        assertThat(due.interestDays()).isEqualTo(27);
+        assertThat(grace.outstandingPaise()).isEqualTo(1_280_000L);
+        assertThat(grace.interestDays()).isEqualTo(28);
+        assertThat(grace.penaltyPaise()).isZero();
+        assertThat(firstPenaltyDay.outstandingPaise()).isEqualTo(1_300_000L);
+        assertThat(firstPenaltyDay.interestDays()).isEqualTo(28);
+        assertThat(firstPenaltyDay.penaltyDays()).isEqualTo(1);
+    }
+
+    @Test
+    void noGraceChargesPenaltyFromTheDayAfterDue() {
+        // A loan written without a grace day (grace_days = 0): interest stops at the due date and the
+        // 2%/day penalty starts the very next day — no extra interest day, no penalty-free day.
+        Loan loan = activeLoan();
+        loan.setGraceDays(0);
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(eq(1L), eq(PaymentStatus.VERIFIED))).thenReturn(0L);
+
+        var due = repaymentService.outstandingBreakdownAsOf(1L, DUE);
+        var dayAfter = repaymentService.outstandingBreakdownAsOf(1L, DUE.plusDays(1));
+        var fiveLate = repaymentService.outstandingBreakdownAsOf(1L, DUE.plusDays(5));
+
+        assertThat(due.outstandingPaise()).isEqualTo(1_270_000L);
+        assertThat(dayAfter.interestDays()).isEqualTo(27);
+        assertThat(dayAfter.penaltyDays()).isEqualTo(1);
+        assertThat(dayAfter.outstandingPaise()).isEqualTo(1_290_000L); // 27d interest + 2% × 1
+        assertThat(fiveLate.outstandingPaise()).isEqualTo(1_370_000L); // 27d interest + 2% × 5
+    }
+
+    @Test
+    void legacyGraceLoanPricesExactlyAsTheOldConstantFormula() {
+        // Oracle: the pre-V90 formula with its hardcoded 1-day grace, for every day from disbursal to
+        // 40 days past due. A legacy loan (grace_days = 1) must reproduce it to the paise.
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(eq(1L), eq(PaymentStatus.VERIFIED))).thenReturn(0L);
+        long principal = 1_000_000L;
+        int tenure = 27;
+        for (int d = 0; d <= tenure + 40; d++) {
+            int interestDays = Math.min(d, tenure + 1);
+            int penaltyDays = Math.max(0, Math.max(0, d - tenure) - 1);
+            long oracle = principal + principal * interestDays / 100 + principal * 2 * Math.min(penaltyDays, 30) / 100;
+            assertThat(repaymentService.outstandingAsOf(1L, DISBURSED.plusDays(d)))
+                    .as("day %d since disbursal", d).isEqualTo(oracle);
+        }
+    }
+
+    @Test
+    void outstandingBreakdownItemizesInterestAndPenalty() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(eq(1L), eq(PaymentStatus.VERIFIED))).thenReturn(0L);
+
+        // On time (day 10): interest ₹1,000, no penalty.
+        var onTime = repaymentService.outstandingBreakdownAsOf(1L, DISBURSED.plusDays(10));
+        assertThat(onTime.interestPaise()).isEqualTo(100_000L);
+        assertThat(onTime.penaltyPaise()).isZero();
+        assertThat(onTime.verifiedPaise()).isZero();
+        assertThat(onTime.outstandingPaise()).isEqualTo(1_100_000L);
+        assertThat(onTime.settledAmountPaise()).isNull();
+        // The day counts the UI shows the working with must match the amounts charged.
+        assertThat(onTime.interestDays()).isEqualTo(10);
+        assertThat(onTime.penaltyDays()).isZero();
+
+        // Overdue (5 days past due): full 27d interest ₹2,700 + penalty for (5 − 1 grace) = 4 days → ₹800.
+        var overdue = repaymentService.outstandingBreakdownAsOf(1L, DUE.plusDays(5));
+        assertThat(overdue.interestPaise()).isEqualTo(280_000L);
+        assertThat(overdue.penaltyPaise()).isEqualTo(80_000L);
+        assertThat(overdue.outstandingPaise()).isEqualTo(1_360_000L);
+        assertThat(overdue.interestDays()).isEqualTo(28);
+        assertThat(overdue.penaltyDays()).isEqualTo(4);
+    }
+
+    /** Past the 30-day penalty cap the reported penaltyDays must be the CHARGED 30, not raw DPD. */
+    @Test
+    void breakdownReportsCappedPenaltyDays() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(eq(1L), eq(PaymentStatus.VERIFIED))).thenReturn(0L);
+
+        // 60 days past due → raw penalty days 59, but the penalty is capped at 30 days.
+        var b = repaymentService.outstandingBreakdownAsOf(1L, DUE.plusDays(60));
+        assertThat(b.penaltyDays()).isEqualTo(30);
+        assertThat(b.penaltyPaise()).isEqualTo(600_000L); // 2% × ₹10,000 × 30
+    }
+
+    @Test
+    void approvedSettlementCapsOutstanding() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(eq(1L), eq(PaymentStatus.VERIFIED))).thenReturn(0L);
+        // Head approved a ₹7,000 full-and-final on a ₹12,700 due loan → borrower owes the settled amount.
+        when(settlementDirectory.approvedSettlementAmount(1L)).thenReturn(Optional.of(700_000L));
+
+        assertThat(repaymentService.outstandingAsOf(1L, DUE)).isEqualTo(700_000L);
+    }
+
+    @Test
+    void settlementNeverIncreasesPayable() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(eq(1L), eq(PaymentStatus.VERIFIED))).thenReturn(0L);
+        // A settlement above the real balance is a no-op: the borrower still owes only the lower formula amount.
+        when(settlementDirectory.approvedSettlementAmount(1L)).thenReturn(Optional.of(2_000_000L));
+
+        assertThat(repaymentService.outstandingAsOf(1L, DUE)).isEqualTo(1_270_000L);
+    }
+
+    /**
+     * The phantom-penalty bug (work item 3a): without the {@code closedOn} clamp, a loan closed long
+     * ago keeps accruing 2%/day late penalty against {@code today()} — a loan closed 90 days
+     * ago would report ~60% of principal owed even though it's fully repaid. With the clamp, the
+     * working date never advances past the day it actually closed, so it reports zero.
+     */
+    @Test
+    void closedLoanReportsZeroOutstandingRegardlessOfHowLongAgoItClosed() {
+        // Disbursed 120 days ago, 27-day tenure (due 93 days ago), closed 90 days ago (3 days late:
+        // 28 interest days [tenure + 1 grace] + 2 penalty days [3 DPD − 1 grace]).
+        LocalDate disbursed = today().minusDays(120);
+        LocalDate due = disbursed.plusDays(27);
+        LocalDate closedOn = due.plusDays(3);
+        Loan loan = new Loan();
+        loan.setCustomerId(7L);
+        loan.setPrincipal(1_000_000L);
+        loan.setDisbursedOn(disbursed);
+        loan.setDueDate(due);
+        loan.setStatus(LoanStatus.CLOSED);
+        loan.setClosedOn(closedOn);
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        // Interest 1% × 1,000,000 × 28 = 280,000; penalty 2% × 1,000,000 × 2 days = 40,000; verified
+        // payments covered exactly principal + interest + penalty as of closedOn.
+        when(paymentRepository.sumAmountByLoanIdAndStatus(eq(1L), eq(PaymentStatus.VERIFIED)))
+                .thenReturn(1_320_000L);
+
+        // Without the clamp this would keep accruing 2%/day penalty against "today" (90 days of
+        // penalty, capped at 30) and report a large phantom balance instead of zero.
+        assertThat(repaymentService.outstandingAsOf(1L, null)).isZero();
+        assertThat(repaymentService.outstandingAsOf(1L, today())).isZero();
+    }
+
+    @Test
+    void payingTheSettledAmountClosesTheLoan() {
+        Loan loan = activeLoan();
+        Payment payment = new Payment();
+        payment.setLoanId(1L);
+        payment.setAmount(700_000L);
+        payment.setStatus(PaymentStatus.PENDING_VERIFICATION);
+        when(paymentRepository.findById(55L)).thenReturn(Optional.of(payment));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        // Verified payments now equal the approved settlement → settled balance is 0, independent of the clock.
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(700_000L);
+        when(settlementDirectory.approvedSettlementAmount(1L)).thenReturn(Optional.of(700_000L));
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        repaymentService.verifyPayment(55L);
+
+        assertThat(loan.getOutstanding()).isZero();
+        assertThat(loan.getStatus()).isEqualTo(LoanStatus.CLOSED);
+        verify(applicationFlowService).closeForLoan(1L, "Closed by approved settlement of ₹7,000.00 (full & final)");
+        // A settlement never raises the credit level.
+        verify(creditLevels).onLoanClosed(eq(loan), any(), eq(true));
+    }
+
+    /**
+     * The stored {@code proofUrl} is a raw S3 key, never fetchable by a browser directly — every read
+     * path must resolve it to a short-lived presigned GET before it reaches a response.
+     */
+    private Payment paymentFixture() {
+        Payment payment = new Payment();
+        payment.setId(1L);
+        payment.setLoanId(1L);
+        payment.setAmount(500_000L);
+        payment.setMethod(PaymentMethod.UPI);
+        payment.setStatus(PaymentStatus.PENDING_VERIFICATION);
+        return payment;
+    }
+
+    @Test
+    void viewResolvesTheStoredProofKeyToAPresignedUrl() {
+        Payment payment = paymentFixture();
+        payment.setProofUrl("loan/repayment-proof/1.jpg");
+        when(storage.presignDownload("loan/repayment-proof/1.jpg")).thenReturn("https://s3.example/signed?x=1");
+
+        assertThat(repaymentService.view(payment).proofUrl()).isEqualTo("https://s3.example/signed?x=1");
+    }
+
+    @Test
+    void viewLeavesProofUrlNullWhenNothingWasUploaded() {
+        assertThat(repaymentService.view(paymentFixture()).proofUrl()).isNull();
+        verify(storage, never()).presignDownload(any());
+    }
+
+    // ------------------------------------------------------------------ read guard
+    //
+    // GET /api/loan/{id}, /outstanding and /repayments had NO ownership check: any authenticated
+    // token could read any borrower's loan, balance and repayment history by guessing an id. These
+    // pin the guard that closes it — and that it does not get in the way of the staff who need those
+    // reads to do their job.
+
+    @Test
+    void requireReadableLoanLetsABorrowerReadTheirOwnLoan() {
+        Loan loan = activeLoan();
+        loan.setCustomerId(7L);
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        com.navix.common.security.ActorContext.set(
+                new com.navix.common.security.CurrentActor("7", "Asha", "BORROWER"));
+
+        assertThat(repaymentService.requireReadableLoan(1L)).isSameAs(loan);
+        com.navix.common.security.ActorContext.clear();
+    }
+
+    @Test
+    void requireReadableLoanRejectsABorrowerReadingSomeoneElsesLoan() {
+        Loan loan = activeLoan();
+        loan.setCustomerId(7L);
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        com.navix.common.security.ActorContext.set(
+                new com.navix.common.security.CurrentActor("8", "Bilal", "BORROWER"));
+
+        assertThatThrownBy(() -> repaymentService.requireReadableLoan(1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Not your loan");
+        com.navix.common.security.ActorContext.clear();
+    }
+
+    @Test
+    void requireReadableLoanRejectsADsaBeforeItEvenLooksTheLoanUp() {
+        com.navix.common.security.ActorContext.set(
+                new com.navix.common.security.CurrentActor("14", "Agent", "DSA"));
+
+        assertThatThrownBy(() -> repaymentService.requireReadableLoan(1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("DSAs cannot view loans");
+        verify(loanRepository, never()).findById(any());
+        com.navix.common.security.ActorContext.clear();
+    }
+
+    @Test
+    void requireReadableLoanLetsAnyOtherStaffRoleRead() {
+        Loan loan = activeLoan();
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        com.navix.common.security.ActorContext.set(
+                new com.navix.common.security.CurrentActor("7", "Deepa", "ACCOUNTANT"));
+
+        assertThat(repaymentService.requireReadableLoan(1L)).isSameAs(loan);
+        com.navix.common.security.ActorContext.clear();
+    }
+
+    /**
+     * The repay screen's three quotes come from one endpoint now; this pins that routing them
+     * through the already-loaded loan gives the identical figure the by-id path gives, so the
+     * borrower's "pay today / on salary day / a day later" amounts cannot drift from the ledger.
+     */
+    @Test
+    void breakdownForAnAlreadyLoadedLoanEqualsTheByIdForm() {
+        Loan loan = activeLoan();
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(0L);
+        when(settlementDirectory.approvedSettlementAmount(1L)).thenReturn(Optional.empty());
+
+        for (LocalDate at : List.of(today(), DUE, DUE.plusDays(1))) {
+            assertThat(repaymentService.outstandingBreakdownAsOf(1L, at))
+                    .isEqualTo(repaymentService.outstandingBreakdownAsOf(loan, at));
+        }
+    }
+}

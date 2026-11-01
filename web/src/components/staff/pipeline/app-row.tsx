@@ -1,0 +1,180 @@
+"use client";
+
+import { TrustStars } from "@/components/staff/trust-stars";
+import * as React from "react";
+import { ArrowRight, Route } from "lucide-react";
+import { StageSignal } from "@/components/staff/stage-signal";
+import { CreditBadge } from "@/components/staff/credit-badge";
+import { ApplicationJourney } from "@/components/staff/application-journey";
+import { ApplicationDetailDialog } from "@/components/staff/application-detail-dialog";
+import { LoanHistory } from "@/components/staff/pipeline/loan-history";
+import { type ApplicationView } from "@/lib/api/applications";
+import { formatDateTime } from "@/lib/utils";
+import { AmountCell, DueCell } from "./cells";
+
+/**
+ * One queue row, deliberately one line tall.
+ *
+ * The console is a triage grid. The row always carries the identifiers a staffer needs to recognise
+ * a file at a glance — application id, customer name, mobile, customer id, and the loan number once
+ * one exists — plus amount, stage and credit. The rule is now "no typing *in the row*": Assign and
+ * Reject are back as row-level buttons (they raise the same dialogs `pipeline/bulk-actions.tsx`
+ * uses for the bulk case, single-id), but anything that still needs a field typed inline — mark
+ * pending, enter a transaction id — lives in {@link ApplicationDetailDialog}, which `Open` and the
+ * id both raise and which already renders the full stage cluster. Long values truncate with an
+ * ellipsis and keep the full text in `title`, so nothing is lost and the table never scrolls
+ * sideways.
+ */
+export function AppRow({
+  app,
+  actions,
+  withLoanHistory,
+  showJourney = true,
+  index,
+  selected,
+  onToggleSelect,
+}: {
+  app: ApplicationView;
+  actions: (app: ApplicationView) => React.ReactNode;
+  withLoanHistory?: boolean;
+  showJourney?: boolean;
+  /** Page-adjusted 0-based row index, rendered as a leading S.No. column. */
+  index: number;
+  /** Bulk-selection checkbox state — both omitted together (see `QueueTable`'s `selection` prop). */
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
+  const [journeyOpen, setJourneyOpen] = React.useState(false);
+  const [showDetail, setShowDetail] = React.useState(false);
+  // Disbursal-then-salary fallback — the same rule DisbursementFocus uses. Full values, no
+  // masking: an explicit product decision (queues are screen-shared in practice; noted for
+  // security review).
+  const account = app.disbursalAccountNumber ?? app.salaryAccountNumber ?? null;
+  const ifsc = app.disbursalIfsc ?? app.salaryIfsc ?? null;
+
+  return (
+    <>
+      <tr>
+        <td className="text-muted">{index + 1}</td>
+        {onToggleSelect && (
+          <td className="staff-sticky-identity">
+            <input
+              type="checkbox"
+              checked={selected ?? false}
+              onChange={onToggleSelect}
+              aria-label={`Select application #${app.id}`}
+            />
+          </td>
+        )}
+        <td className={onToggleSelect ? undefined : "staff-sticky-identity"}>
+          <button
+            type="button"
+            onClick={() => setShowDetail(true)}
+            className="text-left font-serif font-semibold text-navy hover:underline"
+            title={`Open application #${app.id}`}
+          >
+            #{app.id}
+          </button>
+        </td>
+        <td className="font-mono text-muted">#{app.customerId}</td>
+        <td className="whitespace-nowrap text-muted">
+          {app.createdAt ? formatDateTime(app.createdAt) : "—"}
+        </td>
+        <td className="staff-cell font-semibold text-ink" title={app.customerName || undefined}>
+          {app.customerName || "Name unavailable"}
+        </td>
+        <td><TrustStars trust={app.trust} /></td>
+        <td className="font-mono text-muted">{app.customerMobile || "—"}</td>
+        <td className="font-mono text-ink">{app.pan || "—"}</td>
+        <td className="font-mono text-ink">{account || "—"}</td>
+        <td className="font-mono text-ink">{ifsc || "—"}</td>
+        <td className="font-mono text-muted">{app.loanId != null ? `#${app.loanId}` : "—"}</td>
+        {/* `num` right-aligns the figure under its `th.num` header (globals.css). */}
+        <td className="num">
+          <span className="font-semibold text-ink">
+            <AmountCell
+              amountPaise={app.amountRequestedPaise ?? app.eligibleLimitPaise}
+              isRequested={app.amountRequestedPaise != null}
+            />
+          </span>
+        </td>
+        {/* Due date sits beside the amount because that's how a collections officer reads a row:
+            how much, by when, and how late. */}
+        <td className="whitespace-nowrap">
+          <DueCell
+            dueDate={app.loanDueDate}
+            loanStatus={app.loanStatus}
+            markedPendingAt={app.markedPendingAt}
+            pendingReason={app.pendingReason}
+          />
+        </td>
+        <td>
+          <CreditBadge
+            compact
+            starRating={app.starRating}
+            creditScore={app.creditScore}
+            recommendation={app.recommendation}
+          />
+        </td>
+        <td>
+          <StageSignal compact status={app.status} loanStatus={app.loanStatus} journeyStep={app.journeyStep} />
+        </td>
+        <td className="staff-cell text-muted" title={app.creditDecidedByName || undefined}>
+          {app.creditDecidedByName || "—"}
+        </td>
+        <td className="staff-cell text-muted" title={app.disbursedByName || undefined}>
+          {app.disbursedByName || "—"}
+        </td>
+        <td className="staff-cell text-muted" title={app.collectionOfficerName || undefined}>
+          {app.collectionOfficerName || "—"}
+        </td>
+        <td className="staff-sticky-actions">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setShowDetail(true)}
+              className="btn btn-sm btn-outline"
+              title="Open the full application detail"
+            >
+              Open <ArrowRight size={14} />
+            </button>
+            {showJourney && (
+              <button
+                type="button"
+                onClick={() => setJourneyOpen(true)}
+                className="btn btn-sm btn-outline btn-icon"
+                aria-label="View the full application journey"
+                title="View the full application journey"
+              >
+                <Route size={14} />
+              </button>
+            )}
+            {actions(app)}
+          </div>
+
+          {journeyOpen && (
+            <ApplicationJourney
+              applicationId={app.id}
+              open={journeyOpen}
+              onClose={() => setJourneyOpen(false)}
+              onOpenDetail={() => {
+                setJourneyOpen(false);
+                setShowDetail(true);
+              }}
+            />
+          )}
+          {showDetail && (
+            <ApplicationDetailDialog applicationId={app.id} onClose={() => setShowDetail(false)} />
+          )}
+        </td>
+      </tr>
+      {withLoanHistory && (
+        <tr>
+          <td colSpan={onToggleSelect ? 20 : 19} className="bg-grey-50">
+            <LoanHistory customerId={app.customerId} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}

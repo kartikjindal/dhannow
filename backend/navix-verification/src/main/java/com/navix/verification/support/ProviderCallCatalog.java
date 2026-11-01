@@ -1,0 +1,96 @@
+package com.navix.verification.support;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * Maps a provider endpoint path to the {@code (operation, provider)} pair the Provider API dashboard
+ * groups and filters on.
+ *
+ * <p>Deriving these centrally from the path keeps the 15 provider clients untouched — the
+ * alternative was threading two extra arguments through every client call site. The operation names
+ * are deliberately the SAME vocabulary the manual workbench catalog uses
+ * ({@code PAN}, {@code EMAIL}, {@code ADDRESS}, {@code BUREAU}, {@code PENNY_DROP},
+ * {@code FACE_MATCH}, {@code UAN}) so manual and live rows filter identically; the flows the
+ * workbench cannot fire by hand ({@code DIGILOCKER}, {@code LIVENESS}, {@code ESIGN}) extend it.
+ *
+ * <p>An unknown path is not an error — it yields {@code OTHER} plus a provider inferred from the
+ * path shape, so a newly added client still gets audited before anyone remembers to update this map.
+ */
+public final class ProviderCallCatalog {
+
+    /** Signzy paths are all under {@code /api/v3/}; Digitap's are not. */
+    private static final String SIGNZY_PREFIX = "/api/v3/";
+
+    private record Route(String operation, String provider) {}
+
+    private static final Map<String, Route> ROUTES = new LinkedHashMap<>();
+
+    static {
+        // Fintrix — the bureau FALLBACK leg. Without this entry the fallback below mislabels every Fintrix call
+        // as DIGITAP (it doesn't start with the Signzy prefix, so the fallback defaults to Digitap).
+        ROUTES.put("/crif_combine", new Route("BUREAU", "FINTRIX"));
+        ROUTES.put("/bureau_ch_user_auth", new Route("BUREAU", "FINTRIX"));
+        ROUTES.put("/pan_comprehensive", new Route("PAN", "FINTRIX"));
+        // Digitap
+        ROUTES.put("/credit_analytics/request", new Route("BUREAU", "DIGITAP"));
+        // Digitap's OTHER bureau product (CRIF, svc host). Must stay distinguishable from the Experian
+        // row above or the audit table cannot tell which bureau actually answered a fallback.
+        ROUTES.put("/credit_analytics/v2/cf", new Route("BUREAU", "DIGITAP_CRIF"));
+        ROUTES.put("/validation/kyc/v1/pan_details_plus", new Route("PAN", "DIGITAP"));
+        ROUTES.put("/cv/email_verification/v1", new Route("EMAIL", "DIGITAP"));
+        ROUTES.put("/ent/v1/address-verification", new Route("ADDRESS", "DIGITAP"));
+        ROUTES.put("/fmfl/v2/face-match", new Route("FACE_MATCH", "DIGITAP"));
+        // The selfie PRIMARY since Oct 2026 — same LIVENESS operation as Signzy's video journey, so
+        // the dashboard shows the two selfie providers side by side.
+        ROUTES.put("/fmfl/v4/face-liveness", new Route("LIVENESS", "DIGITAP"));
+        ROUTES.put("/cv/v3/uan_basic/sync", new Route("UAN", "DIGITAP"));
+        // On-demand collections lookup (Skip Tracer tab) — never fired by the lifecycle.
+        ROUTES.put("/enrichment/misc/v1/skip-tracing-lite", new Route("SKIP_TRACE", "DIGITAP"));
+        // Signzy — the two bureaux stay distinguishable because the router tries Experian then CRIF.
+        ROUTES.put("/api/v3/bureau/experian-lite", new Route("BUREAU", "SIGNZY_EXPERIAN"));
+        ROUTES.put("/api/v3/bureau/crif", new Route("BUREAU", "SIGNZY_CRIF"));
+        ROUTES.put("/api/v3/pan/compliance-206-individual-search", new Route("PAN", "SIGNZY"));
+        ROUTES.put("/api/v3/pan/kycIdLinkStatus", new Route("PAN_AADHAAR_LINK", "SIGNZY"));
+        ROUTES.put("/api/v3/email/verificationV2", new Route("EMAIL", "SIGNZY"));
+        ROUTES.put("/api/v3/geocoding/reverse-geocode", new Route("ADDRESS", "SIGNZY"));
+        ROUTES.put("/api/v3/bankaccountverification/pennydrop-v1", new Route("PENNY_DROP", "SIGNZY"));
+        ROUTES.put("/api/v3/digilocker-v2/createUrl", new Route("DIGILOCKER", "SIGNZY"));
+        ROUTES.put("/api/v3/digilocker-v2/geteAadhaar", new Route("DIGILOCKER", "SIGNZY"));
+        ROUTES.put("/api/v3/liveness-secure/createUrl", new Route("LIVENESS", "SIGNZY"));
+        ROUTES.put("/api/v3/liveness-secure/getData", new Route("LIVENESS", "SIGNZY"));
+        // On-demand credit lookup (Banking tab) — three calls, one operation, never fired by the lifecycle.
+        ROUTES.put("/api/v3/statementanalysis/analyze-statement", new Route("BANK_STATEMENT", "SIGNZY"));
+        ROUTES.put("/api/v3/statementanalysis/retrieve-work-order", new Route("BANK_STATEMENT", "SIGNZY"));
+        ROUTES.put("/api/v3/statementanalysis/download-report", new Route("BANK_STATEMENT", "SIGNZY"));
+        ROUTES.put("/api/v3/contract/initiate", new Route("ESIGN", "SIGNZY"));
+        ROUTES.put("/api/v3/contract/pullData", new Route("ESIGN", "SIGNZY"));
+    }
+
+    private ProviderCallCatalog() {
+        // static holder - no instances
+    }
+
+    public static String operationFor(String endpoint) {
+        Route route = ROUTES.get(strip(endpoint));
+        return route != null ? route.operation() : "OTHER";
+    }
+
+    public static String providerFor(String endpoint) {
+        String path = strip(endpoint);
+        Route route = ROUTES.get(path);
+        if (route != null) {
+            return route.provider();
+        }
+        return path.startsWith(SIGNZY_PREFIX) ? "SIGNZY" : "DIGITAP";
+    }
+
+    /** Drop any query string so {@code /x?y=1} still resolves to the {@code /x} route. */
+    private static String strip(String endpoint) {
+        if (endpoint == null) {
+            return "";
+        }
+        int query = endpoint.indexOf('?');
+        return query < 0 ? endpoint : endpoint.substring(0, query);
+    }
+}

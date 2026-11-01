@@ -1,0 +1,188 @@
+"use client";
+
+import * as React from "react";
+import Link from "next/link";
+import {
+  Sparkles, XCircle, ArrowRight, CheckCircle2, RefreshCw, Phone, ShieldCheck, FileClock,
+} from "lucide-react";
+import { LoanStatusTracker } from "@/components/borrower/loan-status-tracker";
+import {
+  useLiveApplication,
+  useLiveEvents,
+  appStatusToStage,
+  hasOffer,
+  isTerminalBad,
+  TERMINAL_BAD,
+} from "@/lib/api/live-journey";
+import { statusLabel } from "@/lib/api/applications";
+import { formatDateTime, formatINR0 } from "@/lib/utils";
+import { BRAND } from "@/lib/brand";
+
+/**
+ * Live application status — driven entirely by the real backend state machine.
+ * The credit/disbursement decisions are made by staff (in /staff/applications);
+ * this page polls and reflects the application as it walks to ACTIVE.
+ */
+export default function LoanStatusPage() {
+  // This page renders the state machine and its audit trail only — never the loan — so the live
+  // adapter is told not to fetch it.
+  const { appId, app, isLoading, refetch } = useLiveApplication({ needLoan: false });
+  // The audit trail lives inside a collapsed <details>; fetch it when the borrower opens it. The
+  // one exception is a declined/failed application, whose card reads its reason off the same
+  // events (`declineNote` below) — there they must be loaded eagerly.
+  const [trailOpen, setTrailOpen] = React.useState(false);
+  const eventsQuery = useLiveEvents(appId, app?.status, {
+    enabled: trailOpen || (app != null && TERMINAL_BAD.includes(app.status)),
+  });
+  const stage = appStatusToStage(app);
+
+  // No live application started in this browser yet.
+  if (appId == null) {
+    return (
+      <div className="container max-w-content py-10">
+        <div className="rounded border border-line bg-white p-8 text-center shadow-sm">
+          <span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full bg-navy-tint text-navy">
+            <FileClock size={26} />
+          </span>
+          <h1 className="text-2xl">No application yet</h1>
+          <p className="mb-5 text-muted">Start your application to track it here in real time.</p>
+          <Link href="/signup/start" className="btn btn-gold">Start application <ArrowRight size={16} /></Link>
+        </div>
+      </div>
+    );
+  }
+
+  const active = app?.status === "ACTIVE";
+  const declined = isTerminalBad(app);
+  // Credit has sanctioned an amount + date: the borrower's own offer journey is open (Phase 3).
+  // `/loan/amount` is its entry point; the layout's journey guard then jumps them to whichever
+  // step they actually left off at, so this one link resumes from anywhere.
+  const offer = hasOffer(app);
+  const processing = !!app && !active && !declined && !offer;
+  const events = eventsQuery.data ?? [];
+  const declineNote = [...events].reverse().find((e) => e.notes)?.notes;
+
+  return (
+    <div className="container max-w-content py-10">
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <h1 className="mb-0">Application status</h1>
+        <button
+          onClick={refetch}
+          className="flex items-center gap-1.5 rounded border border-line px-3 py-1.5 text-xs text-muted hover:bg-grey-100 hover:text-ink"
+        >
+          <RefreshCw size={13} /> Refresh
+        </button>
+      </div>
+      <p className="mb-7 text-muted">
+        {app ? (
+          <>
+            Application #{app.id} ·{" "}
+            <span className="font-semibold text-ink">{statusLabel(app.status)}</span>
+          </>
+        ) : (
+          "Loading your application…"
+        )}
+      </p>
+
+      <div className="grid gap-8 lg:grid-cols-[1fr_minmax(0,360px)]">
+        <div className="rounded border border-line bg-white p-6 shadow-sm">
+          {isLoading && !app ? (
+            <div className="h-64 animate-pulse rounded bg-grey-100" />
+          ) : (
+            <LoanStatusTracker status={stage} />
+          )}
+        </div>
+
+        <div className="flex flex-col gap-4">
+          {offer && (
+            <div className="rounded border border-success-100 bg-success-50/60 p-6 text-center shadow-sm">
+              <span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full bg-success-50 text-success-600">
+                <Sparkles size={26} />
+              </span>
+              <h3 className="font-serif text-lg text-navy">You&apos;re approved</h3>
+              <p className="mb-4 text-sm text-muted">
+                {app?.sanctionedAmountPaise
+                  ? `Our credit team has approved up to ${formatINR0(Math.round(app.sanctionedAmountPaise / 100))}. A few steps left to receive it.`
+                  : "A few steps left to receive your money."}
+              </p>
+              <Link href="/loan/amount" className="btn btn-gold btn-block">
+                Continue your loan <ArrowRight size={16} />
+              </Link>
+            </div>
+          )}
+
+          {processing && (
+            <div className="rounded border border-line bg-white p-6 text-center shadow-sm">
+              <span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full bg-success-50 text-success-600">
+                <CheckCircle2 size={26} />
+              </span>
+              <h3 className="font-serif text-lg text-navy">Under review</h3>
+              <p className="text-sm text-muted">
+                Your application will be reviewed in 2–3 hours. This page updates automatically —
+                currently <strong className="text-ink">{app && statusLabel(app.status)}</strong>.
+              </p>
+            </div>
+          )}
+
+          {active && (
+            <div className="rounded border border-success-100 bg-success-50/60 p-6 text-center shadow-sm">
+              <span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full bg-success-50 text-success-600">
+                <ShieldCheck size={26} />
+              </span>
+              <h3 className="font-serif text-lg text-navy">Your advance is active</h3>
+              <p className="mb-4 text-sm text-muted">Manage everything from your dashboard.</p>
+              <Link href="/dashboard" className="btn btn-gold btn-block">
+                Go to dashboard <ArrowRight size={16} />
+              </Link>
+            </div>
+          )}
+
+          {declined && (
+            <div className="rounded border border-error-100 bg-error-50/50 p-6 text-center shadow-sm">
+              <span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full bg-error-50 text-error-600">
+                <XCircle size={26} />
+              </span>
+              <h3 className="font-serif text-lg text-navy">Not approved this time</h3>
+              <p className="text-sm text-muted">{declineNote ?? "Your application did not meet current credit policy."}</p>
+              <p className="mt-3 text-sm text-muted">
+                Questions?{" "}
+                <a href={BRAND.phoneHref} className="inline-flex items-center gap-1 font-semibold text-navy">
+                  <Phone size={13} /> {BRAND.phone}
+                </a>
+              </p>
+            </div>
+          )}
+
+          {/* Always rendered — it is what the borrower opens to load the trail in the first place. */}
+          <details
+            className="rounded border border-line bg-white p-4 shadow-sm"
+            onToggle={(e) => setTrailOpen((e.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary className="cursor-pointer text-sm font-semibold text-navy">
+              Audit trail{events.length > 0 ? ` (${events.length})` : ""}
+            </summary>
+            {events.length === 0 ? (
+              <p className="mt-2 text-xs text-muted">
+                {eventsQuery.isLoading ? "Loading…" : "Nothing recorded yet."}
+              </p>
+            ) : (
+              <ul className="mt-2 space-y-1.5 text-xs text-muted">
+                {events.map((e) => (
+                  <li key={e.id} className="flex items-center justify-between gap-2 border-b border-line pb-1.5 last:border-0">
+                    <span className="text-ink">
+                      {e.action ?? "transition"}{" "}
+                      <span className="text-muted">
+                        {e.fromStatus ? `${e.fromStatus} → ` : ""}{e.toStatus ?? ""}
+                      </span>
+                    </span>
+                    <span className="flex-shrink-0">{e.at ? formatDateTime(e.at) : ""}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </details>
+        </div>
+      </div>
+    </div>
+  );
+}

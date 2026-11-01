@@ -1,0 +1,4906 @@
+/**
+ * Typed client for the DhanBoost backend application state-machine API.
+ *
+ * IMPORTANT: these functions call the Next.js BFF proxies, NOT the Spring
+ * backend directly. Staff actions/queues go through `/api/staff/applications/*`
+ * (identity injected from the httpOnly `navix_staff` cookie); borrower actions
+ * go through `/api/borrower/applications/*` (identity from `navix_borrower`).
+ * The two namespaces never share a session/cookie.
+ *
+ * Every backend response is an `ApiResponse<T>` envelope; the helpers below
+ * unwrap `data` and throw {@link ApplicationApiError} on `success:false`,
+ * surfacing `error.code` so the UI can show a meaningful message.
+ */
+
+import { currentActingRole } from "@/lib/auth/working-role";
+import { daysBetween } from "@/lib/calc/loan-math";
+import type { JsonValue } from "@/lib/credit/provider-report";
+
+// ---------------------------------------------------------------------------
+// Domain types (mirror the backend exactly)
+// ---------------------------------------------------------------------------
+
+export type ApplicationStatus =
+  | "DRAFT"
+  | "KYC_PENDING"
+  | "KYC_APPROVED"
+  | "KYC_REJECTED"
+  | "PRE_APPROVED"
+  | "REVIEW_PENDING"
+  | "CREDIT_EXEC_PENDING"
+  | "CREDIT_EXEC_APPROVED"
+  | "CREDIT_HEAD_PENDING"
+  | "CREDIT_HEAD_APPROVED"
+  // Credit has decided; the borrower is walking the post-approval journey (V45).
+  | "SANCTIONED"
+  | "DISBURSEMENT_PENDING"
+  | "ACCOUNTANT_PENDING"
+  | "DISBURSEMENT_FAILED"
+  | "DISBURSED"
+  | "ACTIVE"
+  | "OVERDUE"
+  | "DEFAULTED"
+  | "CLOSED"
+  | "WRITTEN_OFF"
+  | "REJECTED"
+  | "CANCELLED";
+
+/** Tri-state of one trust star: PASS = full, FAIL = empty, NOT_CHECKED = never run / no data. */
+export type TrustStar = "PASS" | "FAIL" | "NOT_CHECKED";
+
+/** The three small stars shown beside a customer in every staff table (mirrors backend `TrustSignals`).
+ *  bureau = no DPD on any account in the last 6 months of the latest report; uan = a valid EPFO/UAN
+ *  record was found; email = the work-email provider check passed. */
+export interface TrustSignals {
+  bureau: TrustStar;
+  uan: TrustStar;
+  email: TrustStar;
+  /** Staff-only one-line reason behind each star (e.g. "HDFC Bank · Personal Loan · Jul 2026: 30 DPD"). */
+  bureauWhy?: string | null;
+  uanWhy?: string | null;
+  emailWhy?: string | null;
+}
+
+export interface ApplicationView {
+  id: number;
+  customerId: number;
+  status: ApplicationStatus;
+  /** Stored JourneyService step (Step / OfferStep enum name); null when unknown. Staff stage signal only. */
+  journeyStep?: string | null;
+  amountRequestedPaise: number | null;
+  eligibleLimitPaise: number | null;
+  /** What this customer may borrow right now — the admin limit override when set, else the
+   *  application's own eligible limit. Populated on the borrower's own read paths (V69). */
+  availableLimitPaise?: number | null;
+  /** Bureau / UAN / work-email trust stars (staff list rows); null when not computed. */
+  trust?: TrustSignals | null;
+  purpose: string | null;
+  assignedExecutiveId: number | null;
+  loanId: number | null;
+  /** Salary-credit day-of-month (1–31) — fixed on the first loan and reused on reborrow (no re-pick). */
+  salaryCreditDay?: number | null;
+  /** A pre-approved reborrow that reached disbursement without credit review (fast-track section). */
+  fastTrack?: boolean;
+  /** Staff-only credit headline (populated on staff queue rows; never on borrower paths). */
+  creditScore?: number | null;
+  starRating?: number | null;
+  recommendation?: string | null;
+  /** Staff-only customer identity (populated on staff queue rows; never on borrower paths). */
+  customerName?: string | null;
+  customerMobile?: string | null;
+  /**
+   * The minted loan's EFFECTIVE status and due date (staff queue rows only; null before disbursal).
+   *
+   * Read `loanDueDate` — not `status` — to decide whether a live loan is overdue: `LoanStatus.OVERDUE`
+   * is compute-on-read and the application aggregate stays `ACTIVE` for the whole repayment window,
+   * so `status === "OVERDUE"` is effectively never true. `loanStatus` also stays `IN_COLLECTIONS`
+   * once a case is opened, past due or not.
+   */
+  loanStatus?: string | null;
+  loanDueDate?: string | null;
+  /**
+   * The credit sanction (V45) — null until a Credit Executive accepts the lead. The sanctioned
+   * amount is the CEILING the borrower may draw from, not what they end up requesting.
+   */
+  sanctionedAmountPaise?: number | null;
+  approvedRepaymentDate?: string | null;
+  sanctionTenureDays?: number | null;
+  sanctionRemarks?: string | null;
+  sanctionedAt?: string | null;
+  /** "Mark lead pending" — a staff-only tag; the borrower is never told (revamp.md decision 30). */
+  markedPendingAt?: string | null;
+  pendingReason?: string | null;
+  /**
+   * Where this advance is paid (V46), confirmed by the borrower on the last offer screen. Held in
+   * full because the Disbursement Head cannot make the transfer otherwise (revamp.md decision 16) —
+   * so never log these and never put them in an export.
+   */
+  disbursalAccountNumber?: string | null;
+  disbursalIfsc?: string | null;
+  disbursalHolderName?: string | null;
+  disbursalBank?: string | null;
+  /** The borrower named a different account, so a penny drop ran against it. */
+  disbursalAccountChanged?: boolean | null;
+  /** True only when this exact account-number/IFSC pair has a reusable successful verification. */
+  disbursalAccountVerified?: boolean | null;
+  /** Staff-enriched identity/bank fields (populated on staff reads; always null on the borrower `/mine` route). */
+  pan?: string | null;
+  salaryAccountNumber?: string | null;
+  salaryIfsc?: string | null;
+  /**
+   * The REAL, server-resolved assignee name for `assignedExecutiveId` (staff reads only — always null
+   * on the borrower `/mine` route). Distinct from any implied/displayed Credit Head label shown in the
+   * journey view when this is still null — that is a frontend-only convention, never persisted here.
+   */
+  assignedExecutiveName?: string | null;
+  /** When this application entered its CURRENT `status` (latest `application_event.at`). Staff-only. */
+  currentStageEnteredAt?: string | null;
+  /** When the borrower started this application (V53) — the true creation date, distinct from
+   *  `currentStageEnteredAt`, which resets on every status transition. */
+  createdAt?: string | null;
+  /** Who handled the file — from the audit trail (credit decision, disbursal) and the collections
+   *  case. Blank when the stage has not happened. `creditDecidedByName` is who DECIDED it, which on
+   *  a reassigned or Head-decided file is not the same person as `assignedExecutiveName`. */
+  creditDecidedByName?: string | null;
+  disbursedByName?: string | null;
+  collectionOfficerName?: string | null;
+}
+
+/**
+ * One staffer's action off the application-event trail (backs /staff/my-decisions).
+ *
+ * The machine payload the backend used to store in `notes` (`amountPaise=… executiveId=…`) is
+ * parsed server-side into the typed fields below. `notes` is still carried as the raw audit record
+ * but must NOT be rendered as a column — it is a tooltip at most.
+ */
+export interface DecisionView {
+  applicationId: number;
+  customerId: number | null;
+  customerName: string | null;
+  pan: string | null;
+  action: string;
+  fromStatus: string | null;
+  toStatus: string;
+  at: string;
+  amountPaise: number | null;
+  salaryCreditDay: number | null;
+  /** yyyy-mm-dd */
+  repaymentDate: string | null;
+  assigneeId: number | null;
+  assigneeName: string | null;
+  txnRef: string | null;
+  /** Whatever a human actually typed, plus any payload that could not be parsed. */
+  remark: string | null;
+  /** Raw `application_event.notes` — audit source of truth, not for display. */
+  notes: string | null;
+  /** Bureau / UAN / work-email trust stars for the customer; null when not computed. */
+  trust?: TrustSignals | null;
+}
+
+/**
+ * One employee's work over a window (backs /staff/performance).
+ *
+ * A `null` count means "we cannot measure this", never zero — rendering 0 for an unmeasurable
+ * metric reads as "this person did nothing", which is a materially different claim about a
+ * colleague. Only `avgTurnaroundMinutes` can be null today; the rest are real counts.
+ */
+export interface StaffPerformanceRow {
+  staffId: number;
+  staffName: string;
+  role: StaffRoleName;
+  active: boolean;
+  accepted: number;
+  rejected: number;
+  totalActions: number;
+  /** Distinct IST days on which they did anything. */
+  activeDays: number;
+  /** Mean minutes from the file being assigned to them until they acted; null = no measurable pair. */
+  avgTurnaroundMinutes: number | null;
+  /** Live count of files sitting with them right now — a snapshot, NOT windowed. */
+  pendingNow: number;
+  /** Total value they sanctioned/released in the window, integer paise. */
+  moneyPaise: number;
+  /** Their first action in the window — the closest thing to a "start time". */
+  firstActionAt: string | null;
+  lastActionAt: string | null;
+  /** Repayments this staffer verified in the window; null = no attributable payment rows (never 0). */
+  verifiedCount: number | null;
+  /** Total paise across those verified repayments. */
+  verifiedPaise: number | null;
+  /** Repayments this staffer rejected in the window. */
+  rejectedPaymentCount: number | null;
+  /** Telecaller + collections calls logged in the window. See `callTrackingSince` before reading a 0. */
+  callsMade: number;
+  /** Their human application-event actions in the window, by action (`ASSIGN`, `SANCTION`, …). */
+  actionCounts: Record<string, number>;
+  /** Their collections work in the window, plus open cases on their desk now. */
+  collections: CollectionStaffStats;
+  /** Value of the sanctions they issued in the window, paise. */
+  sanctionedPaise: number;
+  /** Value of the disbursements they released in the window, paise. */
+  releasedPaise: number;
+  /** Their own activity per IST day — application events plus collections actions. */
+  daily: StaffActivityPoint[];
+}
+
+/** One staffer's collections work over the window (backend `CollectionStaffStats`). */
+export interface CollectionStaffStats {
+  /** Borrower interactions they logged, and the outcome breakdown under it. */
+  interactions: number;
+  connected: number;
+  promisesToPay: number;
+  paidOutcomes: number;
+  noAnswer: number;
+  disputed: number;
+  /** Open cases assigned to them right now — live, NOT windowed. */
+  casesNow: number;
+  /** Collections payments they recorded; of those, validated (money credited), pending, rejected. */
+  paymentsRaised: number;
+  paymentsRaisedPaise: number;
+  paymentsRecovered: number;
+  paymentsRecoveredPaise: number;
+  paymentsPending: number;
+  paymentsRejected: number;
+  settlementsProposed: number;
+  settlementsProposedPaise: number;
+  /** Settlements they decided — a Collection Head's approvals and rejections. */
+  settlementsApproved: number;
+  settlementsApprovedPaise: number;
+  settlementsRejected: number;
+  /** Collections payments they validated / rejected at the Accountant step. */
+  paymentsValidated: number;
+  paymentsValidatedPaise: number;
+  paymentsValidationRejected: number;
+}
+
+/** One day's action count across the whole visible roster — the trend line. */
+export interface StaffActivityPoint {
+  /** yyyy-mm-dd */
+  date: string;
+  actions: number;
+}
+
+export interface StaffPerformanceSummary {
+  rows: StaffPerformanceRow[];
+  daily: StaffActivityPoint[];
+  /**
+   * yyyy-mm-dd — when call logs began recording WHO made the call. Before it they stored only a
+   * mutable display name, so a 0 for an earlier window means "not tracked", not "made none". Any
+   * surface showing `callsMade` must consult this before letting a reader draw a conclusion.
+   */
+  callTrackingSince: string;
+}
+
+/**
+ * True when a disbursed loan is past its due date — the DPD definition used across this product
+ * (`daysBetween` compares calendar dates, so this is timezone-safe). Falls back to the application
+ * status only when no loan due date is known.
+ *
+ * A settled loan is never overdue, however late it was repaid: the due date stays on file forever,
+ * and `LoanStatus.OVERDUE` is compute-on-read (nothing writes it), so the date is the only live
+ * signal and it needs the status beside it. Same guard, same reason, as `dpdFor`.
+ */
+export function isLoanOverdue(app: ApplicationView, asOf: Date = new Date()): boolean {
+  if (isSettledLoanStatus(app.loanStatus)) return false;
+  if (!app.loanDueDate) return app.status === "OVERDUE";
+  return daysBetween(new Date(`${app.loanDueDate}T00:00:00`), asOf) > 0;
+}
+
+const SETTLED_LOAN_STATUSES = new Set(["CLOSED", "REPAID", "WRITTEN_OFF", "DECLINED"]);
+
+/**
+ * True when the loan has stopped running, so its due date is history rather than a debt.
+ *
+ * Mirrors `CollectionsService.TERMINAL_LOAN_STATUSES`, which drops exactly these cases off the
+ * collections worklist for the same reason; DECLINED joins them because nothing was ever disbursed.
+ * One definition on purpose — every surface that reads a due date as arrears (`isLoanOverdue`,
+ * `dpdFor`) must agree on when a loan is done.
+ */
+export function isSettledLoanStatus(status: string | null | undefined): boolean {
+  return SETTLED_LOAN_STATUSES.has(status ?? "");
+}
+
+/**
+ * ADMIN-only flat view of an application with full KYC detail + onboarding completeness — covers
+ * complete AND incomplete (DRAFT / partially filled) applications. Mirrors backend AdminApplicationView.
+ */
+/** One page of the ADMIN register; `total` matches the filter, `allCount` is every application. */
+export interface AdminApplicationPage {
+  rows: AdminApplicationView[];
+  page: number;
+  size: number;
+  total: number;
+  allCount: number;
+}
+
+export interface AdminApplicationView {
+  id: number;
+  customerId: number;
+  status: ApplicationStatus;
+  /** Stored JourneyService step (Step / OfferStep enum name); null when unknown. Staff stage signal only. */
+  journeyStep?: string | null;
+  amountRequestedPaise: number | null;
+  eligibleLimitPaise: number | null;
+  purpose: string | null;
+  salaryCreditDay: number | null;
+  assignedExecutiveId: number | null;
+  loanId: number | null;
+  hasProfile: boolean;
+  fullName: string | null;
+  pan: string | null;
+  mobile: string | null;
+  email: string | null;
+  dob: string | null;
+  address: string | null;
+  employer: string | null;
+  employmentStatus: string | null;
+  monthlySalaryPaise: number | null;
+  salaryBank: string | null;
+  /** Staff/admin-only bank identifiers, full value (no masking — product decision). */
+  salaryAccountNumber?: string | null;
+  salaryIfsc?: string | null;
+  creditScore: number | null;
+  starRating: number | null;
+  recommendation: string | null;
+  riskCategory: string | null;
+  /** Required verification checks currently PASS/REVIEW, out of stepsRequired. */
+  stepsCompleted: number;
+  stepsRequired: number;
+  agreementAccepted: boolean;
+  /** True once every required step is cleared and the agreement accepted. */
+  complete: boolean;
+  kycCapturedAt: string | null;
+  bureauState: BureauState;
+  /** Real, server-resolved assignee name for `assignedExecutiveId` (ADMIN-only register). */
+  assignedExecutiveName?: string | null;
+  /** When this application entered its CURRENT `status` (latest `application_event.at`). */
+  currentStageEnteredAt?: string | null;
+  /** Bureau / UAN / work-email trust stars (staff list rows); null when not computed. */
+  trust?: TrustSignals | null;
+}
+
+/**
+ * One row of the telecaller queue (pre-`SANCTIONED` applications, mirrors backend
+ * `TelecallingView`). `staleDays` is computed from the latest `application_event.at`
+ * (falling back to `created_at`) — default sort is stale-first.
+ */
+export interface TelecallingView {
+  id: number;
+  customerId: number;
+  status: ApplicationStatus;
+  /** Stored JourneyService step (Step / OfferStep enum name); null when unknown. Staff stage signal only. */
+  journeyStep?: string | null;
+  customerName: string | null;
+  mobile: string | null;
+  email: string | null;
+  pan: string | null;
+  stepsCompleted: number;
+  stepsRequired: number;
+  ownerStaffId: number | null;
+  staleDays: number;
+  /** Bureau / UAN / work-email trust stars (staff list rows); null when not computed. */
+  trust?: TrustSignals | null;
+}
+
+export interface EventView {
+  id: number;
+  fromStatus: ApplicationStatus | null;
+  toStatus: ApplicationStatus | null;
+  actorId: number | null;
+  actorRole: string | null;
+  /** Working role the actor acted as, when it differs from their real role. */
+  actingRole?: string | null;
+  /** The resolved actor's display name (borrower profile name or staff name); null if unresolvable. */
+  actorName: string | null;
+  action: string | null;
+  notes: string | null;
+  at: string;
+}
+
+export interface LoanView {
+  id: number;
+  customerId: number;
+  principalPaise: number;
+  processingFeePaise: number;
+  gstPaise: number;
+  netDisbursedPaise: number;
+  dailyInterestRate: number;
+  disbursedOn: string | null;
+  dueDate: string | null;
+  totalRepayablePaise: number;
+  outstandingPaise: number;
+  status: string;
+  /** Bank/UPI reference for the outgoing disbursal (captured at release). */
+  disbursalTxnRef: string | null;
+  /** When the loan was settled in full. Null while it is still running. */
+  closedOn: string | null;
+  /** Penalty-free days after the due date this loan was written with (1 on legacy loans, 0 on new ones).
+   *  Optional: an older backend omits it, and a missing value reads as 1 (`loanGraceDays`). */
+  graceDays?: number;
+}
+
+/** The loan's grace days, defaulting to the legacy 1 when the backend did not send the field. */
+export const loanGraceDays = (loan: { graceDays?: number } | null | undefined) => loan?.graceDays ?? 1;
+
+/**
+ * The three balances the repay screen quotes together: as of the requested day, on the salary day
+ * the loan is due, and on its grace day after it. `due`/`grace` are null when the loan has no
+ * due date yet; `grace` is also null when the loan carries no grace day. One call in place of three `outstanding` round trips for the same screen.
+ */
+export interface OutstandingScheduleView {
+  asOf: OutstandingView;
+  due: OutstandingView | null;
+  grace: OutstandingView | null;
+}
+
+export interface OutstandingView {
+  loanId: number;
+  asOf: string;
+  outstandingPaise: number;
+  /** Non-null when collections has an approved settlement: outstandingPaise is then the
+   *  settlement-capped full-and-final figure. */
+  settledAmountPaise?: number | null;
+  /** Itemized make-up of the balance as of `asOf` (optional for back-compat with older backends):
+   *  accrued interest, accrued late penalty, and the sum of verified payments so far. When a
+   *  settlement caps the figure, these may sum to more than `outstandingPaise`. */
+  interestPaise?: number;
+  penaltyPaise?: number;
+  verifiedPaise?: number;
+  /** The day counts those amounts were charged over — interest capped at the tenure, penalty net
+   *  of the loan's grace days and capped at 30 — so the UI can show "1%/day × 27 days". */
+  interestDays?: number;
+  penaltyDays?: number;
+}
+
+export type PaymentMethodName = "UPI" | "BANK_TRANSFER" | "NACH";
+export type PaymentStatusName = "PENDING_VERIFICATION" | "VERIFIED" | "REJECTED";
+
+/** A recorded repayment against a loan (mirrors backend PaymentView). */
+export interface PaymentView {
+  id: number;
+  loanId: number;
+  amountPaise: number;
+  method: PaymentMethodName;
+  status: PaymentStatusName;
+  txnRef: string | null;
+  proofUrl: string | null;
+  paidOn: string | null;
+  partial: boolean;
+  /** Staff-only context populated by the accountant's pending-verification queue. */
+  customerId?: number | null;
+  customerName?: string | null;
+  /** Set when `status === "REJECTED"` — a fixed reason code + optional free-text note. */
+  rejectionReason?: RejectionReasonCode | null;
+  rejectionNote?: string | null;
+}
+
+/** Fixed picklist of repayment-rejection reasons (mirrors the backend validation set). */
+export type RejectionReasonCode =
+  | "WRONG_REFERENCE"
+  | "AMOUNT_MISMATCH"
+  | "NOT_RECEIVED"
+  | "UNREADABLE_PROOF"
+  | "OTHER";
+
+/** Human labels for {@link RejectionReasonCode}, shown in the staff reject dialog and borrower banner. */
+export const REJECTION_REASON_LABEL: Record<RejectionReasonCode, string> = {
+  WRONG_REFERENCE: "Wrong payment reference",
+  AMOUNT_MISMATCH: "Amount doesn't match",
+  NOT_RECEIVED: "Payment not received",
+  UNREADABLE_PROOF: "Proof unreadable",
+  OTHER: "Other",
+};
+
+export type TransactionType = "DISBURSAL" | "REPAYMENT";
+export type TransactionDirection = "OUTGOING" | "INCOMING";
+
+/** One row in the accountant's company-wide transactions ledger (mirrors backend TransactionView). */
+/** One page of the transactions ledger, with the period's totals (not the page's). */
+export interface TransactionPage {
+  rows: TransactionView[];
+  page: number;
+  size: number;
+  /** Rows matching the whole filter. */
+  total: number;
+  /** Verified repayments only. Rejected repayments are not in the ledger at all. */
+  totalInPaise: number;
+  totalOutPaise: number;
+  /** Repayments listed but still awaiting verification — not yet counted in `totalInPaise`. */
+  pendingInPaise: number;
+}
+
+export interface TransactionView {
+  id: string;
+  type: TransactionType;
+  direction: TransactionDirection;
+  loanId: number | null;
+  customerId: number | null;
+  borrowerName: string | null;
+  pan: string | null;
+  amountPaise: number;
+  txnRef: string | null;
+  status: string | null;
+  date: string | null;
+  /** Presigned link to the borrower-uploaded repayment screenshot. REPAYMENT rows only. */
+  proofUrl: string | null;
+  /** The loan's repayment (due) date — the same on its disbursal row and every repayment against it. */
+  repaymentDate: string | null;
+  /** The loan's penalty-free days after that date (1 on legacy loans); missing reads as 1. */
+  graceDays?: number;
+}
+
+/**
+ * Customer KYC snapshot for an application. Staff see the full, unmasked identity + verification
+ * detail; on the borrower's own read the credit/risk/bureau fields come back null.
+ */
+export interface ProfileView {
+  applicationId: number;
+  fullName: string | null;
+  pan: string | null;
+  mobile: string | null;
+  dob: string | null;
+  address: string | null;
+  employer: string | null;
+  employmentStatus: string | null;
+  monthlySalaryPaise: number | null;
+  salaryBank: string | null;
+  /** Salary management (Phase 2.1). Annual figure in paise; percentages as numbers. */
+  annualSalaryPaise?: number | null;
+  salaryPercentage?: number | null;
+  incrementPercentage?: number | null;
+  email?: string | null;
+  /** Emergency contact (Phase 2.2) — editable on the borrower profile. */
+  emergencyContactName?: string | null;
+  emergencyContactPhone?: string | null;
+  emergencyContactRelation?: string | null;
+  /** Staff-only credit headline (score + 1–5★ rating + verdict). Null until the bureau is pulled. */
+  creditScore?: number | null;
+  starRating?: number | null;
+  recommendation?: string | null;
+  /** Staff-only verification + risk detail (null on borrower-facing reads). */
+  bureauSource?: string | null;
+  riskCategory?: string | null;
+  panVerified?: boolean | null;
+  aadhaarLinked?: boolean | null;
+  /** Aadhaar verified via DigiLocker (consent done + Aadhaar fetched + document ingested). */
+  aadhaarVerified?: boolean | null;
+  emailVerified?: boolean | null;
+  /** OTP-proven ownership of the PERSONAL email — distinct from `emailVerified` (the official-email
+   *  deliverability/employer-match check). */
+  personalEmailVerified?: boolean | null;
+  /** OTP-proven ownership of the OFFICIAL/work email. Same address as `emailVerified`, different
+   *  question: that one corroborates the employer, this one proves inbox control. */
+  officialEmailOtpVerified?: boolean | null;
+  addressVerified?: boolean | null;
+  pennyDropVerified?: boolean | null;
+  /** EPFO/UAN number (Digitap employment verification) — advisory, may be null (§14 UAN caveats). */
+  uan?: string | null;
+  /**
+   * The 12-digit Aadhaar number typed on the intake Aadhaar-card screen (V75), in FULL. Staff and
+   * ADMIN read it unmasked by product decision; a borrower sees their own. Null before V75.
+   */
+  aadhaar?: string | null;
+  nameMatchScore?: number | null;
+  /** Phase 1 intake — also what the wizard re-hydrates from on another device (revamp.md C1). */
+  officialEmail?: string | null;
+  salaryAccountNumber?: string | null;
+  salaryIfsc?: string | null;
+  salaryAccountMobile?: string | null;
+  previousSalaryDate?: string | null;
+  termsVersion?: string | null;
+  termsAcceptedAt?: string | null;
+  pepDeclaredAt?: string | null;
+  creditBriefSummary?: string | null;
+  creditBriefGeneratedAt?: string | null;
+}
+
+/** What the borrower submits for their KYC profile (all fields optional). */
+export interface ProfileInput {
+  fullName?: string;
+  pan?: string;
+  mobile?: string; // 10 digits; uniqueness enforced server-side
+  email?: string; // contact email — gates email notifications
+  dob?: string; // ISO yyyy-mm-dd
+  address?: string;
+  employer?: string;
+  employmentStatus?: string;
+  monthlySalaryPaise?: number;
+  salaryBank?: string;
+  // --- Phase 1 intake (revamp.md). All optional: the wizard saves in slices. ---
+  /** Official work email — the only address the email-verification API is run against. */
+  officialEmail?: string;
+  salaryAccountNumber?: string;
+  salaryIfsc?: string;
+  salaryAccountMobile?: string;
+  /** Last salary credit date (ISO yyyy-mm-dd); the recurring salary day is derived from it. */
+  previousSalaryDate?: string;
+  /** Self-employed declared annual income, in paise. */
+  annualSalaryPaise?: number;
+  /** T&C version accepted on screen 1; the accepted-at timestamp is stamped server-side. */
+  termsVersion?: string;
+  /** True = "I am not a Politically Exposed Person". */
+  pepDeclared?: boolean;
+  /** 12-digit Aadhaar number (V75). Card spacing is stripped server-side; `INVALID_AADHAAR` on a
+   *  failed Verhoeff check. A number another customer already holds is accepted and flagged for
+   *  staff (an `AADHAAR_DUPLICATE` review row) — never reported back here. */
+  aadhaar?: string;
+}
+
+/** Where the borrower is in the onboarding journey, answered server-side (revamp.md C1). */
+export interface JourneyView {
+  step: string;
+  route: string;
+  index: number;
+  total: number;
+  completed: string[];
+  /**
+   * The steps THIS borrower's journey actually has, in order. Not a constant: a re-apply drops the
+   * screens whose evidence carried over from the prior advance (V47), so `index`/`total` count
+   * against this list rather than a fixed eleven.
+   */
+  steps: string[];
+}
+
+/** One row of the ADMIN rejection register. */
+export interface RejectionView {
+  id: number;
+  applicationId: number | null;
+  customerId: number;
+  borrowerName: string | null;
+  mobile: string | null;
+  pan: string | null;
+  salaryAccountNumber: string | null;
+  salaryIfsc: string | null;
+  amountRequestedPaise: number | null;
+  creditScore: number | null;
+  starRating: number | null;
+  reasonCode: string;
+  reasonDetail: string | null;
+  auto: boolean;
+  blockedUntil: string | null;
+  createdAt: string | null;
+}
+
+/**
+ * Borrower self-edit of their own profile (Phase 2.2) — non-identity fields only. Verification-linked
+ * edits reset the matching check; a salary change recomputes eligibility.
+ */
+export interface EditProfileInput {
+  address?: string | null;
+  employer?: string | null;
+  employmentStatus?: string | null;
+  /** EPFO Universal Account Number (12 digits). Optional and never gating — with one on file the
+   *  employment check switches to Digitap's exact UAN lookup instead of fuzzy PAN/mobile matching. */
+  uan?: string | null;
+  monthlySalaryPaise?: number | null;
+  salaryBank?: string | null;
+  email?: string | null;
+  emergencyContactName?: string | null;
+  emergencyContactPhone?: string | null;
+  emergencyContactRelation?: string | null;
+}
+
+/** Borrower notification preferences (Phase 2.2) — server-persisted; honored by the engine. */
+export interface BorrowerPreferences {
+  emailOptIn: boolean;
+  smsOptIn: boolean;
+  offersOptIn: boolean;
+}
+
+/** Document metadata (no bytes). */
+export interface DocumentView {
+  id: number;
+  docType: string;
+  fileName: string;
+  contentType: string | null;
+  sizeBytes: number | null;
+  uploadedAt: string;
+  /** True when the bytes live in S3 (fetch a presigned URL); false for legacy inline base64. */
+  s3?: boolean;
+  /**
+   * The borrower's password for a protected upload, when they supplied one (V56). Bank statements and
+   * payslips are routinely password-locked; staff need the key to open the file.
+   */
+  filePassword?: string | null;
+}
+
+/** A presigned GET URL for an S3-backed document (mirrors backend DocumentUrlView). */
+export interface DocumentUrlView {
+  id: number;
+  fileName: string | null;
+  contentType: string | null;
+  url: string;
+}
+
+/** One application's documents, grouped for the customer-wide documents view (mirrors backend). */
+export interface ApplicationDocumentGroup {
+  applicationId: number;
+  applicationStatus: ApplicationStatus;
+  documents: DocumentView[];
+}
+
+/** A document with its bytes as base64, for view/download. */
+export interface DocumentContent {
+  id: number;
+  docType: string;
+  fileName: string;
+  contentType: string | null;
+  dataBase64: string;
+}
+
+/** One row in the staff Customers list (borrower-centric roll-up; mirrors backend CustomerSummary). */
+export interface CustomerSummary {
+  customerId: number;
+  name: string | null;
+  pan: string | null;
+  mobile: string | null;
+  applicationCount: number;
+  loanCount: number;
+  latestStatus: string | null;
+  /** Stored JourneyService step (Step / OfferStep enum name); null when unknown. Staff stage signal only. */
+  journeyStep?: string | null;
+  /** Returning borrower: the latest file was created after a prior loan closed. */
+  reloan?: boolean | null;
+  /** A live block on the customer's mobile in the rejection register — a staff block or a running
+   *  cooling-off. The borrower cannot start a new application while it holds. */
+  blocked?: boolean | null;
+  /** The staff-entered reason for a staff block, the reason code otherwise; null when not blocked. */
+  blockedReason?: string | null;
+  totalOutstandingPaise: number;
+  /** Latest credit headline for the customer (staff-only). */
+  creditScore?: number | null;
+  starRating?: number | null;
+  /** Newest loan's effectiveStatus(today) — outranks latestStatus for client-side segments. */
+  loanStatus?: string | null;
+  ownerStaffId?: number | null;
+  ownerName?: string | null;
+  bureauState?: BureauState | null;
+  /** Which bureau produced creditScore — labels the score in the list, as the profile does. */
+  bureauSource?: string | null;
+  /** The customer's most recent application's created_at — same timestamp as the live-applications
+   *  "Date" column. This is the SIGNUP date, not when the current status was entered — see
+   *  statusChangedAt below. */
+  createdAt?: string | null;
+  /** When the latest application entered its CURRENT status (derived from application_event).
+   *  Falls back to createdAt when no transition event exists. Drives the list's default order. */
+  statusChangedAt?: string | null;
+  // --- Parity with the live-applications queue ---------------------------------------------
+  // All read off the customer's LATEST application/loan, so the whole row describes one file.
+  latestApplicationId?: number | null;
+  /** Disbursal account, falling back to the salary account before that step is reached. */
+  accountNumber?: string | null;
+  ifsc?: string | null;
+  latestLoanId?: number | null;
+  /** Requested amount when one has been drawn, else the eligible limit. */
+  amountPaise?: number | null;
+  /** True when amountPaise is a real request, false when it is the limit ("req" vs "elig" tag). */
+  amountIsRequested?: boolean;
+  /** yyyy-mm-dd. DPD is derived from this on the client, never sent. */
+  loanDueDate?: string | null;
+  markedPendingAt?: string | null;
+  /** Who handled the file — from the audit trail (credit decision, disbursal) and the collections
+   *  case. Blank when the stage has not happened. `creditDecidedByName` is who DECIDED it, which on
+   *  a reassigned or Head-decided file is not the same person as `assignedExecutiveName`. */
+  creditDecidedByName?: string | null;
+  disbursedByName?: string | null;
+  collectionOfficerName?: string | null;
+  /** `salary_credit_day` (1-31) on the customer's latest application — null until collected. */
+  salaryCreditDay?: number | null;
+  /** Why the latest application has no usable credit decision — the `CaseFailureReason` name
+   *  (see `components/staff/case-failure.ts` for the human-readable copy), its severity, and
+   *  whether a re-run could plausibly change the answer. `"NONE"`/undefined means nothing is
+   *  outstanding — render an empty Failure cell. */
+  failureReason?: string | null;
+  failureSeverity?: string | null;
+  failureRetryable?: boolean;
+  /** Bureau / UAN / work-email trust stars (staff list rows); null when not computed. */
+  trust?: TrustSignals | null;
+}
+
+/** One verification check in the collections handover export (mirrors backend `HandoverCheck`).
+ *  `derived` carries only the server-whitelisted keys for that check type. */
+export interface HandoverCheck {
+  status: string | null;
+  provider: string | null;
+  message: string | null;
+  nameMatch: number | null;
+  score: number | null;
+  at: string | null;
+  derived: Record<string, unknown>;
+}
+
+/** Everything on file behind one loan's application (mirrors backend `CollectionHandoverRow`). */
+export interface CollectionHandoverRow {
+  applicationId: number;
+  profile: Record<string, unknown>;
+  application: Record<string, unknown>;
+  /** Keyed by check type: PAN, AADHAAR, DIGILOCKER, ADDRESS, EMPLOYMENT, EMAIL, … */
+  checks: Record<string, HandoverCheck>;
+  references: { name: string | null; mobile: string | null; relation: string | null }[];
+}
+
+/** A customer's full history: latest profile + every application, loan and payment (mirrors backend). */
+export interface CustomerDetail {
+  customerId: number;
+  profile: ProfileView | null;
+  applications: ApplicationView[];
+  loans: LoanView[];
+  payments: PaymentView[];
+  ownerStaffId?: number | null;
+  ownerName?: string | null;
+  /** The latest application's full credit brief (categorized facts + PDF doc id) — null until a bureau
+   *  pull has happened. Same shape `staffApi.creditBrief` returns, attached here to avoid a second
+   *  round-trip when the Credit Report tab just needs "all the info" already on the customer object. */
+  creditBrief?: CreditBriefView | null;
+  /** ADMIN-set eligible limit (paise) for this customer, or null when the 25%-of-salary rule applies. */
+  limitOverridePaise?: number | null;
+  /** The itemised interest/penalty/paid breakdown per loan id, computed with the rest of this
+   *  payload. The Loans tab used to fetch one `/outstanding` per loan card to get it. */
+  outstandingByLoanId?: Record<string, OutstandingView>;
+  /** Same rule as `CustomerSummary.blocked`: a live rejection-register block on the mobile. */
+  blocked?: boolean | null;
+  blockedReason?: string | null;
+}
+
+/** The customer's block state after `customersApi.block` / `unblock` (mirrors backend CustomerBlockView). */
+export interface CustomerBlockView {
+  customerId: number;
+  blocked: boolean;
+  blockedReason: string | null;
+}
+
+/**
+ * Why one customer's file has no usable credit decision, with the provider chain behind it —
+ * mirrors backend `CustomerDtos.CaseFailureDetail`. `reason`/`severity` are the string names of
+ * `CaseFailureReason`/`CaseFailureReason.Severity`; look up their copy in `case-failure.ts`.
+ */
+export interface CaseFailureDetail {
+  customerId: number;
+  /** The application the reason describes — not necessarily the customer's newest one. */
+  applicationId: number | null;
+  reason: string;
+  severity: string;
+  /** Whether re-running the credit check could plausibly change this answer. */
+  retryable: boolean;
+  checkType: string | null;
+  /** What was actually called, oldest first. An empty array does not mean nothing was tried —
+   *  rows are kept only for `attemptRetentionDays`. */
+  attempts: ProviderAttemptView[];
+  attemptRetentionDays: number;
+}
+
+/** Result of a bureau-KBA nudge — mirrors backend `BureauChallengeOutreachService.OutreachSummary`. */
+export interface BureauChallengeOutreachSummary {
+  eligible: number;
+  notified: number;
+  skippedAlreadyNotified: number;
+  dryRun: boolean;
+}
+
+/** One recorded provider call. No request/response bodies — those stay in the ADMIN provider
+ *  workbench (see `CaseFailureDetail`). */
+export interface ProviderAttemptView {
+  provider: string;
+  operation: string;
+  httpStatus: number | null;
+  succeeded: boolean;
+  at: string;
+}
+
+/**
+ * One bureau tradeline (a single reported credit account/loan). All amounts are RUPEES (the bureau's
+ * native unit) — do NOT run them through `paiseToINR`, format like the existing rupee fields on
+ * {@link CreditBriefFacts} (`totalBalance`/`securedBalance`). `currentBalanceRupees` may legitimately
+ * be negative (a handful of real tradelines report this) — never clamp it to 0.
+ */
+export interface Tradeline {
+  lender: string | null;
+  accountNumberMasked: string | null;
+  accountTypeCode: string | null;
+  portfolioTypeCode: string | null;
+  accountStatusCode: string | null;
+  /** YYYY-MM-DD, may be null. */
+  openedOn: string | null;
+  /** YYYY-MM-DD, may be null. */
+  closedOn: string | null;
+  currentBalanceRupees: number | null;
+  amountPastDueRupees: number | null;
+  creditLimitRupees: number | null;
+  settlementAmountRupees: number | null;
+  /**
+   * Either exactly 36 characters (one per month, newest first) or the single character `"N"` meaning
+   * the bureau reported no payment-history string at all for this account. A 36-char string is NOT a
+   * "no data" signal — only the bare `"N"` is. See `credit/payment-history-strip.tsx` for the decode.
+   */
+  paymentHistory: string | null;
+  writtenOffSettledStatus: string | null;
+  /** YYYY-MM-DD the lender last reported the account (Experian); always null for CRIF tradelines. */
+  dateReported?: string | null;
+  /**
+   * Worst DPD ever recorded for this account. Real long-default reads run 900-999 (900 occurs 981
+   * times in production) — this is NOT a sentinel/placeholder to be hidden, it means "in default
+   * 900+ days". Render distinctly, never as a bare huge number.
+   */
+  worstDpdMonths: number | null;
+}
+
+/** One bureau enquiry (a lender's credit-report pull). Amounts are rupees. */
+export interface Enquiry {
+  /** YYYY-MM-DD, may be null. */
+  requestedOn: string | null;
+  subscriber: string | null;
+  reasonCode: string | null;
+  amountFinancedRupees: number | null;
+  durationMonths: number | null;
+}
+
+/** Delinquency aggregates parsed from the full report. Every field is `number|null` — null means the
+ *  bureau data could not tell us, and must NEVER be rendered as 0 (that reads as "clean"). */
+export interface DelinquencySummary {
+  worstDpd12m: number | null;
+  worstDpd24m: number | null;
+  worstDpd36m: number | null;
+  accountsEver30Plus: number | null;
+  accountsCurrentlyPastDue: number | null;
+  accountsWrittenOffOrSettled: number | null;
+  /** YYYY-MM-DD, may be null. */
+  oldestAccountOpenedOn: string | null;
+}
+
+/** How many enquiries landed in each trailing window. Every field is `number|null` (absent ≠ 0). */
+export interface EnquiryVelocity {
+  last7: number | null;
+  last30: number | null;
+  last90: number | null;
+  last180: number | null;
+}
+
+/**
+ * One reporting period's score, part of {@link BureauScoreHistory.points}.
+ */
+export interface BureauScorePoint {
+  /** YYYY-MM-DD period-end date. */
+  asOf: string | null;
+  score: number | null;
+}
+
+/**
+ * The CRIF score-trend series + credit-age/velocity figures from a Fintrix CRIF Highmark report's
+ * `TRENDS` and `ACCOUNTS-SUMMARY.DERIVED-ATTRIBUTES` blocks. Experian responses carry no equivalent
+ * trend series, so this is `null` on an Experian-sourced brief (and on any brief stored before this
+ * field existed) — mirrors the Java `BureauScoreHistory` record exactly.
+ */
+export interface BureauScoreHistory {
+  /** Newest-first, matching the vendor's TRENDS.DATES/VALUES ordering. */
+  points: BureauScorePoint[];
+  lengthOfCreditHistoryMonths: number | null;
+  averageAccountAgeMonths: number | null;
+  newAccountsLast6m: number | null;
+  newDelinquentAccountsLast6m: number | null;
+  inquiriesLast6m: number | null;
+}
+
+/**
+ * The full parsed report detail — tradelines, enquiries, and derived aggregates — behind the twelve
+ * curated {@link CreditBriefFacts} scalars. `null` on any brief generated before this was parsed
+ * (no backfill ran); callers must render exactly what they rendered pre-`detail`, no empty tables.
+ */
+export interface CreditBriefDetail {
+  /** Capped at 1000 rows for display; may be fewer than the true report count — see `tradelineCount`. */
+  tradelines: Tradeline[];
+  /** The TRUE tradeline count in the report. May exceed `tradelines.length` when the report is huge
+   *  (files run 15 → 543+); a table showing fewer than this MUST say "showing X of N". */
+  tradelineCount: number | null;
+  enquiries: Enquiry[];
+  delinquency: DelinquencySummary | null;
+  enquiryVelocity: EnquiryVelocity | null;
+  /** CRIF-only score trend — null for Experian or a brief stored before this field existed. */
+  scoreHistory?: BureauScoreHistory | null;
+}
+
+/** Parsed bureau facts behind the credit brief (Categories A/B/C). Amounts are rupees (bureau unit). */
+export interface CreditBriefFacts {
+  name: string | null;
+  pan: string | null;
+  mobile: string | null;
+  dob: string | null;
+  city: string | null;
+  pin: string | null;
+  creditScore: number | null;
+  totalAccounts: number | null;
+  activeAccounts: number | null;
+  closedAccounts: number | null;
+  defaults: number | null;
+  totalBalance: number | null;
+  securedBalance: number | null;
+  unsecuredBalance: number | null;
+  recentInquiries30d: number | null;
+  /** Tradelines/enquiries/aggregates behind the twelve scalars above. Null on older, un-backfilled briefs. */
+  detail?: CreditBriefDetail | null;
+}
+
+/** Whether the bureau pull ran for an application, and what it found (mirrors backend BureauState). */
+export type BureauState = "NOT_FETCHED" | "NO_RECORD" | "FOUND";
+
+/** Staff credit brief for an application: 1–5★ rating headline + facts + the CREDIT_BRIEF PDF doc id. */
+export interface CreditBriefView {
+  applicationId: number;
+  /** Legacy: true whenever a provider response was stored, which today includes the NO_RECORD case
+   *  too — do not gate empty-state rendering on this; switch on bureauState instead. */
+  available: boolean;
+  creditScore: number | null;
+  starRating: number | null;
+  recommendation: string | null;
+  summary: string | null;
+  generatedAt: string | null;
+  /** The stored CREDIT_BRIEF document id — fetch its presigned URL via staffApi.documentUrl. */
+  documentId: number | null;
+  facts: CreditBriefFacts | null;
+  /** Exact staff-only provider response, including every nested bureau field and tradeline. */
+  providerResponse: JsonValue | null;
+  bureauState: BureauState;
+  /** Which bureau produced creditScore — labels the score instead of a hardcoded bureau name. */
+  bureauSource?: string | null;
+  /** The bureau's own PDF (BUREAU_REPORT — Fintrix CRIF), null when none was returned (Experian, KBA). */
+  bureauReportDocumentId?: number | null;
+  /** Why the stars are what they are: the score band, then each BRE deduction or cap applied. */
+  ratingReasons?: string[];
+}
+
+/** Admin edit of a customer's KYC / salary data (identity fields excluded — they stay locked). */
+export interface UpdateCustomerInput {
+  /** ISO date string (yyyy-mm-dd). Backend PATCH semantics: omitting/undefined leaves the stored
+   *  DOB alone rather than clearing it — see `UpdateCustomerRequest.dob`'s javadoc. */
+  dob?: string | null;
+  fullName?: string | null;
+  address?: string | null;
+  employer?: string | null;
+  employmentStatus?: string | null;
+  monthlySalaryPaise?: number | null;
+  annualSalaryPaise?: number | null;
+  salaryPercentage?: number | null;
+  incrementPercentage?: number | null;
+  salaryBank?: string | null;
+}
+
+/** One audited profile/salary change (Phase 2.1) — mirrors backend ProfileChangeView. */
+export interface ProfileChangeView {
+  id: number;
+  field: string;
+  oldValue: string | null;
+  newValue: string | null;
+  modifiedBy: string | null;
+  /** ISO timestamp. */
+  modifiedAt: string | null;
+}
+
+/** One entry in the unified customer activity timeline — mirrors backend ActivityEntry. */
+export type ActivityType =
+  | "LIFECYCLE"
+  | "PROFILE"
+  | "REVERIFY"
+  | "VERIFICATION"
+  | "REFERENCE"
+  | "UPLOAD"
+  | "REMARK"
+  | "CALL";
+export interface ActivityEntry {
+  type: ActivityType;
+  applicationId: number | null;
+  title: string;
+  detail: string | null;
+  actor: string | null;
+  /** ISO timestamp. */
+  at: string | null;
+}
+
+/** A staff remark on a customer — mirrors backend RemarkView. */
+export interface RemarkView {
+  id: number;
+  body: string;
+  author: string | null;
+  /** ISO timestamp. */
+  at: string | null;
+}
+
+/** A staff call log on a customer — mirrors backend CallLogView. */
+export interface CallLogView {
+  id: number;
+  callType: string;
+  outcome: string;
+  callbackOn: string | null;
+  notes: string | null;
+  author: string | null;
+  /** ISO timestamp. */
+  at: string | null;
+  /** Which of the customer's loans this call was about, when the caller tagged one — null for a
+   *  general/pre-disbursal call. Added alongside the Loans register (WP4) so a call log can be
+   *  filtered to a specific loan from the loan detail modal, not just the customer as a whole. */
+  loanId: number | null;
+}
+
+/** Mirrors backend `DedupeDtos.DedupeView` — identifiers arrive masked to the last four. */
+export interface DedupeView {
+  aadhaar: {
+    /** null = no AADHAAR_DUPLICATE row (clear); otherwise the verification status. */
+    status: string | null;
+    applicationId: number | null;
+    otherCustomerIds: number[];
+    message: string | null;
+  };
+  blocklistHits: { type: string; maskedValue: string; reason: string | null; addedOn: string | null }[];
+  rejection: {
+    applicationId: number | null;
+    reasonCode: string;
+    reasonDetail: string | null;
+    blockedUntil: string | null;
+  } | null;
+}
+
+/** One phone number a bureau report lists for the customer (mirrors backend `BureauMobiles.Phone`). */
+export interface BureauPhone {
+  /** As the bureau printed it (may be masked, prefixed or a landline). */
+  value: string;
+  /** 10-digit mobile, or null when masked / not a mobile. */
+  normalized: string | null;
+  kind: "MOBILE" | "MASKED" | "OTHER";
+  /** ISO date the bureau last reported the number, when it says. */
+  reportedDate: string | null;
+  source: "CRIF" | "EXPERIAN";
+  /** Where in the report: the lender for an Experian account phone, "Application", "Our request"… */
+  context: string | null;
+  /** True when it equals one of the customer's registered mobiles. */
+  registered: boolean;
+}
+
+export interface BureauPhones {
+  provider: string;
+  applicationId: number;
+  /** ISO timestamp of the pull the numbers come from. */
+  pulledAt: string | null;
+  /** The report was flagged as possibly another person's; its numbers are not used for matching. */
+  identityMismatch: boolean;
+  numbers: BureauPhone[];
+}
+
+/** One of this customer's numbers that was searched for elsewhere. */
+export interface OurNumber {
+  mobile: string;
+  sources: ("REGISTERED" | "BUREAU" | "REFERENCE")[];
+  /** The reference's name when the number came from one of this customer's references. */
+  referenceName: string | null;
+}
+
+/** Another case where one of this customer's numbers appears. Out-of-book rows carry no identifiers. */
+export interface MobileMatch {
+  kind: "BORROWER" | "BUREAU" | "REFERENCE" | "LEAD";
+  mobile: string;
+  /** False when the other customer is outside the viewer's book — ids, names and status are then null. */
+  inBook: boolean;
+  customerId: number | null;
+  applicationId: number | null;
+  applicationStatus: string | null;
+  borrowerName: string | null;
+  /** REFERENCE: the contact name as given on that application. */
+  contactName: string | null;
+  relation: string | null;
+  leadId: number | null;
+  leadName: string | null;
+  leadSource: string | null;
+  /** LEAD: staff who added it. */
+  addedBy: string | null;
+  /** ISO timestamp of when the number was used there. */
+  at: string | null;
+}
+
+/** Mirrors backend `DedupeDtos.MobileMatchView` (GET /api/customers/{id}/mobile-matches). */
+export interface MobileMatchView {
+  bureau: BureauPhones | null;
+  checked: OurNumber[];
+  matches: MobileMatch[];
+}
+
+export interface AddCallLogInput {
+  callType: string;
+  outcome: string;
+  callbackOn?: string | null;
+  notes?: string | null;
+  /** Tag the call to a specific loan (optional — most calls are still customer-level). */
+  loanId?: number;
+}
+
+/**
+ * Admin-managed company payee shown on the borrower repay screen. The `*Url` fields are short-lived
+ * presigned GETs for an uploaded QR image / account-info PDF (null when none is uploaded — the UI
+ * then falls back to a bundled static asset).
+ */
+export interface PaymentSettings {
+  upiId: string | null;
+  accountName: string | null;
+  accountNumber: string | null;
+  ifsc: string | null;
+  bankName: string | null;
+  qrUrl: string | null;
+  accountInfoUrl: string | null;
+}
+
+/** ADMIN edit of the payee (all fields optional; identity-less text + uploaded asset keys). */
+export interface UpdatePaymentSettingsInput {
+  upiId?: string | null;
+  accountName?: string | null;
+  accountNumber?: string | null;
+  ifsc?: string | null;
+  bankName?: string | null;
+  qrObjectKey?: string | null;
+  accountInfoObjectKey?: string | null;
+}
+
+/** Standard backend envelope. */
+export interface ApiResponse<T> {
+  success: boolean;
+  message: string;
+  data: T;
+  error: { code: string; message: string } | null;
+  timestamp: string;
+}
+
+// ---------------------------------------------------------------------------
+// Error + low-level fetch (talks to the BFF, same-origin)
+// ---------------------------------------------------------------------------
+
+/** An executive read a collection case that belongs to another officer — treat as "no case". */
+export function isCaseNotAssigned(e: unknown): boolean {
+  return e instanceof ApplicationApiError && e.code === "CASE_NOT_ASSIGNED";
+}
+
+export class ApplicationApiError extends Error {
+  /** Backend `error.code` when present, otherwise an HTTP-derived code. */
+  readonly code: string;
+  readonly status: number;
+  /** Cross-tier correlation id from the `X-Request-Id` response header, when present. */
+  readonly requestId?: string;
+
+  constructor(message: string, code: string, status: number, requestId?: string) {
+    super(message);
+    this.name = "ApplicationApiError";
+    this.code = code;
+    this.status = status;
+    this.requestId = requestId;
+  }
+}
+
+/**
+ * `staffApi.retryVerification` stopped waiting at 120s. The request itself is not aborted, so the
+ * provider call may still be running — and may still bill — after this is thrown. A typed error so
+ * the UI can tell "gave up waiting" apart from "the server said no".
+ */
+export class VerificationRetryTimeoutError extends Error {
+  constructor() {
+    super("Verification retry timed out after 120 seconds.");
+    this.name = "VerificationRetryTimeoutError";
+  }
+}
+
+type Method = "GET" | "POST" | "PUT" | "DELETE";
+
+async function bff<T>(path: string, method: Method, body?: unknown): Promise<T> {
+  const acting = currentActingRole();
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...(acting ? { "X-Acting-Role": acting } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      // BFF sets/reads httpOnly cookies; ensure they ride along.
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+  } catch (e) {
+    throw new ApplicationApiError(
+      e instanceof Error ? e.message : "Network error reaching the server.",
+      "NETWORK_ERROR",
+      0,
+    );
+  }
+
+  // Cross-tier correlation id echoed by the BFF/backend (X-Request-Id) — attached to every thrown
+  // error so the UI can show a "ref" that greps straight to the backend logs.
+  const requestId = res.headers.get("X-Request-Id") ?? undefined;
+
+  const text = await res.text();
+  let parsed: ApiResponse<T> | undefined;
+  try {
+    parsed = text ? (JSON.parse(text) as ApiResponse<T>) : undefined;
+  } catch {
+    parsed = undefined;
+  }
+
+  // A staff bearer that's been superseded by a login elsewhere now 401s on its very next request
+  // (single-session enforcement, V54) — the console has no other signal that this happened, so
+  // redirect straight to sign-in rather than leaving every open queue showing a raw error.
+  if (res.status === 401 && path.startsWith("/api/staff") && typeof window !== "undefined") {
+    window.location.href = "/staff/login?reason=superseded";
+  }
+
+  // Envelope-level failure (the backend returns success:false with an error).
+  if (parsed && parsed.success === false) {
+    const code = parsed.error?.code ?? `HTTP_${res.status}`;
+    const message = parsed.error?.message ?? parsed.message ?? "Request failed.";
+    throw new ApplicationApiError(message, code, res.status, requestId);
+  }
+
+  if (!res.ok) {
+    throw new ApplicationApiError(
+      parsed?.message ?? `Request failed with status ${res.status}.`,
+      parsed?.error?.code ?? `HTTP_${res.status}`,
+      res.status,
+      requestId,
+    );
+  }
+
+  if (!parsed) {
+    throw new ApplicationApiError("Empty response from server.", "EMPTY_RESPONSE", res.status, requestId);
+  }
+
+  return parsed.data;
+}
+
+/** PUT raw bytes (File or Blob) straight to a presigned S3 URL — never through the BFF. */
+async function putToPresignedUrl(url: string, body: Blob, contentType: string): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "PUT", body, headers: { "Content-Type": contentType } });
+  } catch {
+    // The direct-to-S3 PUT died at the network layer (slow/dropped mobile connection, mid-upload
+    // reset). Without this, the raw browser TypeError ("Failed to fetch") reached the UI with no
+    // code for support to trace.
+    throw new ApplicationApiError(
+      "Upload failed — check your connection and try again.",
+      "UPLOAD_NETWORK_ERROR",
+      0,
+    );
+  }
+  if (!res.ok) {
+    throw new ApplicationApiError(`Upload failed (status ${res.status}).`, `UPLOAD_FAILED_${res.status}`, res.status);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Borrower client — routes under /api/borrower/*
+// ---------------------------------------------------------------------------
+
+const BORROWER_BASE = "/api/borrower/applications";
+const BORROWER_LOAN_BASE = "/api/borrower/loan";
+
+// --- Onboarding-paused waitlist (`/api/onboarding-waitlist`) ---------------------------------
+
+export type OnboardingGateState = "OPEN" | "FORM" | "SUBMITTED";
+
+/** What the borrower typed. Aadhaar is echoed back only as its last four digits. */
+export interface WaitlistSubmission {
+  fullName: string;
+  email: string;
+  mobile: string;
+  pan: string;
+  aadhaarLast4: string;
+  createdAt: string;
+}
+
+export interface OnboardingGate {
+  paused: boolean;
+  gate: OnboardingGateState;
+  submission: WaitlistSubmission | null;
+}
+
+/** Staff (ADMIN) view of one submission — PAN and Aadhaar in full. */
+export interface WaitlistEntry {
+  id: number;
+  customerId: number;
+  fullName: string;
+  email: string;
+  mobile: string;
+  pan: string;
+  aadhaar: string;
+  createdAt: string;
+}
+
+export const publicApi = {
+  /** Anonymous: is new onboarding paused? Fails open (false) so a hiccup never blocks sign-in. */
+  onboardingPaused: async (): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/auth/borrower/onboarding", { cache: "no-store" });
+      if (!res.ok) return false;
+      return !!((await res.json()) as { paused?: boolean }).paused;
+    } catch {
+      return false;
+    }
+  },
+};
+
+export const borrowerApi = {
+  /** Onboarding-paused gate for the signed-in borrower. */
+  onboardingGate: () => bff<OnboardingGate>("/api/borrower/onboarding-waitlist", "GET"),
+  submitWaitlist: (body: { fullName: string; email: string; mobile: string; pan: string; aadhaar: string }) =>
+    bff<WaitlistSubmission>("/api/borrower/onboarding-waitlist", "POST", body),
+
+  /** Create a DRAFT application for the given customer. */
+  create: (customerId: number) =>
+    bff<ApplicationView>(`${BORROWER_BASE}`, "POST", { customerId }),
+
+  /**
+   * Returning-borrower reborrow: start a new advance reusing the saved KYC profile (customerId is
+   * resolved server-side from the session). Returns PRE_APPROVED (good standing → choose amount) or
+   * REVIEW_PENDING (past delinquency → held for KYC review). Throws NO_PRIOR_LOAN / ACTIVE_LOAN.
+   */
+  reborrow: () => bff<ApplicationView>(`${BORROWER_BASE}/reborrow`, "POST"),
+
+  /** DRAFT -> KYC_PENDING. */
+  submitKyc: (id: number) =>
+    bff<ApplicationView>(`${BORROWER_BASE}/${id}/submit-kyc`, "POST"),
+
+  /** Borrower declared self-employed — auto-rejects and starts the 90-day cooling-off window. */
+  selfEmployed: (id: number) =>
+    bff<ApplicationView>(`${BORROWER_BASE}/${id}/self-employed`, "POST"),
+
+  /** Set amount/purpose/salary-day once KYC is approved (stays KYC_APPROVED). */
+  apply: (
+    id: number,
+    payload: {
+      amountPaise: number;
+      purpose?: string;
+      eligibleLimitPaise?: number;
+      salaryCreditDay?: number;
+    },
+  ) => bff<ApplicationView>(`${BORROWER_BASE}/${id}/apply`, "POST", payload),
+
+  /** Poll a single application. */
+  get: (id: number) => bff<ApplicationView>(`${BORROWER_BASE}/${id}`, "GET"),
+
+  /** The borrower's own applications, newest first (for "Past loans" / "Transactions"). */
+  myApplications: () => bff<ApplicationView[]>(`${BORROWER_BASE}/mine`, "GET"),
+
+  /** Event/audit trail for an application. */
+  events: (id: number) => bff<EventView[]>(`${BORROWER_BASE}/${id}/events`, "GET"),
+
+  /** Loan summary (net disbursed, due date, total repayable) once ACTIVE. */
+  loan: (loanId: number) => bff<LoanView>(`${BORROWER_LOAN_BASE}/${loanId}`, "GET"),
+
+  /** Prepayment-aware balance as of a date (interest only to the day paid). */
+  outstanding: (loanId: number, asOf?: string) =>
+    bff<OutstandingView>(
+      `${BORROWER_LOAN_BASE}/${loanId}/outstanding${asOf ? `?asOf=${encodeURIComponent(asOf)}` : ""}`,
+      "GET",
+    ),
+
+  /**
+   * The three balances the repay screen quotes together — today, on the salary day the loan is due,
+   * and on the one grace day after it — in one call instead of three `outstanding` round trips.
+   * Each field is the identical figure `outstanding` returns for that date.
+   */
+  outstandingSchedule: (loanId: number, asOf?: string) =>
+    bff<OutstandingScheduleView>(
+      `${BORROWER_LOAN_BASE}/${loanId}/outstanding/schedule${asOf ? `?asOf=${encodeURIComponent(asOf)}` : ""}`,
+      "GET",
+    ),
+
+  /** Record a (full / partial / prepayment) repayment with proof — lands PENDING_VERIFICATION. */
+  recordRepayment: (
+    loanId: number,
+    payload: { amountPaise: number; method: PaymentMethodName; txnRef?: string; proofUrl?: string; paidOn?: string },
+  ) => bff<PaymentView>(`${BORROWER_LOAN_BASE}/${loanId}/repayments`, "POST", payload),
+
+  /** Repayments recorded against this loan (the borrower's payment history). */
+  repayments: (loanId: number) => bff<PaymentView[]>(`${BORROWER_LOAN_BASE}/${loanId}/repayments`, "GET"),
+
+  /** Save/update the customer KYC details for this application. */
+  saveProfile: (id: number, profile: ProfileInput) =>
+    bff<ProfileView>(`${BORROWER_BASE}/${id}/profile`, "PUT", profile),
+
+  /** Self-edit own profile (non-identity fields); verification-linked edits reset the matching check. */
+  editProfile: (id: number, edit: EditProfileInput) =>
+    bff<ProfileView>(`${BORROWER_BASE}/${id}/profile/self`, "PUT", edit),
+
+  /** Read back the (masked) profile. */
+  getProfile: (id: number) => bff<ProfileView>(`${BORROWER_BASE}/${id}/profile`, "GET"),
+
+  /** The borrower's own eMandate (auto-repayment). Same view staff see; it is all their own data. */
+  mandate: (id: number) => bff<MandateView | null>(`${BORROWER_BASE}/${id}/mandate`, "GET"),
+
+  /** The borrower's notification preferences (server-persisted; honored by the engine). */
+  getPreferences: () => bff<BorrowerPreferences>(`/api/borrower/preferences`, "GET"),
+  updatePreferences: (prefs: BorrowerPreferences) =>
+    bff<BorrowerPreferences>(`/api/borrower/preferences`, "PUT", prefs),
+
+  /** Upload one document (bytes as base64). */
+  uploadDocument: (
+    id: number,
+    doc: { docType: string; fileName: string; contentType?: string; dataBase64: string },
+  ) => bff<DocumentView>(`${BORROWER_BASE}/${id}/documents`, "POST", doc),
+
+  /** List documents already uploaded for this application. */
+  documents: (id: number) => bff<DocumentView[]>(`${BORROWER_BASE}/${id}/documents`, "GET"),
+};
+
+/** Server-side onboarding position — what makes a second device resume mid-flow (revamp.md C1). */
+export const journeyApi = {
+  get: (id: number) => bff<JourneyView>(`${BORROWER_BASE}/${id}/journey`, "GET"),
+  advance: (id: number, step: string) =>
+    bff<JourneyView>(`${BORROWER_BASE}/${id}/journey/${step}`, "POST"),
+};
+
+// ---------------------------------------------------------------------------
+// Verification (P5 sequential onboarding) — routes under /api/borrower/applications/{id}/verify/*
+// ---------------------------------------------------------------------------
+
+/** Outcome of a single verification check (mirrors backend StepResult). */
+export type CheckStatus = "PASS" | "FAIL" | "REVIEW" | "PENDING";
+
+/** A verification step's live result. `derived` carries step-specific extras (urls, flags, …). */
+export interface StepResult {
+  checkType: string;
+  status: CheckStatus;
+  message: string | null;
+  derived: Record<string, unknown>;
+  /** "MANUAL" on a staff override, otherwise the vendor that answered (e.g. "DIGITAP"). */
+  provider?: string | null;
+  /** The provider's own transaction id — what you quote when raising a dispute with them. */
+  providerTxnId?: string | null;
+  /** The reference we sent them, for finding the call in the provider-API log. */
+  clientRefNum?: string | null;
+  nameMatch?: number | null;
+  score?: number | null;
+  /** When the check last ran. Optional: rows written before this existed have no value. */
+  checkedAt?: string | null;
+  /** When staff last reopened this check for the customer to redo. Optional: only reopened rows carry it. */
+  reopenedAt?: string | null;
+}
+
+/** Result of an OTP send: whether it went out, and (dev/mock only) the code itself. */
+export interface OtpRequestResult {
+  sent: boolean;
+  devCode: string | null;
+  ttlSeconds: number;
+}
+
+/** Required-step completion snapshot (Phase 3.2) — mirrors backend VerificationProgress. */
+export interface VerificationProgress {
+  required: number;
+  completed: number;
+  failed: number;
+  pending: number;
+  percent: number;
+}
+
+/** Result of a staff-triggered KYC reminder (Phase 3.4). */
+export interface ReminderResult {
+  sent: boolean;
+  pendingCount: number;
+  pendingSteps: string;
+}
+
+/**
+ * A one-time "send the customer a link" preview/send result — mirrors backend `ResumeLink`.
+ * `willReopen` tells the caller the send will also reset the check to PENDING and rewind the
+ * borrower's journey pointer; `maskedEmail`/`maskedMobile` are null when that contact is unknown.
+ */
+export interface ResumeLink {
+  url: string;
+  route: string;
+  stepLabel: string;
+  willReopen: boolean;
+  maskedEmail: string | null;
+  maskedMobile: string | null;
+  lastSentAt: string | null;
+}
+
+/** Result of asking the app-scoped verify endpoint for a presigned PUT URL. */
+export interface VerifyPresign {
+  key: string;
+  url: string;
+}
+
+/** A single document version the borrower consents to (e.g. "loan-agreement@1"). */
+export type AgreementVersion = string;
+
+export const verificationApi = {
+  /** PAN identity match. */
+  pan: (id: number, pan: string) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/pan`, "POST", { pan }),
+
+  /** Official/work email → employer match. */
+  email: (id: number, officialEmail: string) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/email`, "POST", { officialEmail }),
+
+  /**
+   * Send the OTP proving the borrower controls their PERSONAL email — additive to (and separate
+   * from) the official-email deliverability check above. The address is resolved server-side from
+   * the saved profile, never passed by the client.
+   */
+  requestPersonalEmailOtp: (id: number) =>
+    bff<OtpRequestResult>(`${BORROWER_BASE}/${id}/verify/email/otp`, "POST"),
+
+  /** Confirm the personal-email OTP. */
+  confirmPersonalEmailOtp: (id: number, otp: string) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/email/otp/confirm`, "POST", { otp }),
+
+  /**
+   * Send the OTP proving the borrower controls their OFFICIAL/work email. Additive to `email` above:
+   * that call asks the provider whether the address is deliverable and matches the employer, this
+   * asks the borrower to open the inbox. Address resolved server-side, same as the personal one.
+   */
+  requestOfficialEmailOtp: (id: number) =>
+    bff<OtpRequestResult>(`${BORROWER_BASE}/${id}/verify/official-email/otp`, "POST"),
+
+  /** Confirm the official-email OTP. */
+  confirmOfficialEmailOtp: (id: number, otp: string) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/official-email/otp/confirm`, "POST", { otp }),
+
+  /** Address: either live geolocation (lat/long) or a typed manual address. */
+  address: (
+    id: number,
+    body: { latitude: number; longitude: number } | { manualAddress: string },
+  ) => bff<StepResult>(`${BORROWER_BASE}/${id}/verify/address`, "POST", body),
+
+  /** DigiLocker: start the consent flow (returns derived.clientId + derived.url). */
+  digilockerInit: (id: number, redirectUrl: string) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/digilocker/init`, "POST", { redirectUrl }),
+
+  /** DigiLocker: poll consent progress (derived.completed / .failed / .status). */
+  digilockerStatus: (id: number) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/digilocker/status`, "GET"),
+
+  /** DigiLocker: finalise once the consent flow reports completed. */
+  digilockerComplete: (id: number) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/digilocker/complete`, "POST"),
+
+  /**
+   * The DigiLocker fallback: confirms both an AADHAAR_FRONT and AADHAAR_BACK document already
+   * exist and records the AADHAAR row as REVIEW/MANUAL_PROOF for the Disbursement Head to judge —
+   * the identity twin of `offerApi.confirmDisbursalAccount`'s `useBankProof`. Errors
+   * `AADHAAR_PROOF_REQUIRED` if either side hasn't been uploaded yet.
+   */
+  aadhaarManual: (id: number) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/aadhaar-manual`, "POST"),
+
+  /**
+   * Credit bureau pull. `otp` is the already-verified bureau-consent code (see `bureauConsent` below)
+   * forwarded so it can be threaded into Digitap's Credit Analytics payload, which mandates it — omit
+   * it only for a staff-triggered manual retry. Score/category are never surfaced to the borrower.
+   */
+  bureau: (id: number, otp?: string) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/bureau`, "POST", otp ? { otp } : undefined),
+
+  /**
+   * Answer the bureau's knowledge-based-authentication question.
+   *
+   * `answer` MUST be one of `derived.bureauChallengeOptions` VERBATIM — CRIF returns them
+   * space-padded and compares literally, so never `.trim()` it here, in the component, or anywhere
+   * between. A trimmed answer is a wrong answer, and a wrong answer costs a billable re-mint.
+   */
+  bureauChallengeAnswer: (id: number, answer: string) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/bureau/challenge/answer`, "POST", { answer }),
+
+  /**
+   * Mint a fresh bureau question. The ONLY billable call the borrower can trigger — keep it bound to
+   * an explicit click, never a render or a poll.
+   */
+  bureauChallengeRefresh: (id: number) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/bureau/challenge/refresh`, "POST"),
+
+  /** Borrower recognises none of the options — flag it for the credit team and move on. */
+  bureauChallengeSkip: (id: number) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/bureau/challenge/skip`, "POST"),
+
+  /**
+   * EPFO/UAN employment lookup. Takes no body — every input (PAN, mobile, DOB, name, declared
+   * employer) is read off the stored profile, so it can only run once those are saved. Advisory:
+   * it never gates KYC, and a borrower with no EPFO record (a first job, a cash employer, a non-PF
+   * establishment) legitimately comes back REVIEW rather than PASS.
+   */
+  employment: (id: number) => bff<StepResult>(`${BORROWER_BASE}/${id}/verify/employment`, "POST"),
+
+  /**
+   * Declared salary + uploaded slip object keys (min 3 months). Optionally sets the salary-credit day
+   * (1–31) in the same call — used by the reborrow salary step so the customer confirms their salary
+   * day alongside re-verifying income; omitted on the first-time onboarding path (day set at apply).
+   * `filePassword` is the borrower's optional key for password-protected slip PDFs.
+   */
+  salary: (
+    id: number,
+    monthlySalaryPaise: number,
+    slipObjectKeys: string[],
+    salaryCreditDay?: number,
+    filePassword?: string,
+  ) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/salary`, "POST", {
+      monthlySalaryPaise,
+      slipObjectKeys,
+      salaryCreditDay,
+      filePassword,
+    }),
+
+  /** Penny-drop on the salary account → name match. */
+  pennyDrop: (id: number, accountNumber: string, ifsc: string) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/penny-drop`, "POST", { accountNumber, ifsc }),
+
+  /** Selfie liveness/face match against the uploaded selfie object key (Digitap fallback path). */
+  selfie: (id: number, selfieObjectKey: string) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/selfie`, "POST", { selfieObjectKey }),
+
+  /**
+   * Start the Signzy liveness video journey (primary selfie path). The result's
+   * `derived.videoUrl` is where to redirect the borrower; `derived.fallback === true` means Signzy
+   * liveness is unavailable and the caller should use the camera-capture + `selfie` fallback.
+   */
+  selfieLivenessInit: (id: number) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/selfie/liveness/init`, "POST"),
+
+  /** Poll the liveness journey result (PENDING until the borrower finishes; then PASS/REVIEW). */
+  selfieLivenessStatus: (id: number) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/selfie/liveness/status`, "GET"),
+
+  /** Record consent to the agreement document set. */
+  agreement: (id: number, versions: AgreementVersion[]) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/agreement`, "POST", { versions }),
+
+  /**
+   * Send the bureau-consent OTP — a purpose-dedicated code, isolated from the login OTP (a concurrent
+   * login OTP request can no longer clobber this one, or vice versa). Application-scoped: the mobile is
+   * resolved server-side from the profile, not passed by the client.
+   */
+  requestBureauConsentOtp: (id: number) =>
+    bff<OtpRequestResult>(`${BORROWER_BASE}/${id}/verify/bureau-consent/otp`, "POST"),
+
+  /**
+   * Record OTP-verified consent to the credit-bureau enquiry. Runs BEFORE the PAN fetch; the OTP is
+   * verified server-side against the mobile on file (never one supplied by the client).
+   */
+  bureauConsent: (id: number, otp: string, consentText: string) =>
+    bff<StepResult>(`${BORROWER_BASE}/${id}/verify/bureau-consent`, "POST", { otp, consentText }),
+
+  /** The full verification status board for this application. */
+  summary: (id: number) => bff<StepResult[]>(`${BORROWER_BASE}/${id}/verify/summary`, "GET"),
+
+  /** Ask the app-scoped endpoint for a presigned PUT URL (echo `key` back on the verify call). */
+  presignUpload: (
+    id: number,
+    body: { docType: string; fileName: string; contentType: string },
+  ) => bff<VerifyPresign>(`${BORROWER_BASE}/${id}/verify/presign-upload`, "POST", body),
+
+  /** PUT raw bytes (File or Blob) straight to the presigned S3 URL — never through the BFF. */
+  putToPresignedUrl,
+
+  /**
+   * Persist already-uploaded S3 keys as `ApplicationDocument` rows under an arbitrary docType — the
+   * generic counterpart to `salary(...)`'s hardcoded SALARY_SLIP persistence. Used for the 6-month
+   * bank-statement upload on the bank-details page (docType "BANK_STATEMENT").
+   */
+  uploadedDocuments: (
+    id: number,
+    body: { docType: string; objectKeys: string[]; filePassword?: string },
+  ) =>
+    bff<void>(`${BORROWER_BASE}/${id}/verify/documents`, "POST", body),
+};
+
+// ---------------------------------------------------------------------------
+// Offer journey (revamp.md Phase 3) — what the borrower walks after credit sanctions their file.
+// Routes under /api/borrower/applications/{id}/offer/*. The identity checks inside this journey
+// (DigiLocker, selfie, address) stay on `verificationApi` — only what Phase 3 newly captures is here.
+// ---------------------------------------------------------------------------
+
+export type ReferenceRelation =
+  | "PARENT" | "SPOUSE" | "SIBLING" | "RELATIVE" | "FRIEND" | "COLLEAGUE" | "MANAGER" | "NEIGHBOUR";
+
+/** The relations the references screen offers, in the order the backend lists them. */
+export const REFERENCE_RELATIONS: ReferenceRelation[] = [
+  "PARENT", "SPOUSE", "SIBLING", "RELATIVE", "FRIEND", "COLLEAGUE", "MANAGER", "NEIGHBOUR",
+];
+
+export interface ReferenceView {
+  slot: number;
+  fullName: string;
+  mobile: string;
+  relation: string;
+}
+
+export interface ReferenceInput {
+  fullName: string;
+  mobile: string;
+  relation: string;
+}
+
+/** Every number on the loan-summary screen, computed server-side with the real loan math. */
+export interface OfferSummaryView {
+  applicationId: number;
+  /** What credit sanctioned — the ceiling. */
+  ceilingPaise: number;
+  /** What the borrower chose to draw. */
+  principalPaise: number;
+  processingFeePaise: number;
+  gstPaise: number;
+  netDisbursedPaise: number;
+  interestPaise: number;
+  totalRepayablePaise: number;
+  tenureDays: number;
+  repaymentDate: string | null;
+  /** Calendar days, 18:00 IST cut-off — no weekend or holiday roll. */
+  expectedDisbursalDate: string;
+}
+
+export interface SanctionLetterView {
+  documentId: number;
+  url: string;
+}
+
+export interface DisbursalAccountView {
+  accountNumber: string | null;
+  ifsc: string | null;
+  holderName: string | null;
+  bank: string | null;
+  verified: boolean;
+  pennyDropRequired: boolean;
+  /** Non-null: the borrower burnt their penny-drop attempts and must wait this out. */
+  lockedUntil: string | null;
+  attemptsLeft: number;
+}
+
+const OFFER = (id: number) => `${BORROWER_BASE}/${id}/offer`;
+
+export const offerApi = {
+  /** Draw down an amount within the sanctioned ceiling. Stays SANCTIONED. */
+  chooseAmount: (id: number, amountPaise: number) =>
+    bff<ApplicationView>(`${OFFER(id)}/amount`, "POST", { amountPaise }),
+
+  references: (id: number) => bff<ReferenceView[]>(`${OFFER(id)}/references`, "GET"),
+
+  /** Both references at once — the backend rejects anything but two distinct, non-self contacts. */
+  saveReferences: (id: number, references: ReferenceInput[]) =>
+    bff<ReferenceView[]>(`${OFFER(id)}/references`, "POST", { references }),
+
+  summary: (id: number) => bff<OfferSummaryView>(`${OFFER(id)}/summary`, "GET"),
+
+  /** Renders the Key Fact Statement to S3 and returns a short-lived URL to read it. */
+  sanctionLetter: (id: number) =>
+    bff<SanctionLetterView>(`${OFFER(id)}/sanction-letter`, "POST"),
+
+  /**
+   * Start Aadhaar e-sign. `derived.url` is the provider page to send the borrower to;
+   * `derived.fallback === true` means the provider is unavailable and they should draw instead.
+   */
+  esignInit: (id: number, payload: { successRedirectUrl: string; failureRedirectUrl: string }) =>
+    bff<StepResult>(`${OFFER(id)}/esign/init`, "POST", payload),
+
+  /** Poll the Aadhaar e-sign session once the provider redirects the borrower back. */
+  esignStatus: (id: number) => bff<StepResult>(`${OFFER(id)}/esign/status`, "GET"),
+
+  /** Start the NACH eMandate. `derived.url` is the Digio page; `derived.bankUnsupported` is terminal. A retry calls this again. */
+  mandateInit: (id: number) => bff<StepResult>(`${OFFER(id)}/mandate/init`, "POST"),
+
+  /** Poll the mandate. PASS once usable (the backend has then already routed the file to disbursement). */
+  mandateStatus: (id: number) => bff<StepResult>(`${OFFER(id)}/mandate/status`, "GET"),
+
+  /**
+   * Fallback: record a drawn signature. Without a signature by one route or the other the
+   * application cannot reach disbursement.
+   */
+  esign: (id: number, payload: { signatureDataUrl: string; latitude?: number; longitude?: number; accuracyMeters?: number }) =>
+    bff<StepResult>(`${OFFER(id)}/esign`, "POST", payload),
+
+  disbursalAccount: (id: number) =>
+    bff<DisbursalAccountView>(`${OFFER(id)}/disbursal-account`, "GET"),
+
+  /**
+   * The last step: confirms where the money lands and hands the file to disbursement. A penny drop
+   * fires unless this exact account-number/IFSC pair already has a successful verification.
+   */
+  confirmDisbursalAccount: (
+    id: number,
+    payload: {
+      accountNumber: string;
+      ifsc: string;
+      holderName?: string;
+      bank?: string;
+      /**
+       * The bank-proof fallback: skips the penny drop entirely and leaves the account
+       * REVIEW-pending for the Disbursement Head to verify against an uploaded cheque/passbook.
+       * Only meaningful once a BANK_PROOF document already exists — the backend 400s
+       * (`BANK_PROOF_REQUIRED`) otherwise.
+       */
+      useBankProof?: boolean;
+    },
+  ) => bff<ApplicationView>(`${OFFER(id)}/disbursal-account`, "POST", payload),
+};
+
+// ---------------------------------------------------------------------------
+// Staff client — routes under /api/staff/*
+// ---------------------------------------------------------------------------
+
+/**
+ * One page of a server-paged register, and one column's facet values.
+ *
+ * Four registers moved server-side at once and each would otherwise grow its own near-identical
+ * pair of calls — which is how `col` and `column` ended up naming the same parameter on two
+ * different endpoints. One helper fixes the convention in one place: every register answers
+ * `GET <base>/page?page&size&<view params>` and `GET <base>/facets?column=<key>&<other filters>`.
+ *
+ * `filters` is the register view's `queryParams` — `q`, `sort`, `dir` and one `f.<column>` each.
+ * The server keeps only the columns it declared and drops the rest, so an old link cannot 400.
+ */
+export interface RegisterPage<T> {
+  rows: T[];
+  page: number;
+  size: number;
+  /** Rows matching the filters, across every page — what drives the pagination and the count. */
+  total: number;
+}
+
+/** The ledger's money figures, summed over the whole filter rather than the page. */
+export interface LedgerTotals {
+  /** Verified repayments only — money the accountant has confirmed arrived. */
+  totalInPaise: number;
+  totalOutPaise: number;
+  /** Listed but not yet counted in: repayments still awaiting verification. */
+  pendingInPaise: number;
+}
+
+export interface RegisterFacet {
+  values: string[];
+  /** The server had more than it will return: offer a text filter, not a partial checklist. */
+  truncated: boolean;
+}
+
+function registerPage<T, R extends RegisterPage<T> = RegisterPage<T>>(
+  base: string,
+  p: { filters?: Record<string, string>; page: number; size: number; extra?: Record<string, string> },
+) {
+  const sp = new URLSearchParams({
+    ...p.filters,
+    ...p.extra,
+    page: String(p.page),
+    size: String(p.size),
+  });
+  return bff<R>(`${base}/page?${sp}`, "GET");
+}
+
+/** `filters` must already have this column's own `f.<column>` removed — the server's `without(col)`
+ *  — so the dropdown offers the values you could switch TO, not just the one you are on. */
+function registerFacet(base: string, column: string, filters: Record<string, string>) {
+  return bff<RegisterFacet>(`${base}/facets?${new URLSearchParams({ ...filters, column })}`, "GET");
+}
+
+/** A presented NACH debit. No provider message and no failure code reach the UI by design. */
+export interface DebitResult {
+  debitId: number;
+  status: string;
+  amountPaise: number;
+  settlementDate: string | null;
+  attemptNo: number;
+}
+
+/**
+ * One presented NACH debit as staff see it. The provider's failure code and message are deliberately
+ * absent (the message echoes account numbers) — `representable` is what staff need from them: whether
+ * another attempt is possible. `overpayment` means money was taken from a borrower who had already
+ * repaid, i.e. a refund is owed.
+ */
+export interface DebitRecord {
+  debitId: number;
+  loanId: number;
+  status: string;
+  amountPaise: number;
+  settlementDate: string | null;
+  attemptNo: number;
+  trigger: string | null;
+  utr: string | null;
+  overpayment: boolean;
+  representable: boolean;
+  createdAt: string | null;
+}
+
+/** One mandate attempt. The authorisation url is deliberately absent — it is a bearer link. */
+export interface MandateAttempt {
+  id: number;
+  applicationId: number | null;
+  attemptNo: number;
+  status: string;
+  umrn: string | null;
+  bankName: string | null;
+  accountLast4: string | null;
+  digioState: string | null;
+  digioBankState: string | null;
+  authSubMode: string | null;
+  rejectReason: string | null;
+  maximumAmountPaise: number;
+  createdAt: string | null;
+  authenticatedAt: string | null;
+  /** True for the attempt that actually governs this application right now. */
+  reusable: boolean;
+  /** Set when staff cancelled it at the provider; with who did it and why (staff-only). */
+  cancelledAt: string | null;
+  cancelledBy: string | null;
+  cancelReason: string | null;
+}
+
+/** The mandate ceiling for an application: formula, ADMIN override (V89) and what a new mandate uses. */
+export interface MandateCeilingView {
+  formulaPaise: number | null;
+  overridePaise: number | null;
+  registrationPaise: number | null;
+  overrideNote: string | null;
+  overrideSetBy: string | null;
+  overrideSetAt: string | null;
+}
+
+/** Why staff are cancelling an ACTIVE mandate (maps to Digio C001 / C002). */
+export type MandateCancelReason = "CUSTOMER_REQUEST" | "CORPORATE_REQUEST";
+
+export interface MandateView {
+  status: "PENDING_AUTHORIZATION" | "ACTIVE" | "AUTHORIZATION_FAILED" | "EXPIRED" | "BANK_UNSUPPORTED";
+  umrn: string | null;
+  bankName: string | null;
+  accountLast4: string | null;
+  authenticatedAt: string | null;
+  rejectReason: string | null;
+  attemptNo: number;
+  overridable: boolean;
+  /** Registered on an earlier advance and reused; nothing was filed on this application. */
+  carriedOver: boolean;
+  /** Set when staff cancelled this mandate. */
+  cancelledAt: string | null;
+}
+
+const STAFF_BASE = "/api/staff/applications";
+const STAFF_LOAN_BASE = "/api/staff/loan";
+
+export const staffApi = {
+  /**
+   * List applications by status, e.g. KYC_PENDING. Optional `range.from`/`range.to` (yyyy-mm-dd)
+   * narrow to applications CREATED in that inclusive window — the live-applications
+   * Today/Yesterday/Custom filter. Optional `q` narrows further, WITHIN that status + date window
+   * (name/mobile/PAN/application/loan #) — it must never bypass the date filter, so it's just
+   * another query param alongside `from`/`to`, not a separate search endpoint.
+   */
+  listByStatus: (
+    status: ApplicationStatus,
+    range?: { from?: string; to?: string },
+    q?: string,
+    /** `mine` narrows a Disbursement Head's queue to the files THEY released (past-disbursed
+     *  history). A Credit or Collection Executive is always scoped server-side to their own files. */
+    opts?: { mine?: boolean },
+  ) => {
+    const qs = new URLSearchParams({ status });
+    if (range?.from) qs.set("from", range.from);
+    if (range?.to) qs.set("to", range.to);
+    if (q) qs.set("q", q);
+    if (opts?.mine) qs.set("mine", "true");
+    return bff<ApplicationView[]>(`${STAFF_BASE}?${qs.toString()}`, "GET");
+  },
+
+  /** The credit head's assignment queue (KYC_APPROVED + applied). Optional `range.from`/`range.to`
+   *  narrows to applications CREATED in that inclusive window (the live-applications Today/Yesterday/
+   *  Custom filter); optional `q` narrows further within that window (see {@link listByStatus}). */
+  creditQueue: (range?: { from?: string; to?: string }, q?: string) => {
+    const qs = new URLSearchParams();
+    if (range?.from) qs.set("from", range.from);
+    if (range?.to) qs.set("to", range.to);
+    if (q) qs.set("q", q);
+    const suffix = qs.toString();
+    return bff<ApplicationView[]>(`${STAFF_BASE}/credit-queue${suffix ? `?${suffix}` : ""}`, "GET");
+  },
+
+  /**
+   * ACTIVE staff holding {@code role} for assignee pickers (default CREDIT_EXECUTIVE). Any staff
+   * role may read it — deliberately NOT `adminApi.listStaff()`, which is ADMIN-only.
+   */
+  creditExecutives: (role = "CREDIT_EXECUTIVE") =>
+    bff<StaffSummary[]>(
+      `${STAFF_BASE}/credit-executives?role=${encodeURIComponent(role)}`,
+      "GET",
+    ),
+
+  /** ADMIN-only: every application (complete + incomplete) with full KYC detail + completeness. */
+  listAllApplications: () => bff<AdminApplicationView[]>(`${STAFF_BASE}/all`, "GET"),
+
+  /**
+   * ADMIN: one page of the register — search, column filters, completeness and paging run server-side.
+   * `filters` is the register view's `queryParams` (`q`, `f.<column>`, sort): the server keeps only the
+   * columns it declared and ignores the rest.
+   */
+  listAllApplicationsPage: (p: {
+    q?: string;
+    filters?: Record<string, string>;
+    completeness?: "ALL" | "COMPLETE" | "INCOMPLETE";
+    page: number;
+    size: number;
+  }) => {
+    const sp = new URLSearchParams({ ...p.filters, page: String(p.page), size: String(p.size) });
+    if (p.q) sp.set("q", p.q);
+    if (p.completeness && p.completeness !== "ALL") sp.set("completeness", p.completeness);
+    return bff<AdminApplicationPage>(`${STAFF_BASE}/all/page?${sp}`, "GET");
+  },
+
+  /** ADMIN: the values one column's filter can offer; `filters` carries the OTHER columns' `f.*`. */
+  allApplicationsFacet: (column: string, filters: Record<string, string>) =>
+    bff<{ values: string[]; truncated: boolean }>(
+      `${STAFF_BASE}/all/facets?${new URLSearchParams({ ...filters, column })}`,
+      "GET",
+    ),
+
+  /** TELECALLER/ADMIN: every pre-SANCTIONED application, enriched with completeness + staleness. */
+  telecalling: () => bff<TelecallingView[]>(`${STAFF_BASE}/telecalling`, "GET"),
+
+  /** ADMIN — the rejection register, optionally filtered by reason code. */
+  rejections: (reason?: string) =>
+    bff<RejectionView[]>(`${STAFF_BASE}/rejections${reason ? `?reason=${encodeURIComponent(reason)}` : ""}`, "GET"),
+
+  get: (id: number) => bff<ApplicationView>(`${STAFF_BASE}/${id}`, "GET"),
+
+  events: (id: number) => bff<EventView[]>(`${STAFF_BASE}/${id}/events`, "GET"),
+
+  /** The two contacts the borrower named in the Phase-3 offer journey (V46). */
+  references: (id: number) => bff<ReferenceView[]>(`${STAFF_BASE}/${id}/references`, "GET"),
+
+  /** ADMIN-only in the UI (backend also permits it): correct a reference contact's name/mobile/relation. */
+  saveReferences: (id: number, references: ReferenceInput[]) =>
+    bff<ReferenceView[]>(`${STAFF_BASE}/${id}/offer/references`, "POST", { references }),
+
+  // --- maker-checker actions ---
+  kycDecision: (id: number, decision: boolean, notes?: string) =>
+    bff<ApplicationView>(`${STAFF_BASE}/${id}/kyc-decision`, "POST", { decision, notes }),
+
+  /** Credit Head hands the file to an executive: KYC_PENDING → CREDIT_EXEC_PENDING. */
+  assign: (id: number, executiveId: number) =>
+    bff<ApplicationView>(`${STAFF_BASE}/${id}/assign`, "POST", { executiveId }),
+
+  /** "Accept lead" — the Credit Executive's FINAL decision (V45). No Head counter-approval. */
+  sanction: (
+    id: number,
+    payload: { sanctionedAmountPaise: number; salaryCreditDay: number; remarks?: string },
+  ) => bff<ApplicationView>(`${STAFF_BASE}/${id}/sanction`, "POST", payload),
+
+  /** "Reject lead" — the borrower is told nothing; the remarks go to the staff-only register. */
+  rejectLead: (id: number, notes?: string) =>
+    bff<ApplicationView>(`${STAFF_BASE}/${id}/reject-lead`, "POST", { notes }),
+
+  /** "Mark lead pending" — a staff-only tag; the lead keeps its status and its place in the queue. */
+  markPending: (id: number, notes: string) =>
+    bff<ApplicationView>(`${STAFF_BASE}/${id}/mark-pending`, "POST", { notes }),
+
+  /** Own decisions by default; a Head may pass a team member's id, ADMIN anyone's. */
+  decisions: (staffId?: number, from?: string, to?: string) => {
+    const qs = new URLSearchParams();
+    if (staffId != null) qs.set("staffId", String(staffId));
+    if (from) qs.set("from", from);
+    if (to) qs.set("to", to);
+    const suffix = qs.toString();
+    return bff<DecisionView[]>(`/api/staff/decisions${suffix ? `?${suffix}` : ""}`, "GET");
+  },
+
+  /**
+   * Per-employee work totals over a window — the staff-performance dashboard. Omit both dates for
+   * all time. Scoping is the server's: ADMIN gets the company, a Head their team, anyone else self.
+   */
+  performance: (from?: string, to?: string, staffId?: number) => {
+    const qs = new URLSearchParams();
+    if (from) qs.set("from", from);
+    if (to) qs.set("to", to);
+    // Narrows the roster server-side, so a one-person view never aggregates the whole company.
+    if (staffId != null) qs.set("staffId", String(staffId));
+    const suffix = qs.toString();
+    return bff<StaffPerformanceSummary>(
+      `/api/staff/decisions/summary${suffix ? `?${suffix}` : ""}`, "GET");
+  },
+
+  /** Staff whose decision history the caller may open (a Head's team; everyone for ADMIN). */
+  inspectableStaff: () => bff<StaffSummary[]>(`/api/staff/decisions/inspectable`, "GET"),
+
+  disbursementDecision: (id: number, decision: boolean, txnRef?: string, notes?: string) =>
+    bff<ApplicationView>(`${STAFF_BASE}/${id}/disbursement-decision`, "POST", { decision, txnRef, notes }),
+
+  /** ADMIN-only: force a SANCTIONED application straight to DISBURSEMENT_PENDING. Requires a signed agreement + a reason note. */
+  forceDisbursementPending: (id: number, notes: string) =>
+    bff<ApplicationView>(`${STAFF_BASE}/${id}/force-disbursement-pending`, "POST", { notes }),
+
+  /** Latest eMandate attempt (last four of the account only; never the auth url). Null = none started. */
+  mandate: (id: number) => bff<MandateView | null>(`${STAFF_BASE}/${id}/mandate`, "GET"),
+
+  /** DISBURSEMENT_HEAD/ADMIN: only valid when the mandate is BANK_UNSUPPORTED. Reason is audited. */
+  mandateOverride: (id: number, notes: string) =>
+    bff<ApplicationView>(`${STAFF_BASE}/${id}/mandate/override`, "POST", { notes }),
+
+  /** Cancel a pre-disbursement application (staff/admin). Backend rejects once past disbursement. */
+  cancel: (id: number, notes?: string) =>
+    bff<ApplicationView>(`${STAFF_BASE}/${id}/cancel`, "POST", { notes }),
+
+  // --- loan view (staff) ---
+  loan: (loanId: number) => bff<LoanView>(`${STAFF_LOAN_BASE}/${loanId}`, "GET"),
+
+  outstanding: (loanId: number, asOf: string) =>
+    bff<OutstandingView>(
+      `${STAFF_LOAN_BASE}/${loanId}/outstanding?asOf=${encodeURIComponent(asOf)}`,
+      "GET",
+    ),
+
+  /**
+   * ADMIN-only: log a payment that already happened, on the date it happened. Recorded AND verified
+   * in one call, so the loan closes (and the borrower is notified) immediately when it clears.
+   * `paidOn` may be today or any past date on/after disbursal — the backend rejects the rest.
+   */
+  adminRecordRepayment: (
+    loanId: number,
+    payload: {
+      amountPaise: number;
+      method: PaymentMethodName;
+      paidOn: string;
+      txnRef?: string;
+      proofUrl?: string;
+    },
+  ) => bff<PaymentView>(`${STAFF_LOAN_BASE}/${loanId}/repayments/admin-record`, "POST", payload),
+
+  // --- repayment verification (accountant maker-checker) ---
+  /** Repayments awaiting proof verification, across all loans (accountant queue). */
+  pendingRepayments: () => bff<PaymentView[]>(`${STAFF_LOAN_BASE}/pending-repayments`, "GET"),
+
+  /**
+   * One page of the ledger with the register's column filters applied server-side.
+   *
+   * `transactions()` below reads every disbursal AND every repayment in the window through two
+   * repositories and merges them in Java; this goes through the native union query instead, so a
+   * filtered page costs one statement rather than the whole period.
+   */
+  transactionsPage: (p: { filters?: Record<string, string>; page: number; size: number; extra?: Record<string, string> }) =>
+    // The three summary figures ride along with the page because the server computes them in the
+    // same aggregate over the same filter — they cover the WHOLE filter, not the page on screen, so
+    // the cards stay still while a reviewer pages. Typed here rather than cast at the call site.
+    registerPage<TransactionView, RegisterPage<TransactionView> & LedgerTotals>(
+      `${STAFF_LOAN_BASE}/transactions`,
+      p,
+    ),
+
+  /** The values one ledger column's filter can offer, under the other columns' filters. */
+  transactionsFacet: (column: string, filters: Record<string, string>) =>
+    registerFacet(`${STAFF_LOAN_BASE}/transactions`, column, filters),
+
+  /**
+   * One page of the company-wide transactions ledger (disbursals + repayments), newest first, with
+   * an optional borrower/direction/period filter. `totalInPaise`/`totalOutPaise` cover the whole
+   * filter, not the page, so the summary cards stay still while the reviewer pages through.
+   */
+  transactions: (
+    q?: string,
+    direction?: TransactionDirection,
+    range?: { from?: string; to?: string },
+    paging?: { page?: number; size?: number },
+  ) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (direction) params.set("direction", direction);
+    if (range?.from) params.set("from", range.from);
+    if (range?.to) params.set("to", range.to);
+    if (paging?.page) params.set("page", String(paging.page));
+    if (paging?.size) params.set("size", String(paging.size));
+    const qs = params.toString();
+    return bff<TransactionPage>(`${STAFF_LOAN_BASE}/transactions${qs ? `?${qs}` : ""}`, "GET");
+  },
+
+  /** Repayments recorded against one loan. */
+  repayments: (loanId: number) => bff<PaymentView[]>(`${STAFF_LOAN_BASE}/${loanId}/repayments`, "GET"),
+
+  /** Confirm proof for a payment → reduces outstanding, closes the loan/application at zero. */
+  verifyRepayment: (loanId: number, paymentId: number) =>
+    bff<PaymentView>(`${STAFF_LOAN_BASE}/${loanId}/repayments/${paymentId}/verify`, "POST"),
+
+  /** Reject a payment (proof didn't match the transfer); the balance is unchanged. Reason is required. */
+  rejectRepayment: (loanId: number, paymentId: number, body: { reason: RejectionReasonCode; note?: string }) =>
+    bff<PaymentView>(`${STAFF_LOAN_BASE}/${loanId}/repayments/${paymentId}/reject`, "POST", body),
+
+  // --- customer review (any reviewing role) ---
+  /** The customer's KYC details (PAN masked). */
+  getProfile: (id: number) => bff<ProfileView>(`${STAFF_BASE}/${id}/profile`, "GET"),
+
+  /**
+   * Invite this customer to set up auto-repayment — the only route for someone whose loan was already
+   * live when the mandate step shipped. Returns the link to copy; the engine also sends it.
+   */
+  /** Every mandate attempt this customer has made, newest first. */
+  mandateHistory: (id: number) => bff<MandateAttempt[]>(`${STAFF_BASE}/${id}/mandate/history`, "GET"),
+
+  /** Re-read unsettled attempts from Digio. Files nothing; adopts one that completed after we gave up. */
+  mandateRefresh: (id: number) => bff<MandateAttempt[]>(`${STAFF_BASE}/${id}/mandate/refresh`, "POST", {}),
+
+  /** Cancel one stale mandate attempt at NPCI. Never the one in force. COLLECTION_HEAD/DISB_HEAD/ADMIN. */
+  mandateCancel: (id: number, mandateId: number) =>
+    bff<MandateAttempt>(`${STAFF_BASE}/${id}/mandate/${mandateId}/cancel`, "POST", {}),
+
+  /**
+   * Cancel the customer's ACTIVE mandate (the live debit authority) — on their request or to replace it.
+   * COLLECTION_HEAD/DISB_HEAD/ADMIN; a note is required and the borrower is notified.
+   */
+  mandateCancelActive: (id: number, mandateId: number, reason: MandateCancelReason, notes: string) =>
+    bff<MandateAttempt>(`${STAFF_BASE}/${id}/mandate/${mandateId}/cancel-active`, "POST", { reason, notes }),
+
+  /** The mandate ceiling: formula, any override, and what a NEW registration would be filed for. */
+  mandateCeiling: (id: number) => bff<MandateCeilingView>(`${STAFF_BASE}/${id}/mandate/ceiling`, "GET"),
+
+  /** ADMIN: set (paise) or clear (null) the customer's mandate-ceiling override. Never changes the borrowing limit. */
+  setMandateCeiling: (id: number, ceilingPaise: number | null, note?: string) =>
+    bff<MandateCeilingView>(`${STAFF_BASE}/${id}/mandate/ceiling`, "POST", { ceilingPaise, note }),
+
+  mandateInvite: (id: number) =>
+    bff<{ link: string }>(`${STAFF_BASE}/${id}/mandate/invite`, "POST", {}),
+
+  /** The application's uploaded documents (metadata). */
+  documents: (id: number) => bff<DocumentView[]>(`${STAFF_BASE}/${id}/documents`, "GET"),
+
+  /** One document's bytes (base64) for view/download (legacy inline storage). */
+  document: (id: number, docId: number) =>
+    bff<DocumentContent>(`${STAFF_BASE}/${id}/documents/${docId}`, "GET"),
+
+  /** A presigned GET URL for an S3-backed document (view/download in a new tab). */
+  documentUrl: (id: number, docId: number) =>
+    bff<DocumentUrlView>(`${STAFF_BASE}/${id}/documents/${docId}/url`, "GET"),
+
+  /** The application's verification step results (PAN/email/address/salary/…). */
+  verifications: (id: number) => bff<StepResult[]>(`${STAFF_BASE}/${id}/verifications`, "GET"),
+  /** Required-step completion snapshot for the progress tracker (Phase 3.2). */
+  verificationProgress: (id: number) =>
+    bff<VerificationProgress>(`${STAFF_BASE}/${id}/verification-progress`, "GET"),
+  /** Staff manual override of a verification step (KYC approver / admin): PASS or FAIL with a note. */
+  manualVerificationDecision: (id: number, checkType: string, decision: boolean, notes?: string) =>
+    bff<StepResult>(`${STAFF_BASE}/${id}/verifications/${checkType}/decision`, "POST", { decision, notes }),
+  /**
+   * A retry has to outlast the check it is re-running. A BUREAU retry is a CHAIN of provider calls
+   * (Signzy Experian -> Signzy CRIF -> Digitap Credit) whose server-side budget is 12 + 12 + 90 =
+   * 114s. This race only stops the UI waiting — it does not abort the request — so a 30s limit did
+   * not save any work, it just reported "timed out" on calls that were still running and would go on
+   * to succeed. 120s sits above the server budget and matches the maxDuration on the staff BFF route.
+   */
+  retryVerification: async (id: number, checkType: string, input: Record<string, unknown>) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        bff<StepResult>(`${STAFF_BASE}/${id}/verifications/${checkType}/retry`, "POST", input),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new VerificationRetryTimeoutError()), 120_000); }),
+      ]);
+    } finally { if (timer) clearTimeout(timer); }
+  },
+  /** KYC approver / admin nudges the borrower with their pending verification steps (Phase 3.4). */
+  sendReminder: (id: number) => bff<ReminderResult>(`${STAFF_BASE}/${id}/send-reminder`, "POST"),
+
+  /** Preview the "send the customer a link" destination for one failed/abandoned check, read-only. */
+  resumeLink: (id: number, checkType: string) =>
+    bff<ResumeLink>(`${STAFF_BASE}/${id}/verifications/${checkType}/resume-link`, "GET"),
+  /** Send that link (email or copy-to-clipboard) — reopens the check when the backend says `willReopen`. */
+  shareResumeLink: (id: number, checkType: string, channel: "EMAIL" | "COPY") =>
+    bff<ResumeLink>(`${STAFF_BASE}/${id}/verifications/${checkType}/resume-link`, "POST", { channel }),
+
+  /** Staff-only credit brief: 1–5★ rating + categorized bureau facts + the CREDIT_BRIEF PDF doc id. */
+  creditBrief: (id: number) => bff<CreditBriefView>(`${STAFF_BASE}/${id}/credit-brief`, "GET"),
+
+  /** ADMIN or a credit role uploads a document for an application (base64 body, matching the
+   *  borrower upload path). Gated by the `document:upload` permission. */
+  uploadDocument: (
+    id: number,
+    doc: { docType: string; fileName: string; contentType?: string; dataBase64: string },
+  ) => bff<DocumentView>(`${STAFF_BASE}/${id}/documents`, "POST", doc),
+
+  /** ADMIN deletes a document (the delete half of the CRM replace flow). */
+  deleteDocument: (id: number, docId: number) =>
+    bff<null>(`${STAFF_BASE}/${id}/documents/${docId}`, "DELETE"),
+};
+
+// ---------------------------------------------------------------------------
+// Customers (borrower-centric) — routes under /api/staff/customers/*
+// ---------------------------------------------------------------------------
+
+const CUSTOMERS_BASE = "/api/staff/customers";
+
+/** Server-side cap on `by-ids` — mirrors CustomerService.MAX_PAGE_SIZE. */
+const CUSTOMER_IDS_CHUNK = 100;
+
+export type CustomerListFilters = {
+  q?: string;
+  /** yyyy-mm-dd, resolved in IST server-side. */
+  from?: string;
+  to?: string;
+  /** A `CustomerSegment` other than `all`. */
+  seg?: string;
+  /** Owned by or decided by the signed-in staffer. */
+  mine?: boolean;
+  /** 1-indexed. */
+  page?: number;
+  size?: number;
+  /** Server-side sort key (`CustomerBookQuery.SORTS`); omitted = stage date. */
+  sort?: CustomerSortKey;
+  dir?: "asc" | "desc";
+  /**
+   * The column-filter view as the server reads it (`rq.queryParams`: `f.<col>`, and `q`). Merged
+   * UNDER the typed fields above, so a stray `seg`/`page` in here can never override them.
+   */
+  extra?: Record<string, string>;
+};
+
+/** The columns the customer register can sort on — mirrors `CustomerBookQuery.SORTS`. */
+export type CustomerSortKey = "stageDate" | "date" | "name" | "customerId" | "stage" | "mobile" | "pan";
+
+export type CustomerPage = { rows: CustomerSummary[]; page: number; size: number; total: number };
+
+/** Mirrors the backend `CustomerSummaryCounts` record; keys are `CustomerSegment` names. */
+export type CustomerSummaryCounts = {
+  all: number;
+  incomplete: number;
+  pending: number;
+  review: number;
+  approved: number;
+  disbursementPending: number;
+  active: number;
+  overdue: number;
+  hold: number;
+  rejected: number;
+  closed: number;
+  /** Overlay segment; absent until the backend ships it. */
+  reloan?: number;
+  /** Overlay segment: customers with a live block on their mobile. */
+  blocked?: number;
+  unallocated: number;
+};
+
+/** A blank or `false` filter must not be sent — the backend treats a present value as a filter. */
+function customerQuery(
+  filters: Record<string, string | number | boolean | Record<string, string> | undefined>,
+): string {
+  const qs = new URLSearchParams();
+  const { extra, ...typed } = filters as { extra?: Record<string, string> } & Record<string, string | number | boolean | undefined>;
+  Object.entries({ ...extra, ...typed }).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === false || String(value).trim() === "") return;
+    qs.set(key, String(value));
+  });
+  const s = qs.toString();
+  return s ? `?${s}` : "";
+}
+
+export const customersApi = {
+  /**
+   * Full rows for exactly these customers, in the order asked for. Scoped server-side, capped at
+   * 100 ids, and silent about ids the caller may not see.
+   *
+   * Replaces fetching the whole book to pick a handful of rows out of it: the collections export
+   * and the dashboard's decided-customer join both need tens of rows, not ~9.7k.
+   */
+  byIds: (ids: number[]) =>
+    ids.length === 0
+      ? Promise.resolve([] as CustomerSummary[])
+      : bff<CustomerSummary[]>(`${CUSTOMERS_BASE}/by-ids?ids=${ids.join(",")}`, "GET"),
+
+  /** {@link byIds} for any number of ids, in server-sized chunks, fetched together. */
+  byIdsAll: async (ids: number[]) => {
+    const chunks: number[][] = [];
+    for (let i = 0; i < ids.length; i += CUSTOMER_IDS_CHUNK) {
+      chunks.push(ids.slice(i, i + CUSTOMER_IDS_CHUNK));
+    }
+    const pages = await Promise.all(chunks.map((chunk) => customersApi.byIds(chunk)));
+    return pages.flat();
+  },
+
+  /**
+   * ADMIN only. Everything on file behind these applications — full PAN/Aadhaar, verification
+   * results, references — for the DPD-bucket export handed to a collection agency. Chunked like
+   * {@link byIdsAll}; the server applies the same cap.
+   */
+  collectionHandoverAll: async (applicationIds: number[]) => {
+    const chunks: number[][] = [];
+    for (let i = 0; i < applicationIds.length; i += CUSTOMER_IDS_CHUNK) {
+      chunks.push(applicationIds.slice(i, i + CUSTOMER_IDS_CHUNK));
+    }
+    const pages = await Promise.all(
+      chunks.map((chunk) =>
+        bff<CollectionHandoverRow[]>(
+          `${CUSTOMERS_BASE}/collection-handover?applicationIds=${chunk.join(",")}`,
+          "GET",
+        ),
+      ),
+    );
+    return pages.flat();
+  },
+
+  /**
+   * One page of the customer book. Search, date window, segment, "mine" and paging are all applied
+   * server-side (SQL), so the response carries only the rows on screen plus the total match count.
+   */
+  page: (filters: CustomerListFilters = {}) =>
+    bff<CustomerPage>(`${CUSTOMERS_BASE}/page${customerQuery(filters)}`, "GET"),
+
+  /** Segment-chip counts over the whole (scoped, filtered) book — same filters as `page` minus `seg`. */
+  summary: (filters: Omit<CustomerListFilters, "seg" | "page" | "size"> = {}) =>
+    bff<CustomerSummaryCounts>(`${CUSTOMERS_BASE}/summary${customerQuery(filters)}`, "GET"),
+
+  /** Every row under the current filter, for the ADMIN "download all customers" export (server-capped). */
+  exportAll: (filters: Omit<CustomerListFilters, "page" | "size"> = {}) =>
+    bff<CustomerSummary[]>(`${CUSTOMERS_BASE}/export${customerQuery(filters)}`, "GET"),
+
+  /**
+   * The distinct values of one filterable column, for its checklist. `filters` carries the OTHER
+   * columns' `f.*` params (the server ignores `col`'s own), plus search/window/mine — so the options
+   * respect everything else the register is narrowed by, inside the caller's scope.
+   */
+  facets: (column: string, filters: Omit<CustomerListFilters, "seg" | "page" | "size" | "sort" | "dir"> = {}) =>
+    bff<RegisterFacet>(`${CUSTOMERS_BASE}/facets${customerQuery({ ...filters, column })}`, "GET"),
+
+  /** One customer's full history (profile + applications + loans + payments). */
+  get: (customerId: number) => bff<CustomerDetail>(`${CUSTOMERS_BASE}/${customerId}`, "GET"),
+
+  /** ADMIN corrects a customer's KYC / salary data (non-identity fields); changes are audited. */
+  updateProfile: (customerId: number, body: UpdateCustomerInput) =>
+    bff<ProfileView>(`${CUSTOMERS_BASE}/${customerId}/profile`, "PUT", body),
+
+  /**
+   * ADMIN, step 1 of 2 — send an OTP to a NEW mobile number to correct a customer's mobile on
+   * file. KYC-data correction only; does not change which number the borrower logs in with.
+   */
+  requestMobileChangeOtp: (customerId: number, newMobile: string) =>
+    bff<OtpRequestResult>(`${CUSTOMERS_BASE}/${customerId}/mobile/request-otp`, "POST", { newMobile }),
+
+  /** ADMIN, step 2 of 2 — confirm the mobile correction with the code sent to the new number. */
+  confirmMobileChange: (customerId: number, newMobile: string, otp: string) =>
+    bff<ProfileView>(`${CUSTOMERS_BASE}/${customerId}/mobile/confirm`, "POST", { newMobile, otp }),
+
+  /** ADMIN — set the sanctioned amount directly; the backend emails the customer the revised figure. */
+  changeSanctionedAmount: (customerId: number, applicationId: number, newAmountPaise: number) =>
+    bff<ApplicationView>(`${CUSTOMERS_BASE}/${customerId}/sanctioned-amount`, "POST", { applicationId, newAmountPaise }),
+
+  /**
+   * ADMIN — correct the salary-credit day (1-31) on the customer's latest application. When that
+   * application is a pending SANCTIONED offer, the projected repayment date moves with it; a live
+   * loan keeps its already-disbursed due date.
+   */
+  /** ADMIN — set this customer's eligible limit, overriding the 25%-of-salary rule; null clears it. */
+  setLimitOverride: (customerId: number, limitPaise: number | null, note?: string) =>
+    bff<ApplicationView>(`${CUSTOMERS_BASE}/${customerId}/limit-override`, "POST", { limitPaise, note }),
+
+  changeSalaryDay: (customerId: number, day: number) =>
+    bff<ApplicationView>(`${CUSTOMERS_BASE}/${customerId}/salary-day`, "POST", { salaryCreditDay: day }),
+
+  /** One customer's audited profile/salary change history (newest first). */
+  changes: (customerId: number) =>
+    bff<ProfileChangeView[]>(`${CUSTOMERS_BASE}/${customerId}/changes`, "GET"),
+
+  /** Why the customer's latest file has no usable credit decision, and the provider chain behind
+   *  it — behind the Customers page's Failure column. Staff-wide, not ADMIN-only. */
+  caseFailure: (customerId: number) =>
+    bff<CaseFailureDetail>(`${CUSTOMERS_BASE}/${customerId}/failure`, "GET"),
+
+  /**
+   * Chase ONE borrower whose credit report is sitting behind an unanswered bureau security
+   * question. ADMIN-only (enforced by the backend service).
+   *
+   * Deliberately per-application rather than the cohort endpoint beside it: a staffer looking at a
+   * single stuck file must not fire a send at up to 200 other people. Idempotent — a borrower
+   * already notified comes back with `notified: 0` rather than being re-mailed.
+   */
+  notifyBureauChallenge: (applicationId: number) =>
+    bff<BureauChallengeOutreachSummary>(
+      `/api/admin/bureau-challenge/notify/${applicationId}`,
+      "POST",
+    ),
+
+  /** Unified activity timeline: lifecycle + re-verify + profile edits + remarks (newest first). */
+  activity: (customerId: number) =>
+    bff<ActivityEntry[]>(`${CUSTOMERS_BASE}/${customerId}/activity`, "GET"),
+
+  /** Staff remarks on a customer. */
+  remarks: (customerId: number) =>
+    bff<RemarkView[]>(`${CUSTOMERS_BASE}/${customerId}/remarks`, "GET"),
+
+  /** Add a staff remark to a customer. */
+  addRemark: (customerId: number, body: string) =>
+    bff<RemarkView>(`${CUSTOMERS_BASE}/${customerId}/remarks`, "POST", { body }),
+
+  /** Assign (or clear) the staff owner. staffId null → unallocate. */
+  assignOwner: (customerId: number, staffId: number | null) =>
+    bff<CustomerDetail>(`${CUSTOMERS_BASE}/${customerId}/owner`, "POST", { staffId }),
+
+  /** ACCOUNTANT / ADMIN — block the customer for future loans (indefinite; reason required, ≤300 chars). */
+  block: (customerId: number, reason: string) =>
+    bff<CustomerBlockView>(`${CUSTOMERS_BASE}/${customerId}/block`, "POST", { reason }),
+
+  /** ADMIN — lift a staff block. */
+  unblock: (customerId: number) =>
+    bff<CustomerBlockView>(`${CUSTOMERS_BASE}/${customerId}/block`, "DELETE"),
+
+  /** Staff call logs on a customer, optionally narrowed to one of their loans. */
+  callLogs: (customerId: number, loanId?: number) =>
+    bff<CallLogView[]>(
+      `${CUSTOMERS_BASE}/${customerId}/call-logs${loanId != null ? `?loanId=${loanId}` : ""}`,
+      "GET",
+    ),
+
+  /** Aadhaar duplicate, blocklist hits and the live rejection block, in one staff read. */
+  dedupe: (customerId: number) => bff<DedupeView>(`${CUSTOMERS_BASE}/${customerId}/dedupe`, "GET"),
+  mobileMatches: (customerId: number) =>
+    bff<MobileMatchView>(`${CUSTOMERS_BASE}/${customerId}/mobile-matches`, "GET"),
+
+  /** Add a staff call log to a customer. */
+  addCallLog: (customerId: number, body: AddCallLogInput) =>
+    bff<CallLogView>(`${CUSTOMERS_BASE}/${customerId}/call-logs`, "POST", body),
+
+  /** ADMIN — permanently delete a customer and ALL their data (irreversible cascade). */
+  remove: (customerId: number) =>
+    bff<CustomerDeletionResult>(`${CUSTOMERS_BASE}/${customerId}`, "DELETE"),
+
+  /** Documents across every one of this customer's applications, newest application first. */
+  documents: (customerId: number) =>
+    bff<ApplicationDocumentGroup[]>(`${CUSTOMERS_BASE}/${customerId}/documents`, "GET"),
+};
+
+// ---------------------------------------------------------------------------
+// Loans register (WP4) — routes under /api/staff/loans/*
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of the company-wide Loans register — one row per disbursed loan (not per application;
+ * a customer with two advances over time has two rows). This is a PINNED CONTRACT shape: the
+ * register page, the loan detail modal, and the backend all agree on these exact field names.
+ * Dates are ISO `yyyy-mm-dd` strings (or null when the event hasn't happened yet); every money
+ * field is integer paise — format with `paiseToINR` at render time, never before.
+ */
+export interface LoanRegisterRow {
+  loanId: number;
+  customerId: number;
+  applicationId: number;
+
+  borrowerName: string;
+  mobile: string;
+  /** Already masked server-side (e.g. `ABCDE1234F` → `ABCXX1234X`-style masking) — safe to render as-is. */
+  pan: string;
+
+  /** 1-based: this is the customer's Nth advance (1 = their first loan ever). */
+  loanCycle: number;
+
+  principalPaise: number;
+  netDisbursedPaise: number;
+  totalRepayablePaise: number;
+  /** Penalty/prepayment-aware outstanding as of now — the same compute-on-read balance as
+   *  `GET /api/loan/{id}/outstanding`, not a stale cached column. */
+  outstandingPaise: number;
+  sanctionedAmountPaise: number;
+
+  sanctionedAt: string | null;
+  /** Non-null in practice — every row in this register is a loan that has actually disbursed. */
+  disbursedOn: string | null;
+  dueDate: string | null;
+  closedOn: string | null;
+
+  /** Day of month (1-31) the borrower's salary lands on, or null if never captured. */
+  salaryCreditDay: number | null;
+
+  /** Effective loan status (ACTIVE/OVERDUE/IN_COLLECTIONS/REPAID/CLOSED/…) — see
+   *  `lib/loans/segments.ts` for how this maps to the register's segment chips. */
+  status: string;
+  /** Days past due; 0 when not overdue. */
+  dpd: number;
+
+  assignedOfficerId: number | null;
+  assignedOfficerName: string | null;
+
+  /** The outgoing disbursal's transaction reference, when the Disbursement Head finalized directly
+   *  with a txn id (fast-path) or the Accountant recorded one. */
+  disbursalTxnRef: string | null;
+  /** Bureau / UAN / work-email trust stars (staff list rows); null when not computed. */
+  trust?: TrustSignals | null;
+}
+
+const LOANS_BASE = "/api/staff/loans";
+
+export const loansApi = {
+  /**
+   * One page of the loan register, narrowed and paged server-side.
+   *
+   * `list()` below enriches EVERY loan in the window on every visit — seven batched lookups plus a
+   * compute-on-read balance per row — which is why this exists. It stays for the callers that need
+   * the whole window (the segment-chip counts, which deliberately do not follow the filters).
+   */
+  page: (p: { filters?: Record<string, string>; page: number; size: number; extra?: Record<string, string> }) =>
+    registerPage<LoanRegisterRow>(LOANS_BASE, p),
+
+  /** The values one register column's filter can offer, inside the caller's own scope. */
+  facet: (column: string, filters: Record<string, string>) => registerFacet(LOANS_BASE, column, filters),
+
+  /**
+   * The loan register, optionally filtered by free-text `q` (borrower name / mobile / PAN / loan or
+   * application id — mirrors `customersApi.list`'s search), an inclusive `range.from`/`range.to`
+   * (yyyy-mm-dd) window over `disbursedOn`, and an exact `status` match (effective loan status, e.g.
+   * "OVERDUE"). All three are optional and independently combinable, same query-string assembly as
+   * `customersApi.list`.
+   */
+  list: (q?: string, range?: { from?: string; to?: string }, status?: string) => {
+    const qs = new URLSearchParams();
+    if (q) qs.set("q", q);
+    if (range?.from) qs.set("from", range.from);
+    if (range?.to) qs.set("to", range.to);
+    if (status) qs.set("status", status);
+    const search = qs.toString();
+    return bff<LoanRegisterRow[]>(`${LOANS_BASE}${search ? `?${search}` : ""}`, "GET");
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Telecaller leads — routes under /api/staff/leads/*
+// ---------------------------------------------------------------------------
+
+/**
+ * A lead's outreach outcome — a different axis from `LeadCallStatus`, which records how a call
+ * ATTEMPT went. `CONFIRMED` is derived server-side from the attributed application and can never be
+ * set: a lead with no PAN can never reach it, because attribution is a PAN match (V70).
+ */
+export type LeadOutcome = "NEW" | "OUTREACHED" | "REJECTED" | "CONFIRMED";
+
+/** The values a human may actually pick; CONFIRMED is derived, never written. */
+export const SETTABLE_LEAD_OUTCOMES: readonly LeadOutcome[] = ["NEW", "OUTREACHED", "REJECTED"];
+
+export type LeadCallStatus =
+  | "NOT_CALLED"
+  | "CALLED"
+  | "CALLBACK"
+  | "NO_ANSWER"
+  | "NOT_INTERESTED"
+  | "WRONG_NUMBER"
+  | "CONNECTED";
+
+export type LeadSource = "DSA" | "REFERRAL" | "WALK_IN" | "OTHER";
+
+export interface LeadView {
+  id: number;
+  name: string;
+  mobile: string;
+  email: string | null;
+  city: string | null;
+  employer: string | null;
+  monthlySalaryPaise: number | null;
+  loanAmountInterestedPaise: number | null;
+  source: LeadSource | null;
+  sourceDetail: string | null;
+  callStatus: LeadCallStatus;
+  qualityRating: number | null;
+  notes: string | null;
+  remarks: string | null;
+  createdByStaffId: number;
+  createdByStaffName: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  pincode?: string | null;
+  leadOutcome: LeadOutcome;
+  /** The one staff note the uploading DSA can read. Distinct from `remarks`, which stays internal. */
+  dsaNote: string | null;
+}
+
+export interface CreateLeadInput {
+  name: string;
+  mobile: string;
+  email?: string;
+  city?: string;
+  employer?: string;
+  monthlySalaryPaise?: number;
+  loanAmountInterestedPaise?: number;
+  source?: LeadSource;
+  sourceDetail?: string;
+  notes?: string;
+}
+
+export interface UpdateLeadInput {
+  name?: string;
+  mobile?: string;
+  email?: string;
+  city?: string;
+  employer?: string;
+  monthlySalaryPaise?: number;
+  loanAmountInterestedPaise?: number;
+  source?: LeadSource;
+  sourceDetail?: string;
+  notes?: string;
+}
+
+export interface DispositionInput {
+  callStatus: LeadCallStatus;
+  qualityRating?: number | null;
+  remarks?: string;
+}
+
+export interface LeadListParams {
+  q?: string;
+  callStatus?: LeadCallStatus;
+  source?: LeadSource;
+  createdBy?: number;
+  from?: string;
+  to?: string;
+  minRating?: number;
+  maxRating?: number;
+  leadOutcome?: LeadOutcome;
+  /** 1-indexed page (default 1 server-side). */
+  page?: number;
+  /** Rows per page (default 25, capped at 100 server-side). */
+  size?: number;
+}
+
+/** One page of the lead list, with the total across the whole filter. */
+export interface LeadPage {
+  rows: LeadView[];
+  page: number;
+  size: number;
+  total: number;
+}
+
+export interface LeadStats {
+  total: number;
+  byCallStatus: { status: string; count: number }[];
+  bySource: { source: string; count: number }[];
+  byQualityRating: { rating: number; count: number }[];
+  unratedCount: number;
+  byDay: { date: string; created: number; called: number }[];
+  byStaff: { staffId: number; staffName: string | null; count: number }[];
+  avgQualityRating: number | null;
+}
+
+// --- Admin CSV lead import ---------------------------------------------------------------
+
+export interface ImportIssue {
+  row: number;
+  field: string;
+  message: string;
+}
+
+/** Kick off an import of a file already PUT to S3 — the rows never travel through the BFF. */
+export interface ImportFileRequest {
+  s3Key: string;
+  fileName: string;
+  merge: boolean;
+}
+
+export type ImportJobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+
+/**
+ * An import's live state. `totalRows` is null until the file has been read to the end (the row count
+ * is not known up front), so a progress bar has to tolerate an unknown denominator. `issues` holds
+ * at most the first 50 bad rows and is empty for roles without customer:view; `issueCount` is the
+ * true total either way.
+ */
+export interface ImportJobView {
+  id: number;
+  status: ImportJobStatus;
+  fileName: string;
+  merge: boolean;
+  totalRows: number | null;
+  processedRows: number;
+  insertedCount: number;
+  mergedCount: number;
+  skippedDuplicates: number;
+  skippedCustomers: number;
+  issueCount: number;
+  issues: ImportIssue[];
+  /**
+   * S3 key of the uploaded file, kept whatever happens to the import — a list that failed to parse
+   * is still in the bucket and can be fetched back through `storageApi.presignDownload`. Null for
+   * roles without `customer:view` (DSA), since the file is raw contact data.
+   */
+  s3Key: string | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+}
+
+const LEADS_BASE = "/api/staff/leads";
+
+function leadsQuery(params?: LeadListParams): string {
+  if (!params) return "";
+  const sp = new URLSearchParams();
+  if (params.q) sp.set("q", params.q);
+  if (params.callStatus) sp.set("callStatus", params.callStatus);
+  if (params.source) sp.set("source", params.source);
+  if (params.createdBy != null) sp.set("createdBy", String(params.createdBy));
+  if (params.from) sp.set("from", params.from);
+  if (params.to) sp.set("to", params.to);
+  if (params.minRating != null) sp.set("minRating", String(params.minRating));
+  if (params.maxRating != null) sp.set("maxRating", String(params.maxRating));
+  if (params.leadOutcome) sp.set("leadOutcome", params.leadOutcome);
+  if (params.page) sp.set("page", String(params.page));
+  if (params.size) sp.set("size", String(params.size));
+  const s = sp.toString();
+  return s ? `?${s}` : "";
+}
+
+export const leadsApi = {
+  /**
+   * One page of the lead list with the register's column filters applied server-side.
+   *
+   * Distinct from `list()` below, which takes only the hand-picked params the page had before the
+   * column filters existed. A client-side filter is useless here — the page holds 25 rows out of
+   * tens of thousands, so narrowing what is loaded would read as "no match".
+   */
+  page: (p: { filters?: Record<string, string>; page: number; size: number; extra?: Record<string, string> }) =>
+    registerPage<LeadView>(LEADS_BASE, p),
+
+  /** The values one lead column's filter can offer, under the other columns' filters. */
+  facet: (column: string, filters: Record<string, string>) => registerFacet(LEADS_BASE, column, filters),
+
+  /**
+   * One page of the telecalling lead list. Paged server-side: a bulk import puts tens of thousands
+   * of leads in this table, and the page only ever shows 25 of them.
+   */
+  list: (params?: LeadListParams) =>
+    bff<LeadPage>(`${LEADS_BASE}${leadsQuery(params)}`, "GET"),
+
+  get: (id: number) => bff<LeadView>(`${LEADS_BASE}/${id}`, "GET"),
+
+  create: (body: CreateLeadInput) => bff<LeadView>(LEADS_BASE, "POST", body),
+
+  update: (id: number, body: UpdateLeadInput) =>
+    bff<LeadView>(`${LEADS_BASE}/${id}`, "PUT", body),
+
+  disposition: (id: number, body: DispositionInput) =>
+    bff<LeadView>(`${LEADS_BASE}/${id}/disposition`, "PUT", body),
+
+  /**
+   * Set the outreach outcome and/or the DSA-visible note. A SEPARATE call from `disposition`, which
+   * is replace-semantics — sending these through it would null them on every save. Omit a field to
+   * leave it untouched; send an empty note to clear it.
+   */
+  setOutcome: (id: number, body: { leadOutcome?: LeadOutcome; dsaNote?: string }) =>
+    bff<LeadView>(`${LEADS_BASE}/${id}/outcome`, "PUT", body),
+
+  stats: (params?: { from?: string; to?: string; createdBy?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.from) sp.set("from", params.from);
+    if (params?.to) sp.set("to", params.to);
+    if (params?.createdBy != null) sp.set("createdBy", String(params.createdBy));
+    const s = sp.toString();
+    return bff<LeadStats>(`${LEADS_BASE}/stats${s ? `?${s}` : ""}`, "GET");
+  },
+
+  /** Start an import. Returns immediately with a QUEUED job — poll `importJob` for progress. */
+  importFile: (body: ImportFileRequest) =>
+    bff<ImportJobView>(`${LEADS_BASE}/import/file`, "POST", body),
+
+  importJob: (id: number) => bff<ImportJobView>(`${LEADS_BASE}/import/jobs/${id}`, "GET"),
+
+  importJobs: () => bff<ImportJobView[]>(`${LEADS_BASE}/import/jobs`, "GET"),
+};
+
+// ---------------------------------------------------------------------------
+// DSA (Direct Selling Agent) portal — routes under /api/staff/dsa/* -> backend /api/dsa
+// ---------------------------------------------------------------------------
+
+/** Live conversion status of a DSA's lead. Deliberately coarse — DECLINED never says why. */
+export type DsaLeadStatus = "NOT_APPLIED" | "APPLIED" | "IN_PROGRESS" | "DISBURSED" | "REPAID" | "DECLINED";
+
+export type DsaCommissionStatus = "ACCRUED" | "PAYABLE" | "PAID" | "VOID";
+
+/** Everything a DSA may see about their own lead — the fields they typed, a coarse conversion
+ *  status, and (once disbursed) the net disbursed amount + their commission. Nothing KYC-sourced. */
+export interface DsaLeadView {
+  id: number;
+  pan: string;
+  name: string;
+  mobile: string;
+  email: string | null;
+  city: string | null;
+  employer: string | null;
+  monthlySalaryPaise: number | null;
+  loanAmountInterestedPaise: number | null;
+  notes: string | null;
+  status: DsaLeadStatus;
+  netDisbursedPaise: number | null;
+  commissionPaise: number | null;
+  leadOutcome: LeadOutcome;
+  /** Written by staff FOR this DSA. Read-only here. */
+  dsaNote: string | null;
+  /** True when this row came from a file the DSA uploaded — visible, but never commission-eligible. */
+  uploaded: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface CreateDsaLeadInput {
+  pan: string;
+  name: string;
+  mobile: string;
+  email?: string;
+  city?: string;
+  employer?: string;
+  monthlySalaryPaise?: number;
+  loanAmountInterestedPaise?: number;
+  notes?: string;
+}
+
+export interface UpdateDsaLeadInput {
+  name?: string;
+  mobile?: string;
+  email?: string;
+  city?: string;
+  employer?: string;
+  monthlySalaryPaise?: number;
+  loanAmountInterestedPaise?: number;
+  notes?: string;
+}
+
+export type OutreachChannel = "SMS" | "EMAIL";
+
+export interface OutreachInput {
+  channel: OutreachChannel;
+  /** EMAIL only — the key of one of the fixed branded templates. */
+  template?: string;
+  /** EMAIL only — used (and saved onto the lead) when the lead has no email on file. */
+  email?: string;
+}
+
+/** A branded email a DSA may send, rendered server-side for one lead — the preview is the email as sent. */
+export interface DsaEmailTemplate {
+  key: string;
+  name: string;
+  subject: string;
+  html: string;
+}
+
+export interface OutreachResultView {
+  channel: string;
+  status: string;
+  error: string | null;
+}
+
+export interface DsaCommissionView {
+  id: number;
+  leadId: number;
+  pan: string | null;
+  name: string | null;
+  mobile: string | null;
+  netDisbursedPaise: number;
+  rateBps: number;
+  amountPaise: number;
+  status: DsaCommissionStatus;
+  accruedAt: string | null;
+  payableAt: string | null;
+  paidAt: string | null;
+}
+
+export interface DsaEarningsSummary {
+  leadsAdded: number;
+  leadsConverted: number;
+  accruedPaise: number;
+  payablePaise: number;
+  paidPaise: number;
+}
+
+export interface DsaLeadListParams {
+  q?: string;
+  status?: DsaLeadStatus;
+}
+
+const DSA_BASE = "/api/staff/dsa";
+
+function dsaLeadsQuery(params?: DsaLeadListParams): string {
+  if (!params) return "";
+  const sp = new URLSearchParams();
+  if (params.q) sp.set("q", params.q);
+  if (params.status) sp.set("status", params.status);
+  const s = sp.toString();
+  return s ? `?${s}` : "";
+}
+
+/** DSA self-service portal — own leads, outreach, own commissions/earnings. Firewalled: the backend
+ *  resolves the caller from the JWT, never a client-supplied id, so this never reads another DSA's
+ *  data (or any KYC/customer field). */
+export const dsaApi = {
+  listLeads: (params?: DsaLeadListParams) =>
+    bff<DsaLeadView[]>(`${DSA_BASE}/leads${dsaLeadsQuery(params)}`, "GET"),
+
+  getLead: (id: number) => bff<DsaLeadView>(`${DSA_BASE}/leads/${id}`, "GET"),
+
+  createLead: (body: CreateDsaLeadInput) => bff<DsaLeadView>(`${DSA_BASE}/leads`, "POST", body),
+
+  updateLead: (id: number, body: UpdateDsaLeadInput) =>
+    bff<DsaLeadView>(`${DSA_BASE}/leads/${id}`, "PUT", body),
+
+  outreach: (id: number, body: OutreachInput) =>
+    bff<OutreachResultView>(`${DSA_BASE}/leads/${id}/outreach`, "POST", body),
+
+  emailTemplates: (id: number) => bff<DsaEmailTemplate[]>(`${DSA_BASE}/leads/${id}/email-templates`, "GET"),
+
+  commissions: () => bff<DsaCommissionView[]>(`${DSA_BASE}/commissions`, "GET"),
+
+  earnings: () => bff<DsaEarningsSummary>(`${DSA_BASE}/earnings`, "GET"),
+};
+
+// ---------------------------------------------------------------------------
+// Admin DSA administration — routes under /api/admin/dsa/* -> backend /api/admin/dsa
+// ---------------------------------------------------------------------------
+
+export interface AdminDsaRosterView {
+  dsaStaffId: number;
+  name: string | null;
+  active: boolean;
+  leadsAdded: number;
+  leadsConverted: number;
+  accruedPaise: number;
+  payablePaise: number;
+  paidPaise: number;
+}
+
+/** Full detail — ADMIN sees everything, plus PAN + ownership. */
+export interface AdminDsaLeadView {
+  id: number;
+  pan: string;
+  name: string;
+  mobile: string;
+  email: string | null;
+  city: string | null;
+  employer: string | null;
+  monthlySalaryPaise: number | null;
+  loanAmountInterestedPaise: number | null;
+  notes: string | null;
+  ownerDsaId: number | null;
+  ownerDsaName: string | null;
+  createdByStaffId: number;
+  createdByStaffName: string | null;
+  /** False for an imported row: visible to its uploader, never commission-eligible. */
+  owned: boolean;
+  callStatus: LeadCallStatus | null;
+  leadOutcome: LeadOutcome;
+  dsaNote: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface AdminDsaCommissionView {
+  id: number;
+  dsaStaffId: number;
+  dsaName: string | null;
+  leadId: number;
+  pan: string | null;
+  customerId: number;
+  applicationId: number;
+  loanId: number;
+  netDisbursedPaise: number;
+  rateBps: number;
+  amountPaise: number;
+  status: DsaCommissionStatus;
+  accruedAt: string | null;
+  payableAt: string | null;
+  paidAt: string | null;
+  txnRef: string | null;
+  paidBy: string | null;
+  voidReason: string | null;
+  voidedAt: string | null;
+}
+
+export interface AdminOutreachView {
+  id: number;
+  leadId: number;
+  dsaStaffId: number;
+  channel: string;
+  address: string;
+  subject: string | null;
+  body: string | null;
+  status: string;
+  providerRef: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
+/** ENTERED = commission-eligible, UPLOADED = came from a file, omitted = both. */
+export type DsaLeadAttribution = "ENTERED" | "UPLOADED";
+
+export interface AdminDsaLeadListParams {
+  dsaId?: number;
+  from?: string;
+  to?: string;
+  q?: string;
+  attribution?: DsaLeadAttribution;
+}
+
+const ADMIN_DSA_BASE = "/api/admin/dsa";
+
+function adminDsaLeadsQuery(params?: AdminDsaLeadListParams): string {
+  if (!params) return "";
+  const sp = new URLSearchParams();
+  if (params.dsaId != null) sp.set("dsaId", String(params.dsaId));
+  if (params.from) sp.set("from", params.from);
+  if (params.to) sp.set("to", params.to);
+  if (params.q) sp.set("q", params.q);
+  if (params.attribution) sp.set("attribution", params.attribution);
+  const s = sp.toString();
+  return s ? `?${s}` : "";
+}
+
+/** ADMIN administration of the DSA program: roster, company-wide lead register, commission ledger
+ *  overrides (pay/void/reassign/manual create), and the outreach audit log. */
+export const adminDsaApi = {
+  roster: () => bff<AdminDsaRosterView[]>(ADMIN_DSA_BASE, "GET"),
+
+  leads: (params?: AdminDsaLeadListParams) =>
+    bff<AdminDsaLeadView[]>(`${ADMIN_DSA_BASE}/leads${adminDsaLeadsQuery(params)}`, "GET"),
+
+  correctLead: (id: number, body: { pan?: string; ownerDsaId?: number; name?: string; mobile?: string; email?: string }) =>
+    bff<AdminDsaLeadView>(`${ADMIN_DSA_BASE}/leads/${id}`, "PUT", body),
+
+  commissions: (params?: { status?: DsaCommissionStatus; dsaId?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.status) sp.set("status", params.status);
+    if (params?.dsaId != null) sp.set("dsaId", String(params.dsaId));
+    const s = sp.toString();
+    return bff<AdminDsaCommissionView[]>(`${ADMIN_DSA_BASE}/commissions${s ? `?${s}` : ""}`, "GET");
+  },
+
+  pay: (id: number, txnRef: string) =>
+    bff<AdminDsaCommissionView>(`${ADMIN_DSA_BASE}/commissions/${id}/pay`, "POST", { txnRef }),
+
+  void: (id: number, reason: string) =>
+    bff<AdminDsaCommissionView>(`${ADMIN_DSA_BASE}/commissions/${id}/void`, "POST", { reason }),
+
+  reassign: (id: number, toDsaStaffId: number, reason: string) =>
+    bff<AdminDsaCommissionView>(`${ADMIN_DSA_BASE}/commissions/${id}/reassign`, "POST", { toDsaStaffId, reason }),
+
+  createManual: (dsaId: number, leadId: number) =>
+    bff<AdminDsaCommissionView>(`${ADMIN_DSA_BASE}/commissions`, "POST", { dsaId, leadId }),
+
+  outreach: (params?: { dsaId?: number; leadId?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.dsaId != null) sp.set("dsaId", String(params.dsaId));
+    if (params?.leadId != null) sp.set("leadId", String(params.leadId));
+    const s = sp.toString();
+    return bff<AdminOutreachView[]>(`${ADMIN_DSA_BASE}/outreach${s ? `?${s}` : ""}`, "GET");
+  },
+};
+
+/** Summary returned by a cascade customer delete. */
+export interface CustomerDeletionResult {
+  customerId: number;
+  applications: number;
+  loans: number;
+  totalRows: number;
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard analytics — routes under /api/staff/dashboard/* (contract: dashboard-contract.md)
+// ---------------------------------------------------------------------------
+
+export type DashView =
+  | "ADMIN"
+  | "CREDIT_HEAD"
+  | "CREDIT_EXECUTIVE"
+  | "COLLECTION_HEAD"
+  | "COLLECTION_EXECUTIVE"
+  | "TELECALLER"
+  | "DISBURSEMENT_HEAD"
+  | "ACCOUNTANT";
+
+export type DashMetric =
+  | "APPLICATIONS" | "DISBURSED" | "PENDING" | "REJECTED" | "PENDING_SANCTIONED" | "PENDING_DISBURSAL"
+  | "CLOSED" | "SETTLED" | "PART_PAID" | "DUE_ON" | "PRECLOSED_ON" | "PENDING_ON" | "RECEIVED_ON"
+  | "AUM_BUCKET" | "COLLECTION_MONTH" | "COLLECTION_GROUP" | "RELOAN_RETENTION" | "STATE" | "PINCODE"
+  | "COMPANY" | "CALENDAR_DUE" | "CALENDAR_DISBURSED" | "CALENDAR_BIRTHDAY" | "CALENDAR_ACTIVE"
+  | "CALENDAR_DUE_OPEN" | "STAFF_FILES"
+  | "STAFF_CASES" | "PF_RATE" | "ROI_RATE"
+  | "POSITION_PRINCIPAL" | "POSITION_NET" | "POSITION_RECEIVABLE" | "POSITION_PENALTY" | "POSITION_RECEIVED"
+  | "POSITION_PENDING";
+
+export type DashTone =
+  | "navy" | "emerald" | "orange" | "red" | "violet" | "teal" | "sky" | "royal" | "blue" | "amber";
+
+/** Query params common to every dashboard GET. */
+export interface DashParams {
+  view: DashView;
+  from?: string;
+  to?: string;
+  staffIds?: number[];
+}
+
+export interface DashKpi {
+  metric: DashMetric;
+  count: number;
+  amountPaise: number | null;
+  fresh: number;
+  reloan: number;
+  freshPaise: number | null;
+  reloanPaise: number | null;
+  previousCount: number | null;
+  previousAmountPaise: number | null;
+}
+
+export interface DashRateRow {
+  ratePct: number;
+  newCount: number;
+  repeatCount: number;
+  totalCases: number;
+  principalPaise: number;
+  netDisbursedPaise: number;
+  totalRepayablePaise: number;
+}
+
+export interface DashFactor {
+  key: string;
+  label: string;
+  value: number | null;
+  display: string;
+  weight: number;
+  stars: number | null;
+}
+
+export interface DashSnapshot {
+  from: string;
+  to: string;
+  kpis: { applications: DashKpi; disbursed: DashKpi; pending: DashKpi; rejected: DashKpi };
+  financial: {
+    totalLoan: DashKpi;
+    pendingSanctioned: DashKpi;
+    pendingDisbursal: DashKpi;
+    averageLoanPaise: number | null;
+    averageFreshPaise: number | null;
+    averageReloanPaise: number | null;
+  };
+  closed: {
+    closedCount: number;
+    settledCount: number;
+    partPaidCount: number;
+    closedPctOfDisbursed: number | null;
+    collectedClosedPaise: number;
+    collectedSettledPaise: number;
+    collectedPartPaise: number;
+    totalCollectedPaise: number;
+  };
+  rates: { disbursementRate: number | null; pendingRate: number | null; rejectionRate: number | null };
+  pfTable: DashRateRow[];
+  roiTable: DashRateRow[];
+  position?: DashPosition;
+}
+
+/** Loans disbursed in the period, valued today. Receivable excludes penalty. */
+export interface DashPosition {
+  principalPaise: number;
+  netDisbursedPaise: number;
+  receivablePaise: number;
+  penaltyPaise: number;
+  receivedPaise: number;
+  waivedPaise: number;
+  overpaidPaise: number;
+  pendingPaise: number;
+  loans: number;
+}
+
+export interface DashMonthRow {
+  month: string;
+  dueLoans: number;
+  totalRepayablePaise: number;
+  collectedPaise: number;
+  collectionPct: number | null;
+  preclosedCount: number;
+  preclosurePct: number | null;
+  targetBp: number;
+  deficitPct: number | null;
+  targetAmountPaise: number;
+  deficitAmountPaise: number;
+  disbursedPaise: number;
+  disbursalTargetPaise: number | null;
+  achievedPct: number | null;
+}
+
+export interface DashMonthly {
+  months: DashMonthRow[];
+  marketing: { month: string; leads: number; converted: number; conversionPct: number | null }[];
+  retention: { due: number; closed: number; reloan: number; noRepeat: number; retentionPct: number | null };
+}
+
+export interface DashDaily {
+  days: { date: string; pfPaise: number; interestPaise: number; penaltyPaise: number; cumulativePaise: number }[];
+  totals: { pfPaise: number; interestPaise: number; penaltyPaise: number; revenuePaise: number };
+}
+
+export interface DashPreDay {
+  date: string | null;
+  dueCount: number;
+  dueAmountPaise: number;
+  preclosedCount: number;
+  preclosedPaise: number;
+  pendingCount: number;
+  pendingPaise: number;
+  receivedCount: number;
+  receivedPaise: number;
+  collectionPct: number | null;
+}
+export interface DashPreclosureWeek {
+  anchor: string;
+  rows: DashPreDay[];
+  total: DashPreDay;
+}
+
+export type DashBucket = "RUNNING" | "D1_30" | "D31_60" | "D61_90" | "D90_PLUS";
+export interface DashAumRow {
+  bucket: DashBucket | "TOTAL";
+  cases: number;
+  principalPaise: number;
+  owedPaise: number;
+  portfolioPct: number | null;
+}
+export interface DashAum {
+  asOf: string;
+  rows: DashAumRow[];
+  total: DashAumRow;
+  chips: {
+    currentPct: number | null;
+    d1to60Pct: number | null;
+    d61to90Pct: number | null;
+    d90PlusPct: number | null;
+    currentCount: number;
+    d1to60Count: number;
+    d61to90Count: number;
+    d90PlusCount: number;
+  };
+}
+
+export type DashGroupBy = "EXEC" | "STATE";
+export interface DashCollectionAnalysis {
+  date: string;
+  groupBy: DashGroupBy;
+  rows: {
+    key: string;
+    label: string;
+    loans: number;
+    principalPaise: number;
+    repayablePaise: number;
+    collectedCount: number;
+    collectedPaise: number;
+    averagePrincipalPaise: number | null;
+    collectedPct: number | null;
+  }[];
+}
+
+export interface DashTeam {
+  total: number;
+  active: number;
+  inactive: number;
+  invited: number;
+  byRole: { role: string; count: number }[];
+  heads: { staffId: number; name: string; role: string; score: number | null }[];
+}
+
+export type DashCalendarMode = "DUE" | "DISBURSED" | "BIRTHDAY" | "ACTIVE" | "DUE_OPEN";
+export interface DashCalendar {
+  month: string;
+  mode: string;
+  days: { date: string; count: number; amountPaise: number | null }[];
+  daysWithData: number;
+  totalCount: number;
+  totalAmountPaise: number | null;
+  /** True when the totals are the open book on the month's last day (ACTIVE), not a sum of the days. */
+  snapshot?: boolean;
+}
+
+export interface DashGeoRow {
+  key: string;
+  label: string;
+  state: string;
+  cases: number;
+  principalPaise: number;
+  closedCount: number;
+  dueCount: number;
+  closeRate: number | null;
+  prevPeriodCases: number;
+}
+export interface DashGeo {
+  states: DashGeoRow[];
+  pincodes: DashGeoRow[];
+}
+
+export interface DashCompanies {
+  totalCompanies: number;
+  totalUsers: number;
+  users: {
+    company: string;
+    users: number;
+    sharePct: number | null;
+    averageSalaryPaise: number | null;
+    employmentType: string | null;
+  }[];
+  performance: {
+    company: string;
+    disbursed: number;
+    disbursedPaise: number;
+    repayablePaise: number;
+    collectedPaise: number;
+    collectionPct: number | null;
+  }[];
+}
+
+export interface DashAllocRow {
+  staffId: number | null;
+  name: string;
+  assigned: number;
+  closed: number;
+  freshCount: number;
+  freshPaise: number;
+  reloanCount: number;
+  reloanPaise: number;
+  totalCount: number;
+  totalPaise: number;
+}
+export interface DashCollectionAllocation {
+  cards: {
+    assigned: number;
+    closed: number;
+    collectedCount: number;
+    collectedPaise: number;
+    previous: { assigned: number; closed: number; collectedCount: number; collectedPaise: number } | null;
+  };
+  rows: DashAllocRow[];
+  total: DashAllocRow;
+}
+
+export type DashBoard =
+  | "CREDIT_HEAD" | "CREDIT_EXECUTIVE" | "COLLECTION_HEAD" | "COLLECTION_EXECUTIVE" | "TELECALLER";
+export interface DashLeaderboardRow {
+  staffId: number;
+  name: string;
+  rank: number;
+  score: number | null;
+  stars: number | null;
+  volume: number;
+  self: boolean;
+  factors: DashFactor[] | null;
+}
+export interface DashLeaderboard {
+  board: string;
+  members: number;
+  rows: DashLeaderboardRow[];
+}
+
+export interface DashRoleCard {
+  key: string;
+  label: string;
+  count: number | null;
+  amountPaise: number | null;
+  previousCount: number | null;
+  previousAmountPaise: number | null;
+  metric: DashMetric | null;
+  tone: DashTone;
+}
+export interface DashChart {
+  id: string;
+  title: string;
+  kind: "line" | "bar";
+  keys: string[];
+  labels: Record<string, string>;
+  points: Array<Record<string, string | number>>;
+}
+export interface DashRoleView {
+  view: string;
+  cards: DashRoleCard[];
+  charts: DashChart[];
+  factors: DashFactor[] | null;
+  score: number | null;
+  ptp: { totalAfterAssignmentPaise: number; sameDayPaise: number; latestPaymentOn: string | null } | null;
+  table: DashRateRow[] | null;
+}
+
+export type DashSegment = "ALL" | "FRESH" | "RELOAN";
+export interface DashRecordsParams extends DashParams {
+  metric: DashMetric;
+  key?: string;
+  segment?: DashSegment;
+  q?: string;
+  page?: number;
+  size?: number;
+}
+export interface DashRecordRow {
+  applicationId: number | null;
+  loanId: number | null;
+  customerId: number | null;
+  customerName: string | null;
+  mobileLast4: string | null;
+  status: string | null;
+  segment: "FRESH" | "RELOAN";
+  amountPaise: number | null;
+  owedPaise: number | null;
+  disbursedOn: string | null;
+  dueDate: string | null;
+  closedOn: string | null;
+  assigneeName: string | null;
+  state: string | null;
+}
+export interface DashRecords {
+  rows: DashRecordRow[];
+  total: number;
+  freshCount: number;
+  reloanCount: number;
+  sumPaise: number | null;
+}
+
+export interface DashTarget {
+  month: string;
+  disbursalTargetPaise: number | null;
+  collectionTargetBp: number;
+}
+
+/**
+ * One officer's day on the Collection Head's desk (`GET /dashboard/collections/team`). `staffId` is
+ * null only on the totals row. `calls` is every interaction logged that day; `promisesDue` the cases
+ * whose LATEST promise-to-pay falls on the day (with the cached outstanding on them); `partPayments`
+ * verified partial payments paid that day; `collectedPaise` every verified rupee that day on the
+ * officer's cases; `closed` loans closed that day; `dueCount` live loans falling due that day.
+ */
+export interface DashTeamDayRow {
+  staffId: number | null;
+  name: string;
+  role: string | null;
+  calls: number;
+  promisesDue: number;
+  promisesDuePaise: number;
+  partPayments: number;
+  partPaymentsPaise: number;
+  collectedPaise: number;
+  closed: number;
+  dueCount: number;
+}
+
+export interface DashTeamDay {
+  /** yyyy-MM-dd (IST). */
+  date: string;
+  rows: DashTeamDayRow[];
+  totals: DashTeamDayRow;
+}
+
+const DASH_BASE = "/api/staff/dashboard";
+
+function dashQs(p: DashParams, extra?: Record<string, string | number | undefined | null>): string {
+  const qs = new URLSearchParams();
+  qs.set("view", p.view);
+  if (p.from) qs.set("from", p.from);
+  if (p.to) qs.set("to", p.to);
+  if (p.staffIds?.length) qs.set("staffIds", p.staffIds.join(","));
+  for (const [k, v] of Object.entries(extra ?? {})) {
+    if (v != null && v !== "") qs.set(k, String(v));
+  }
+  return `?${qs.toString()}`;
+}
+
+export const dashboardApi = {
+  snapshot: (p: DashParams) => bff<DashSnapshot>(`${DASH_BASE}/snapshot${dashQs(p)}`, "GET"),
+  monthly: (p: DashParams, months = 4) =>
+    bff<DashMonthly>(`${DASH_BASE}/monthly${dashQs(p, { months })}`, "GET"),
+  daily: (p: DashParams) => bff<DashDaily>(`${DASH_BASE}/daily${dashQs(p)}`, "GET"),
+  preclosureWeek: (p: DashParams, date?: string) =>
+    bff<DashPreclosureWeek>(`${DASH_BASE}/preclosure-week${dashQs(p, { date })}`, "GET"),
+  aum: (p: DashParams, asOf?: string) => bff<DashAum>(`${DASH_BASE}/aum${dashQs(p, { asOf })}`, "GET"),
+  collectionAnalysis: (p: DashParams, date: string | undefined, groupBy: DashGroupBy) =>
+    bff<DashCollectionAnalysis>(`${DASH_BASE}/collection-analysis${dashQs(p, { date, groupBy })}`, "GET"),
+  team: (p: DashParams) => bff<DashTeam>(`${DASH_BASE}/team${dashQs(p)}`, "GET"),
+  /** The Collection Head's team tracker for one IST day (`date` yyyy-MM-dd; omitted = today). */
+  collectionsTeam: (view: DashView, date?: string) =>
+    bff<DashTeamDay>(`${DASH_BASE}/collections/team${dashQs({ view }, { date })}`, "GET"),
+  calendar: (p: DashParams, month: string, mode: DashCalendarMode) =>
+    bff<DashCalendar>(`${DASH_BASE}/calendar${dashQs(p, { month, mode })}`, "GET"),
+  geo: (p: DashParams) => bff<DashGeo>(`${DASH_BASE}/geo${dashQs(p)}`, "GET"),
+  companies: (p: DashParams) => bff<DashCompanies>(`${DASH_BASE}/companies${dashQs(p)}`, "GET"),
+  collectionAllocation: (p: DashParams) =>
+    bff<DashCollectionAllocation>(`${DASH_BASE}/collection-allocation${dashQs(p)}`, "GET"),
+  leaderboard: (p: DashParams, board: DashBoard) =>
+    bff<DashLeaderboard>(`${DASH_BASE}/leaderboard${dashQs(p, { board })}`, "GET"),
+  roleView: (p: DashParams) => bff<DashRoleView>(`${DASH_BASE}/role-view${dashQs(p)}`, "GET"),
+  records: (p: DashRecordsParams) =>
+    bff<DashRecords>(
+      `${DASH_BASE}/records${dashQs(p, {
+        metric: p.metric,
+        key: p.key,
+        segment: p.segment ?? "ALL",
+        q: p.q,
+        page: p.page ?? 0,
+        size: p.size ?? 50,
+      })}`,
+      "GET",
+    ),
+  /** Months are yyyy-MM. Missing months come back with a null disbursal target and 8800 bp. */
+  targets: (view: DashView, from: string, to: string) => {
+    const qs = new URLSearchParams({ view, from, to });
+    return bff<DashTarget[]>(`${DASH_BASE}/targets?${qs.toString()}`, "GET");
+  },
+  /** Real ADMIN only. */
+  putTarget: (month: string, body: { disbursalTargetPaise: number | null; collectionTargetBp: number }) =>
+    bff<DashTarget>(`${DASH_BASE}/targets/${month}`, "PUT", body),
+};
+
+// ---------------------------------------------------------------------------
+// Admin reports — routes under /api/staff/reports (ADMIN only, enforced server-side)
+// ---------------------------------------------------------------------------
+
+/** How a report column's raw cell is formatted (MONEY = integer paise, DATE = yyyy-mm-dd, DATETIME = ISO instant). */
+export type ReportColumnType = "TEXT" | "NUMBER" | "MONEY" | "DATE" | "DATETIME" | "BOOL";
+
+export interface ReportColumn {
+  key: string;
+  label: string;
+  type: ReportColumnType;
+}
+
+export type ReportCell = string | number | boolean | null;
+
+/** A headline figure shown above a report's table and written at the top of both downloads. */
+export interface ReportFact {
+  label: string;
+  value: ReportCell;
+  type: ReportColumnType;
+}
+
+/** One entry of the reports catalog. `dateBasis` names the date the period applies to; null = a live snapshot. */
+export interface ReportDef {
+  key: string;
+  category: string;
+  title: string;
+  description: string;
+  dateBasis: string | null;
+}
+
+/** A generated report: the same typed table feeds the on-screen preview, the CSV and the PDF. */
+export interface ReportData extends ReportDef {
+  /** yyyy-mm-dd, inclusive; both null for an all-time or snapshot report. */
+  from: string | null;
+  to: string | null;
+  generatedAt: string;
+  columns: ReportColumn[];
+  rows: ReportCell[][];
+  summary: ReportFact[];
+  notes: string[];
+  truncated: boolean;
+  /** False when summing the money columns would add up unlike things (e.g. the platform summary). */
+  totals: boolean;
+}
+
+const REPORTS_BASE = "/api/staff/reports";
+
+export const reportsApi = {
+  catalog: () => bff<ReportDef[]>(REPORTS_BASE, "GET"),
+  run: (key: string, range?: { from?: string; to?: string }) => {
+    const qs = new URLSearchParams();
+    if (range?.from) qs.set("from", range.from);
+    if (range?.to) qs.set("to", range.to);
+    const s = qs.toString();
+    return bff<ReportData>(`${REPORTS_BASE}/${encodeURIComponent(key)}${s ? `?${s}` : ""}`, "GET");
+  },
+};
+
+
+// ---------------------------------------------------------------------------
+// Admin (IAM) — staff users, invites, fraud blocklist
+// ---------------------------------------------------------------------------
+
+export type StaffRoleName =
+  | "CREDIT_EXECUTIVE"
+  | "CREDIT_HEAD"
+  | "DISBURSEMENT_HEAD"
+  | "ACCOUNTANT"
+  | "COLLECTION_HEAD"
+  | "COLLECTION_EXECUTIVE"
+  | "TELECALLER"
+  | "DSA"
+  | "ADMIN";
+
+export type StaffStatus = "INVITED" | "ACTIVE" | "DISABLED";
+
+export type BlocklistType = "PAN" | "AADHAAR_REF" | "PHONE" | "DEVICE" | "BANK_ACCOUNT";
+
+export interface StaffResponse {
+  id: number;
+  email: string;
+  name: string;
+  role: StaffRoleName;
+  status: StaffStatus;
+  /** Self-editable org fields (Phase 2.2). */
+  department?: string | null;
+  designation?: string | null;
+  /** Whether this staffer receives operational email; account/security email always sends regardless. */
+  emailOptIn: boolean;
+}
+
+export interface InviteResponse {
+  id: number;
+  email: string;
+  role: StaffRoleName;
+  token: string;
+  expiresAt: string;
+}
+
+export interface BlocklistResponse {
+  id: number;
+  type: BlocklistType;
+  value: string;
+  reason: string | null;
+  active: boolean;
+}
+
+/** One company expense (ADMIN-tracked spend). Mirrors backend ExpenseResponse. Money is paise. */
+export interface ExpenseResponse {
+  id: number;
+  description: string;
+  amountPaise: number;
+  paidTo: string;
+  notes: string | null;
+  /** ISO yyyy-mm-dd. */
+  expenseDate: string;
+  createdAt: string | null;
+  /** Name of the admin who recorded it. */
+  addedBy: string | null;
+  /** Short-lived presigned URL for an uploaded receipt/attachment, or null when none. */
+  receiptUrl: string | null;
+}
+
+const ADMIN_STAFF_BASE = "/api/staff/users";
+const ADMIN_INVITES_BASE = "/api/staff/invites";
+const ADMIN_BLOCKLIST_BASE = "/api/admin/blocklist";
+const ADMIN_EXPENSES_BASE = "/api/admin/expenses";
+
+export type OnboardingStatus = { paused: boolean; updatedBy: string | null; updatedAt: string | null };
+
+export const adminApi = {
+  /** Onboarding-paused waitlist submissions, newest first (ADMIN only). */
+  waitlist: (q?: string) =>
+    bff<WaitlistEntry[]>(`/api/staff/onboarding-waitlist${q ? `?q=${encodeURIComponent(q)}` : ""}`, "GET"),
+  /** Whether new-customer onboarding is paused (the `onboarding-paused` flag). */
+  onboardingStatus: () => bff<OnboardingStatus>("/api/staff/onboarding-waitlist/paused", "GET"),
+  /** Pause (true) or resume (false) new-customer onboarding (ADMIN only). */
+  setOnboardingPaused: (paused: boolean) =>
+    bff<OnboardingStatus>("/api/staff/onboarding-waitlist/paused", "PUT", { paused }),
+  // --- staff users ---
+  listStaff: () => bff<StaffResponse[]>(ADMIN_STAFF_BASE, "GET"),
+  getStaff: (id: number) => bff<StaffResponse>(`${ADMIN_STAFF_BASE}/${id}`, "GET"),
+  /** The calling staffer's own account (any staff role). */
+  myProfile: () => bff<StaffResponse>(`${ADMIN_STAFF_BASE}/me`, "GET"),
+  /** Self-edit own display name + department/designation (not role/status). */
+  updateMyProfile: (payload: { name?: string; department?: string | null; designation?: string | null; emailOptIn?: boolean }) =>
+    bff<StaffResponse>(`${ADMIN_STAFF_BASE}/me`, "PUT", payload),
+  /** Create a staff account with an email + password so they can sign in (ADMIN only). */
+  createStaff: (payload: { email: string; name: string; role: StaffRoleName; password: string }) =>
+    bff<StaffResponse>(ADMIN_STAFF_BASE, "POST", payload),
+  updateStaff: (id: number, payload: { role: StaffRoleName; status: StaffStatus }) =>
+    bff<StaffResponse>(`${ADMIN_STAFF_BASE}/${id}`, "PUT", payload),
+  disableStaff: (id: number) => bff<null>(`${ADMIN_STAFF_BASE}/${id}`, "DELETE"),
+
+  // --- invites ---
+  listInvites: () => bff<InviteResponse[]>(ADMIN_INVITES_BASE, "GET"),
+  createInvite: (payload: { email: string; role: StaffRoleName }) =>
+    bff<InviteResponse>(ADMIN_INVITES_BASE, "POST", payload),
+  acceptInvite: (payload: { token: string; name: string }) =>
+    bff<StaffResponse>(`${ADMIN_INVITES_BASE}/accept`, "POST", payload),
+
+  // --- fraud blocklist ---
+  listBlocklist: () => bff<BlocklistResponse[]>(ADMIN_BLOCKLIST_BASE, "GET"),
+  addBlocklist: (payload: { type: BlocklistType; value: string; reason?: string }) =>
+    bff<BlocklistResponse>(ADMIN_BLOCKLIST_BASE, "POST", payload),
+  removeBlocklist: (id: number) => bff<null>(`${ADMIN_BLOCKLIST_BASE}/${id}`, "DELETE"),
+
+  // --- company expenses (ADMIN only) ---
+  listExpenses: () => bff<ExpenseResponse[]>(ADMIN_EXPENSES_BASE, "GET"),
+  addExpense: (payload: {
+    description: string;
+    amountPaise: number;
+    paidTo: string;
+    notes?: string;
+    expenseDate?: string;
+    /** S3 key of an already-uploaded receipt/attachment (optional). */
+    receiptObjectKey?: string;
+  }) => bff<ExpenseResponse>(ADMIN_EXPENSES_BASE, "POST", payload),
+  removeExpense: (id: number) => bff<null>(`${ADMIN_EXPENSES_BASE}/${id}`, "DELETE"),
+};
+
+// ---------------------------------------------------------------------------
+// Payment settings (admin-managed company payee) — routes under /api/payment-settings
+// ---------------------------------------------------------------------------
+
+export const paymentSettingsApi = {
+  /** The current payee (borrower repay + staff admin read). */
+  get: () => bff<PaymentSettings>("/api/payment-settings", "GET"),
+
+  /** ADMIN edit of the payee fields / uploaded asset keys. */
+  update: (body: UpdatePaymentSettingsInput) =>
+    bff<PaymentSettings>("/api/payment-settings", "PUT", body),
+};
+
+// ---------------------------------------------------------------------------
+// Feature flags (dev-controlled, read-only) — route under /api/feature-flags
+// ---------------------------------------------------------------------------
+
+/** Dev-controlled feature flags as { key: enabled }. Changed only via SQL; the UI just reads them. */
+export type FeatureFlags = Record<string, boolean>;
+
+export const featureFlagsApi = {
+  /** The current flag states, so the UI can hide a disabled feature (e.g. referral). */
+  get: () => bff<FeatureFlags>("/api/feature-flags", "GET"),
+};
+
+// ---------------------------------------------------------------------------
+// Global search — staff Cmd/Ctrl+K palette (`/api/staff/search`)
+// ---------------------------------------------------------------------------
+
+/** The entity families the palette can return. "feature" (pages) is resolved client-side. */
+export type SearchKind =
+  | "customer"
+  | "application"
+  | "loan"
+  | "collections"
+  | "lead"
+  | "staff"
+  | "blocklist";
+
+/** One hit. `meta` carries money in PAISE (the client formats); mobile/PAN arrive masked. */
+export interface SearchItem {
+  kind: SearchKind;
+  id: string;
+  title: string;
+  subtitle: string | null;
+  meta: Record<string, unknown> | null;
+  /** Where selecting this row navigates — already RBAC-correct for the caller. */
+  href: string;
+  badge: string | null;
+}
+
+export interface SearchGroup {
+  kind: SearchKind;
+  label: string;
+  items: SearchItem[];
+  /** True when the server capped the group — drives the "View all" link. */
+  more: boolean;
+}
+
+export interface GlobalSearchResponse {
+  query: string;
+  /** How the backend read the query: mobile | pan | id | text. */
+  interpretedAs: string;
+  /** Only the groups this role may see; a group it cannot see is absent, never empty. */
+  groups: SearchGroup[];
+}
+
+export const searchApi = {
+  /** Groups are chosen server-side from the caller's role; DSA is rejected outright. */
+  global: (q: string, limit = 5) =>
+    bff<GlobalSearchResponse>(
+      `/api/staff/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+      "GET",
+    ),
+};
+
+// ---------------------------------------------------------------------------
+// Referral (refer-a-friend) — borrower /api/borrower/referral/*, staff /api/staff/referral/*
+// ---------------------------------------------------------------------------
+
+/** The borrower's own referral panel: their code, reward, share copy + earnings roll-up. */
+export interface MyReferral {
+  enabled: boolean;
+  code: string;
+  rewardPaise: number;
+  rewardRupees: number;
+  shareMessage: string;
+  /** Friends whose first loan was disbursed (the referral qualified). */
+  referredQualifiedCount: number;
+  /** Total ₹ already credited to me (paise). */
+  totalEarnedPaise: number;
+  /** Total ₹ owed to me but not yet paid (paise). */
+  pendingPaise: number;
+}
+
+/** Outcome of applying a code at signup (the happy path; guard failures throw ApplicationApiError). */
+export interface ApplyReferralResult {
+  accepted: boolean;
+  message: string;
+  referrerName: string | null;
+  rewardPaise: number;
+}
+
+/** Lenient code preview for live signup feedback. */
+export interface ValidateReferralResult {
+  valid: boolean;
+  referrerName: string | null;
+  rewardPaise: number;
+  message: string;
+}
+
+export type ReferralBeneficiaryRole = "REFERRER" | "REFERRED";
+export type ReferralPayoutStatus = "PENDING" | "PAID";
+
+/** One ₹-reward payout row (Disbursement-Head approval dashboard + referral-expense view). */
+export interface ReferralPayout {
+  id: number;
+  referralId: number;
+  beneficiaryCustomerId: number;
+  beneficiaryName: string | null;
+  beneficiaryRole: ReferralBeneficiaryRole;
+  counterpartyCustomerId: number | null;
+  counterpartyName: string | null;
+  amountPaise: number;
+  status: ReferralPayoutStatus;
+  txnRef: string | null;
+  paidAt: string | null;
+  paidBy: string | null;
+  qualifyingLoanId: number | null;
+  createdAt: string | null;
+}
+
+/** Totals for the referral-expense dashboard. */
+export interface ReferralExpenseSummary {
+  pendingCount: number;
+  pendingPaise: number;
+  paidCount: number;
+  paidPaise: number;
+  totalCount: number;
+  totalPaise: number;
+}
+
+const BORROWER_REFERRAL_BASE = "/api/borrower/referral";
+
+/** Borrower-facing referral client. */
+export const referralApi = {
+  /** The caller's own code + reward + earnings (code minted lazily on first read). */
+  me: () => bff<MyReferral>(`${BORROWER_REFERRAL_BASE}/me`, "GET"),
+
+  /** Apply a referral code to the calling borrower (best-effort from the signup UI). */
+  apply: (code: string) =>
+    bff<ApplyReferralResult>(`${BORROWER_REFERRAL_BASE}/apply`, "POST", { code }),
+
+  /** Preview a code for live signup feedback (never throws on a bad code; returns valid=false). */
+  validate: (code: string) =>
+    bff<ValidateReferralResult>(
+      `${BORROWER_REFERRAL_BASE}/validate?code=${encodeURIComponent(code)}`,
+      "GET",
+    ),
+};
+
+const STAFF_REFERRAL_BASE = "/api/staff/referral";
+
+/** Disbursement-Head / Admin referral payout client. */
+export const staffReferralApi = {
+  /** Payout queue / expense list. `status` PENDING|PAID filters; omitted → all (newest first). */
+  payouts: (status?: ReferralPayoutStatus) =>
+    bff<ReferralPayout[]>(`${STAFF_REFERRAL_BASE}/payouts${status ? `?status=${status}` : ""}`, "GET"),
+
+  /** Mark a payout paid, logging the bank/UPI transaction id. */
+  pay: (id: number, txnRef: string) =>
+    bff<ReferralPayout>(`${STAFF_REFERRAL_BASE}/payouts/${id}/pay`, "POST", { txnRef }),
+
+  /** Totals for the referral-expense dashboard. */
+  expenses: () => bff<ReferralExpenseSummary>(`${STAFF_REFERRAL_BASE}/expenses`, "GET"),
+};
+
+// ---------------------------------------------------------------------------
+// Storage (presigned uploads) — routes under /api/storage
+// ---------------------------------------------------------------------------
+
+/** Result of asking for a presigned PUT URL (raw — the storage endpoint is NOT envelope-wrapped). */
+export interface PresignUpload {
+  key: string;
+  url: string;
+  method: string;
+  expiresInSeconds: number;
+}
+
+export const storageApi = {
+  /** Ask the backend for a presigned PUT URL for a categorised upload. */
+  presignUpload: async (body: {
+    category: string;
+    filename: string;
+    contentType: string;
+  }): Promise<PresignUpload> => {
+    let res: Response;
+    try {
+      res = await fetch("/api/storage/presign-upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+    } catch {
+      throw new ApplicationApiError(
+        "Upload could not be prepared — check your connection and try again.",
+        "UPLOAD_NETWORK_ERROR",
+        0,
+      );
+    }
+    const text = await res.text();
+    if (!res.ok) {
+      // BFF/backend error paths return the ApiResponse envelope.
+      let code = `HTTP_${res.status}`;
+      let message = `Upload could not be prepared (status ${res.status}).`;
+      try {
+        const env = JSON.parse(text) as ApiResponse<unknown>;
+        code = env.error?.code ?? code;
+        message = env.error?.message ?? env.message ?? message;
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new ApplicationApiError(message, code, res.status);
+    }
+    return JSON.parse(text) as PresignUpload;
+  },
+
+  /** PUT the file bytes straight to the presigned S3 URL (never through the BFF). */
+  putToPresignedUrl: (url: string, file: File): Promise<void> =>
+    putToPresignedUrl(url, file, file.type || "application/octet-stream"),
+
+  /** Short-lived GET URL for an existing key, so the browser can fetch the object directly. */
+  presignDownload: async (key: string): Promise<string> => {
+    const res = await fetch(`/api/storage/presign-download?key=${encodeURIComponent(key)}`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      // Error paths DO return the ApiResponse envelope, even though the success path does not.
+      let code = `HTTP_${res.status}`;
+      let message = `Could not open that file (status ${res.status}).`;
+      try {
+        const env = JSON.parse(text) as ApiResponse<unknown>;
+        code = env.error?.code ?? code;
+        message = env.error?.message ?? env.message ?? message;
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new ApplicationApiError(message, code, res.status);
+    }
+    // The storage endpoint is NOT envelope-wrapped on success (see PresignUpload above).
+    return (JSON.parse(text) as { url: string }).url;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Collections — cases, interactions, settlements (maker-checker), DPD helper
+// ---------------------------------------------------------------------------
+
+export type DpdBucket = "UPCOMING" | "T0_T7" | "T8_T30" | "T30_T60" | "T60_T90" | "T90_PLUS";
+
+/** Real loan + borrower snapshot surfaced to collections (mirrors backend LoanSummary). */
+export interface LoanSummary {
+  loanId: number;
+  customerId: number | null;
+  applicationId: number | null;
+  status: string | null;
+  principalPaise: number | null;
+  netDisbursedPaise: number | null;
+  totalRepayablePaise: number | null;
+  outstandingPaise: number | null;
+  disbursedOn: string | null;
+  dueDate: string | null;
+  borrowerName: string | null;
+  pan: string | null;
+  mobile: string | null;
+  employer: string | null;
+  employmentStatus: string | null;
+  monthlySalaryPaise: number | null;
+  salaryBank: string | null;
+  /** The due date has not arrived yet — workable by collections, but NOT a delinquency. */
+  preDue: boolean;
+}
+
+/** Staff snapshot for assignee pickers / name rendering (mirrors backend StaffSummary). */
+export interface StaffSummary {
+  id: number;
+  name: string;
+  role: string;
+  active: boolean;
+}
+
+/** A row in the collections worklist (case + live DPD + key loan/borrower fields). */
+export interface CaseView {
+  id: string; // case UUID
+  loanId: number;
+  assignedOfficerId: number | null;
+  assignedOfficerName: string | null;
+  createdAt: string;
+  dpd: number;
+  bucket: DpdBucket;
+  loanStatus: string | null;
+  borrowerName: string | null;
+  outstandingPaise: number | null;
+  dueDate: string | null;
+}
+
+/** Full case detail: case + live DPD + the complete loan/borrower snapshot. */
+/**
+ * A row on the collections worklist — one per live loan, whether or not a case exists on it yet.
+ *
+ * The DPD buckets used to list collection cases, and nothing created those automatically, so an
+ * overdue borrower nobody had opened a case for showed up in no bucket at all. The case is now
+ * created implicitly behind the first action, which is why every case field here is nullable.
+ */
+export interface WorklistRow {
+  loanId: number;
+  dpd: number;
+  bucket: DpdBucket;
+  preDue: boolean;
+  caseId: string | null;
+  assignedOfficerId: number | null;
+  assignedOfficerName: string | null;
+  caseOpenedAt: string | null;
+  creditDecidedByName: string | null;
+  disbursedByName: string | null;
+  loan: LoanSummary | null;
+  /** Bureau / UAN / work-email trust stars (staff list rows); null when not computed. */
+  trust?: TrustSignals | null;
+}
+
+export interface CaseDetailView {
+  id: string;
+  loanId: number;
+  assignedOfficerId: number | null;
+  assignedOfficerName: string | null;
+  createdAt: string;
+  dpd: number;
+  bucket: DpdBucket;
+  loan: LoanSummary | null;
+}
+
+export interface InteractionView {
+  id: string;
+  collectionCaseId: string;
+  type: string;
+  outcome: string;
+  promiseToPayDate: string | null;
+  proofRef: string | null;
+  loggedAt: string;
+}
+
+export type SettlementStatusName = "PROPOSED" | "APPROVED" | "REJECTED";
+
+export interface SettlementView {
+  id: string;
+  collectionCaseId: string;
+  settlementAmountPaise: number | null;
+  proposedBy: number | null;
+  proposedByName: string | null;
+  approvedBy: number | null;
+  approvedByName: string | null;
+  rejectedBy: number | null;
+  rejectedByName: string | null;
+  status: SettlementStatusName;
+  createdAt: string;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  /** The borrower and loan behind the case — null (dpd 0) when the loan cannot be resolved. */
+  loanId: number | null;
+  customerId: number | null;
+  borrowerName: string | null;
+  mobile: string | null;
+  loanStatus: string | null;
+  principalPaise: number | null;
+  outstandingPaise: number | null;
+  dueDate: string | null;
+  dpd: number;
+  bucket: DpdBucket;
+  /** Customer-tab details. */
+  pan: string | null;
+  email: string | null;
+  employer: string | null;
+  employmentStatus: string | null;
+  monthlySalaryPaise: number | null;
+  salaryBank: string | null;
+  accountNumber: string | null;
+  ifsc: string | null;
+  bureauScore: number | null;
+  assignedOfficerName: string | null;
+  /** Loan + itemised dues: grossDue = principal + interest + penalty, before payments or a settlement cap. */
+  disbursedOn: string | null;
+  netDisbursedPaise: number | null;
+  interestPaise: number | null;
+  interestDays: number | null;
+  penaltyPaise: number | null;
+  penaltyDays: number | null;
+  paidPaise: number | null;
+  grossDuePaise: number | null;
+}
+
+/**
+ * What a collections officer is recording (V47; revamp.md decision 43). A settlement writes off
+ * part of the debt, so it takes an extra hop through the Collection Head; part and full payments go
+ * straight to the Accountant.
+ */
+export type CollectionPaymentKind = "PART_PAYMENT" | "FULL_PAYMENT" | "SETTLEMENT";
+
+export const COLLECTION_PAYMENT_KINDS: Array<{ value: CollectionPaymentKind; label: string; hint: string }> = [
+  { value: "PART_PAYMENT", label: "Part payment", hint: "Some of the balance; the rest is still owed." },
+  { value: "FULL_PAYMENT", label: "Full payment", hint: "Clears the balance outright." },
+  {
+    value: "SETTLEMENT",
+    label: "Settlement",
+    hint: "Full & final for less than the balance — needs a settlement open on the case, and the Collection Head's approval.",
+  },
+];
+
+export type CollectionPaymentStatusName =
+  | "PENDING_HEAD"
+  | "PENDING_ACCOUNTANT"
+  | "VALIDATED"
+  | "REJECTED";
+
+/** A collections payment and its approval chain (mirrors backend CollectionPaymentView). */
+export interface CollectionPaymentView {
+  id: string;
+  collectionCaseId: string;
+  loanId: number | null;
+  kind: CollectionPaymentKind;
+  amountPaise: number | null;
+  paidOn: string | null;
+  txnRef: string | null;
+  proofRef: string | null;
+  settlementId: string | null;
+  status: CollectionPaymentStatusName;
+  raisedBy: number | null;
+  raisedByName: string | null;
+  raisedAt: string;
+  validatedBy: number | null;
+  validatedByName: string | null;
+  validatedAt: string | null;
+  remarks: string | null;
+  /** The loan-ledger payment the Accountant's validation minted; null until validated. */
+  ledgerPaymentId: number | null;
+  borrowerName: string | null;
+}
+
+export interface DpdView {
+  dueDate: string;
+  asOf: string;
+  dpd: number;
+  bucket: DpdBucket;
+}
+
+/**
+ * A row in the collections pre-due watchlist (mirrors backend UpcomingLoanView).
+ *
+ * Deliberately not a `CaseView`: there is no collection case behind one of these, so no case id —
+ * which is what keeps a caseless loan from passing for a case anywhere the worklist is consumed.
+ */
+export interface UpcomingLoanView {
+  loanId: number;
+  customerId: number | null;
+  borrowerName: string | null;
+  outstandingPaise: number | null;
+  dueDate: string;
+  /** Always positive: the backend only returns loans still ahead of their due date. */
+  daysToDue: number;
+  loanStatus: string | null;
+}
+
+const COLLECTIONS_BASE = "/api/staff/collections";
+
+export const collectionsApi = {
+  /** Present a NACH debit now (real money). Omit `amountPaise` for the full outstanding; it may only be lower. */
+  debit: (loanId: number, amountPaise?: number) =>
+    bff<DebitResult>(`${COLLECTIONS_BASE}/loans/${loanId}/debit`, "POST", amountPaise == null ? {} : { amountPaise }),
+
+  /** Every debit presented on this loan, newest attempt first. Read-only; works with the flag off. */
+  debits: (loanId: number) => bff<DebitRecord[]>(`${COLLECTIONS_BASE}/loans/${loanId}/debits`, "GET"),
+
+  /** Re-read one debit's outcome from the bank ("Check status"). Safe to repeat. */
+  reconcileDebit: (loanId: number, debitId: number) =>
+    bff<DebitRecord>(`${COLLECTIONS_BASE}/loans/${loanId}/debits/${debitId}/reconcile`, "POST", {}),
+
+  /** Cancel one in-flight debit; refused (DEBIT_CANCEL_REFUSED) once the bank has picked it up. */
+  cancelDebit: (loanId: number, debitId: number) =>
+    bff<DebitRecord>(`${COLLECTIONS_BASE}/loans/${loanId}/debits/${debitId}/cancel`, "POST", {}),
+
+  /** The refund register: debits that collected money a borrower no longer owed. COLLECTION_HEAD/ADMIN. */
+  overpayments: () => bff<DebitRecord[]>(`${COLLECTIONS_BASE}/debits/overpayments`, "GET"),
+
+  /**
+   * One page of the worklist, narrowed server-side.
+   *
+   * `extra` carries the register's own server params (the `asOf` day); `filters` is the view's
+   * `queryParams`. The whole-worklist `worklist()` above stays for the callers that genuinely want
+   * every row (the bucket cards' counts, which must not follow the column filters).
+   */
+  worklistPage: (p: { filters?: Record<string, string>; page: number; size: number; extra?: Record<string, string> }) =>
+    registerPage<WorklistRow>(`${COLLECTIONS_BASE}/worklist`, p),
+
+  /**
+   * The bucket cards' figures: per-bucket counts and outstanding, over the WHOLE scope.
+   *
+   * The cards are this page's navigation control, so they deliberately do not follow the column
+   * filters — and that is exactly why they must not come from the paged register. Without this the
+   * page had to keep fetching the entire worklist alongside its page just to count it, which is the
+   * cost the server paging exists to remove.
+   */
+  worklistSummary: (extra?: Record<string, string>) =>
+    bff<Array<{ bucket: string; n: number; outstandingPaise: number }>>(
+      `${COLLECTIONS_BASE}/worklist/summary${extra && Object.keys(extra).length ? `?${new URLSearchParams(extra)}` : ""}`,
+      "GET",
+    ),
+
+  /** The values one worklist column's filter can offer, inside the caller's own case scope. */
+  worklistFacet: (column: string, filters: Record<string, string>) =>
+    registerFacet(`${COLLECTIONS_BASE}/worklist`, column, filters),
+
+  /** The DPD-bucket worklist: every live loan due within the week or already past due. */
+  worklist: () => bff<WorklistRow[]>(`${COLLECTIONS_BASE}/worklist`, "GET"),
+  listCases: () => bff<CaseView[]>(`${COLLECTIONS_BASE}/cases`, "GET"),
+
+  /**
+   * The pre-due watchlist behind the UPCOMING DPD bucket: live loans whose repayment date has not
+   * arrived yet, soonest first. Read-only and case-free — these are loans nobody has started
+   * collecting on, so they carry no case id and there is nothing to act on yet.
+   */
+  listUpcoming: () => bff<UpcomingLoanView[]>(`${COLLECTIONS_BASE}/upcoming`, "GET"),
+  getCase: (caseId: string) => bff<CaseDetailView>(`${COLLECTIONS_BASE}/cases/${caseId}`, "GET"),
+
+  /**
+   * Look up the (open) collections case for a loan, from the loan side — used by the loan detail
+   * modal, which only knows the loan id, not whether/which case exists for it. Returns `null` when
+   * no case has been opened for this loan (a normal, expected answer for a loan that's current or
+   * whose case hasn't been opened yet), NOT an error. We distinguish that from a real failure by
+   * catching `ApplicationApiError` and checking `.status === 404` — the bff() helper always throws
+   * ApplicationApiError (never returns undefined) on a non-2xx response, so this is the one clean
+   * signal callers have without inventing a second response shape.
+   */
+  caseByLoan: async (loanId: number): Promise<CaseDetailView | null> => {
+    try {
+      return await bff<CaseDetailView>(`${COLLECTIONS_BASE}/cases/by-loan/${loanId}`, "GET");
+    } catch (e) {
+      if (e instanceof ApplicationApiError && e.status === 404) return null;
+      throw e;
+    }
+  },
+  openCase: (loanId: number) => bff<CaseDetailView>(`${COLLECTIONS_BASE}/cases`, "POST", { loanId }),
+  assignOfficer: (caseId: string, officerId: number) =>
+    bff<CaseDetailView>(`${COLLECTIONS_BASE}/cases/${caseId}/assign`, "POST", { officerId }),
+
+  // NOTE: the backend still exposes GET /api/collections/loans ("collectible loans"), but nothing
+  // calls it any more: opening a case is implicit in assigning an officer from the awaiting-repayment
+  // rows on /staff/applications, so the separate "pick a loan, then open a case" list was dropped.
+
+  /** ACTIVE collections officers, for the assignee picker. */
+  listOfficers: () => bff<StaffSummary[]>(`${COLLECTIONS_BASE}/officers`, "GET"),
+
+  listInteractions: (caseId: string) =>
+    bff<InteractionView[]>(`${COLLECTIONS_BASE}/cases/${caseId}/interactions`, "GET"),
+  logInteraction: (
+    caseId: string,
+    payload: { type: string; outcome: string; promiseToPayDate?: string; proofRef?: string },
+  ) => bff<InteractionView>(`${COLLECTIONS_BASE}/cases/${caseId}/interactions`, "POST", payload),
+
+  proposeSettlement: (caseId: string, settlementAmountPaise: number) =>
+    bff<SettlementView>(`${COLLECTIONS_BASE}/cases/${caseId}/settlements`, "POST", { settlementAmountPaise }),
+  listSettlements: () => bff<SettlementView[]>(`${COLLECTIONS_BASE}/settlements`, "GET"),
+  approveSettlement: (settlementId: string) =>
+    bff<SettlementView>(`${COLLECTIONS_BASE}/settlements/${settlementId}/approve`, "POST"),
+  rejectSettlement: (settlementId: string) =>
+    bff<SettlementView>(`${COLLECTIONS_BASE}/settlements/${settlementId}/reject`, "POST"),
+
+  // ---- collections payments (V47) ----
+  // The officer records, the Accountant books. Nothing here moves the borrower's balance except
+  // `validatePayment(id, true)` — that is the whole shape of the rule (decision 44).
+
+  raisePayment: (
+    caseId: string,
+    payload: {
+      kind: CollectionPaymentKind;
+      amountPaise: number;
+      paidOn?: string;
+      txnRef?: string;
+      proofRef?: string;
+      settlementId?: string;
+    },
+  ) => bff<CollectionPaymentView>(`${COLLECTIONS_BASE}/cases/${caseId}/payments`, "POST", payload),
+
+  listCasePayments: (caseId: string) =>
+    bff<CollectionPaymentView[]>(`${COLLECTIONS_BASE}/cases/${caseId}/payments`, "GET"),
+
+  /** Omit `status` for the full register; pass one to read a specific desk's queue. */
+  listPayments: (status?: CollectionPaymentStatusName) =>
+    bff<CollectionPaymentView[]>(
+      `${COLLECTIONS_BASE}/payments${status ? `?status=${status}` : ""}`,
+      "GET",
+    ),
+
+  headApprovePayment: (paymentId: string) =>
+    bff<CollectionPaymentView>(`${COLLECTIONS_BASE}/payments/${paymentId}/head-approve`, "POST"),
+
+  validatePayment: (paymentId: string, accept: boolean, remarks?: string) =>
+    bff<CollectionPaymentView>(`${COLLECTIONS_BASE}/payments/${paymentId}/validate`, "POST", {
+      accept,
+      remarks,
+    }),
+
+  dpd: (dueDate: string, asOf?: string) =>
+    bff<DpdView>(
+      `${COLLECTIONS_BASE}/dpd?dueDate=${encodeURIComponent(dueDate)}${asOf ? `&asOf=${encodeURIComponent(asOf)}` : ""}`,
+      "GET",
+    ),
+};
+
+// ---------------------------------------------------------------------------
+// Notifications — the recipient's in-app inbox (borrower + staff share the shape)
+// ---------------------------------------------------------------------------
+
+/** One in-app notification (mirrors backend NotificationView). */
+export interface NotificationView {
+  id: number;
+  /** Stable enum, e.g. "KYC_APPROVED" — drives the icon/intent. */
+  type: string;
+  /** Coarse grouping, e.g. "KYC" | "CREDIT" | "DISBURSEMENT" | "REPAYMENT" | "COLLECTIONS" | "STAFF_IAM" | "SECURITY" | "SYSTEM". */
+  category: string;
+  title: string;
+  body: string;
+  read: boolean;
+  /** Routing ids for deep-linking on click (any may be null). */
+  applicationId: number | null;
+  loanId: number | null;
+  caseId: string | null;
+  createdAt: string;
+}
+
+/** Which session/cookie a notifications client speaks for. */
+export type NotificationScope = "borrower" | "staff";
+
+/**
+ * Build a notifications client bound to one BFF namespace. The backend endpoint is the
+ * same (`/api/notifications`); only the proxy prefix (and thus the cookie) differs.
+ */
+function makeNotificationsApi(base: string) {
+  return {
+    /** The caller's notifications, newest-first. */
+    list: (page = 0, size = 20) =>
+      bff<NotificationView[]>(`${base}?page=${page}&size=${size}`, "GET"),
+
+    /** Unread in-app count for the bell badge. */
+    unreadCount: () => bff<number>(`${base}/unread-count`, "GET"),
+
+    /** Mark one read; resolves to the fresh unread count. */
+    markRead: (id: number) => bff<number>(`${base}/${id}/read`, "POST"),
+
+    /** Mark all read; resolves to the fresh unread count (0). */
+    markAllRead: () => bff<number>(`${base}/read-all`, "POST"),
+  };
+}
+
+export type NotificationsApi = ReturnType<typeof makeNotificationsApi>;
+
+export const borrowerNotificationsApi = makeNotificationsApi("/api/borrower/notifications");
+export const staffNotificationsApi = makeNotificationsApi("/api/staff/notifications");
+
+export type ProviderApiField = { key: string; label: string; type: string; required: boolean };
+export type ProviderApiCatalogItem = { operation: string; providers: string[]; fields: ProviderApiField[] };
+export type ProviderApiExecution = { id: number; operation: string; provider: string; status: string; durationMs: number; request: Record<string, unknown>; response: unknown; error?: string | null; createdAt: string; source?: string | null; endpoint?: string | null; httpStatus?: number | null; checkType?: string | null; applicationId?: number | null; requestId?: string | null };
+/** A history row WITHOUT payloads — those come from `providerApi.detail` when a row is expanded. */
+export type ProviderApiExecutionSummary = { id: number; operation: string; provider: string; status: string; httpStatus?: number | null; durationMs: number; source?: string | null; endpoint?: string | null; checkType?: string | null; applicationId?: number | null; requestId?: string | null; error?: string | null; createdAt: string };
+export type ProviderApiHistoryPage = { rows: ProviderApiExecutionSummary[]; page: number; size: number; total: number };
+export type ProviderApiHistoryFilters = { provider?: string; operation?: string; status?: string; source?: string; applicationId?: string; from?: string; to?: string; page?: number; size?: number };
+export const providerApi = {
+  catalog: () => bff<ProviderApiCatalogItem[]>("/api/staff/provider-apis/catalog", "GET"),
+  history: (filters: ProviderApiHistoryFilters = {}) => {
+    const query = new URLSearchParams();
+    // A blank filter must not be sent at all — the backend treats a present-but-empty value as a filter.
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim() !== "") query.set(key, String(value));
+    });
+    const suffix = query.toString();
+    return bff<ProviderApiHistoryPage>(`/api/staff/provider-apis/history${suffix ? `?${suffix}` : ""}`, "GET");
+  },
+  detail: (id: number) => bff<ProviderApiExecution>(`/api/staff/provider-apis/history/${id}`, "GET"),
+  execute: (operation: string, provider: string, input: Record<string, unknown>) =>
+    bff<ProviderApiExecution>("/api/staff/provider-apis/execute", "POST", { operation, provider, input }),
+};
+
+/** Pick the right notifications client for a scope. */
+export function notificationsApiFor(scope: NotificationScope): NotificationsApi {
+  return scope === "staff" ? staffNotificationsApi : borrowerNotificationsApi;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** ₹ amount (e.g. 5000) -> integer paise (500000). */
+export function rupeesToPaise(rupees: number): number {
+  return Math.round(rupees * 100);
+}
+
+/** Integer paise -> ₹ string, e.g. 500000 -> "₹5,000". */
+// ---------------------------------------------------------------------------
+// Mandates & debits console (COLLECTION_HEAD / ADMIN, read-only)
+// ---------------------------------------------------------------------------
+
+export interface MandateSummary {
+  totalMandates: number;
+  activeMandates: number;
+  activeCustomers: number;
+  activeLimitPaise: number;
+  pendingAuthorisation: number;
+  failed: number;
+  cancelled: number;
+  bankUnsupported: number;
+  totalDebits: number;
+  debitsSucceeded: number;
+  debitedPaise: number;
+  debitsFailed: number;
+  debitsInFlight: number;
+  inFlightPaise: number;
+  debitsCancelled: number;
+  refundsOwedPaise: number;
+  debitedByDay: { date: string; debitedPaise: number; count: number }[];
+}
+
+export interface MandateListRow {
+  id: number;
+  customerId: number;
+  customerName: string | null;
+  mobile: string | null;
+  /** The customer's newest application — what "Open mandate actions" opens. */
+  applicationId: number | null;
+  applicationStatus: string | null;
+  loanId: number | null;
+  attemptNo: number;
+  /** Stored status, or CANCELLED when staff cancelled it. */
+  status: string;
+  umrn: string | null;
+  bankName: string | null;
+  accountLast4: string | null;
+  maximumAmountPaise: number;
+  authSubMode: string | null;
+  rejectReason: string | null;
+  createdAt: string | null;
+  authenticatedAt: string | null;
+  cancelledAt: string | null;
+  cancelledBy: string | null;
+  cancelReason: string | null;
+  debitCount: number;
+  debitsSucceeded: number;
+  debitedPaise: number;
+  debitsInFlight: number;
+  lastDebitAt: string | null;
+}
+
+export interface MandateDebitRow {
+  id: number;
+  mandateId: number;
+  umrn: string | null;
+  loanId: number;
+  customerId: number | null;
+  customerName: string | null;
+  mobile: string | null;
+  applicationId: number | null;
+  attemptNo: number;
+  amountPaise: number;
+  status: string;
+  digioStatus: string | null;
+  failureCode: string | null;
+  failureReason: string | null;
+  utr: string | null;
+  settlementDate: string | null;
+  /** MANUAL (a staffer) or SCHEDULED (the automatic sweep). */
+  trigger: string;
+  actorId: number | null;
+  actorName: string | null;
+  actorRole: string | null;
+  dpdAtAttempt: number | null;
+  presentCount: number;
+  overpayment: boolean;
+  digioTxnId: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export interface MandateDebitFilters {
+  q?: string;
+  status?: string;
+  trigger?: string;
+  actorId?: number | null;
+  from?: string;
+  to?: string;
+  page?: number;
+}
+
+const MANDATES_BASE = "/api/staff/mandates";
+
+function qs(params: Record<string, string | number | null | undefined>): string {
+  const u = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v != null && v !== "") u.set(k, String(v));
+  });
+  const s = u.toString();
+  return s ? `?${s}` : "";
+}
+
+export const mandatesApi = {
+  summary: () => bff<MandateSummary>(`${MANDATES_BASE}/summary`, "GET"),
+  list: (q: string, status: string, page: number) =>
+    bff<{ rows: MandateListRow[]; total: number; page: number; size: number }>(
+      `${MANDATES_BASE}${qs({ q, status, page })}`,
+      "GET",
+    ),
+  debitsFor: (mandateId: number) => bff<MandateDebitRow[]>(`${MANDATES_BASE}/${mandateId}/debits`, "GET"),
+  debits: (f: MandateDebitFilters) =>
+    bff<{ rows: MandateDebitRow[]; total: number; page: number; size: number; succeededCount: number; succeededPaise: number }>(
+      `${MANDATES_BASE}/debits${qs({ q: f.q, status: f.status, trigger: f.trigger, actorId: f.actorId, from: f.from, to: f.to, page: f.page })}`,
+      "GET",
+    ),
+  actors: () => bff<{ id: number; name: string; role: string }[]>(`${MANDATES_BASE}/debits/actors`, "GET"),
+};
+
+export function paiseToINR(paise: number | null | undefined): string {
+  if (paise == null) return "—";
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(paise / 100);
+}
+
+/** Human label for an application status. */
+export function statusLabel(status: ApplicationStatus): string {
+  return status
+    .toLowerCase()
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+
+/** Read a browser File into base64 (no data: prefix), for the document-upload API. */
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string; // "data:<type>;base64,<DATA>"
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Types safe to render in a tab. A blob: URL inherits this app's origin, so opening an uploader-declared
+ * `text/html` or `image/svg+xml` document would run its script as the signed-in reviewer. Anything
+ * outside this set is downloaded instead of rendered. Mirrors the backend's RENDERABLE_CONTENT_TYPES.
+ */
+const RENDERABLE_DOCUMENT_TYPES = new Set([
+  "application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif",
+]);
+
+/** Turn a base64 document into a Blob URL and either open it in a new tab or download it. */
+export function openDocument(doc: DocumentContent, download = false): void {
+  const bytes = Uint8Array.from(atob(doc.dataBase64), (c) => c.charCodeAt(0));
+  const declared = (doc.contentType ?? "").trim().toLowerCase();
+  const renderable = RENDERABLE_DOCUMENT_TYPES.has(declared);
+  const blob = new Blob([bytes], { type: renderable ? declared : "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  if (download || !renderable) {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = doc.fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+  // Give the browser time to consume the URL before revoking.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+// ---------------------------------------------------------------------------
+// Skip Tracer — on-demand Digitap Skip Tracing Lite (collections). Every run is billable, so it is
+// only ever triggered by a COLLECTION_HEAD / ADMIN from the Skip Tracer tab; results are kept per
+// customer and are free to read for any staff but DSA. `response.result` is Digitap's own shape.
+// ---------------------------------------------------------------------------
+export type SkipTraceAddress = {
+  address_rank: number;
+  address_details: { address?: string; locality?: string; city?: string; district?: string; state?: string; country?: string; pincode?: string };
+  address_insights: {
+    reported_date?: string;
+    last_activity_date?: string;
+    address_quality?: { level?: string; missing?: string[] };
+    address_match_score?: number | null;
+    address_match_index?: number | null;
+    address_visit_conversion?: number | null;
+  };
+};
+export type SkipTraceResult = {
+  profile?: { full_name?: string; father_name?: string; date_of_birth?: string; gender?: string; profile_image_url?: string };
+  official_documents?: { document?: string; document_id?: string }[];
+  contactability?: {
+    mobile_number?: string;
+    alternate_mobiles?: { mobile_number?: string; reported_date?: string }[];
+    emails?: { email_id?: string; reported_date?: string }[];
+  };
+  addresses?: SkipTraceAddress[];
+  insights?: { total_addresses?: number; total_unique_addresses?: number; name_match?: boolean | null; name_match_score?: number | null };
+  metadata?: Record<string, { status?: string; description?: string }>;
+  report?: string;
+};
+export type SkipTraceRun = {
+  id: number;
+  customerId: number;
+  applicationId?: number | null;
+  loanId?: number | null;
+  status: "SUCCESS" | "NO_RECORD" | "FAILED";
+  resultCode?: number | null;
+  message?: string | null;
+  providerRequestId?: string | null;
+  runByStaffId: number;
+  runByName?: string | null;
+  runByRole?: string | null;
+  createdAt: string;
+  durationMs?: number | null;
+  request: { pan?: string | null; mobile?: string | null; name?: string | null; address?: string[] };
+  response?: { result_code?: number; message?: string; result?: SkipTraceResult } | null;
+};
+const SKIP_TRACE_BASE = "/api/staff/skip-trace";
+export const skipTraceApi = {
+  history: (customerId: number) => bff<SkipTraceRun[]>(`${SKIP_TRACE_BASE}/customers/${customerId}`, "GET"),
+  run: (customerId: number) => bff<SkipTraceRun>(`${SKIP_TRACE_BASE}/customers/${customerId}`, "POST"),
+};
+
+// ---------------------------------------------------------------------------
+// Bank Statement Analysis — on-demand Signzy BSA (credit). Billed per statement, so it is only ever
+// triggered by the credit desk / ADMIN from the customer's Banking tab; the stored result is free to
+// read for any staff but DSA. Signzy's flow is asynchronous: a run comes back PENDING and the
+// backend advances it on each read, so the UI polls while `status === "PENDING"`.
+// ---------------------------------------------------------------------------
+export type BankAnalysisAccount = {
+  maskedNumber: string | null;
+  type: string | null;
+  txnCount: number | null;
+  status: string | null;
+  ifsc?: string | null;
+  micr?: string | null;
+  facility?: string | null;
+  branch?: string | null;
+  periodFrom?: string | null;
+  periodTo?: string | null;
+  holderName?: string | null;
+  /** Signzy's tampering verdict for the file(s): ORIGINAL | REVIEW | FRAUD SUSPECTED | UNKNOWN. */
+  authenticity?: string | null;
+  openingBalancePaise?: number | null;
+  closingBalancePaise?: number | null;
+};
+export type BankAnalysisView = {
+  id: number;
+  customerId: number;
+  applicationId?: number | null;
+  status: "ANALYSED" | "PENDING" | "FAILED";
+  reportId?: string | null;
+  reportStatus?: string | null;
+  reportStatusDescription?: string | null;
+  bankScore?: string | null;
+  bank: string | null;
+  accounts: BankAnalysisAccount[];
+  /** Salary identification lives in Signzy's downloadable report; null until that is mapped. */
+  salary: {
+    verdict: "ACCEPT" | "REVIEW" | "REJECT";
+    rule: string;
+    primarySource: string;
+    consecutiveMonths: number;
+    minSalaryPaise: number;
+    uniqueCredits: number;
+    employerOnStatement?: string;
+    analysedAt: string;
+  } | null;
+  excelUrl?: string | null;
+  jsonUrl?: string | null;
+  message?: string | null;
+  runByStaffId?: number | null;
+  runByName?: string | null;
+  runByRole?: string | null;
+  createdAt: string;
+  updatedAt?: string | null;
+};
+const BANK_ANALYSIS_BASE = "/api/staff/bank-analysis";
+export const bankAnalysisApi = {
+  /** The latest analysis, or null when none has been run. Advances a still-running report. */
+  get: (customerId: number) =>
+    bff<BankAnalysisView | null>(`${BANK_ANALYSIS_BASE}/customers/${customerId}`, "GET"),
+  history: (customerId: number) =>
+    bff<BankAnalysisView[]>(`${BANK_ANALYSIS_BASE}/customers/${customerId}/history`, "GET"),
+  run: (customerId: number) =>
+    bff<BankAnalysisView>(`${BANK_ANALYSIS_BASE}/customers/${customerId}`, "POST"),
+};

@@ -1,0 +1,70 @@
+"use client";
+
+import * as React from "react";
+import { usePathname } from "next/navigation";
+import { ShieldCheck } from "lucide-react";
+import { OFFER_SEGMENTS, useOfferGuard, useOfferSteps } from "@/lib/offer";
+import { readStoredAppId } from "@/lib/api/live-journey";
+
+/**
+ * Wizard chrome for the post-sanction offer journey (revamp.md Phase 3) — the same progress
+ * treatment as the intake, so the borrower reads the two halves as one product.
+ *
+ * <p>Only the offer routes get the chrome. `/loan/status` (and the retired `apply` / `salary`
+ * redirects) live under the same segment but are not steps, so they render bare.
+ *
+ * <p>The step count is the server's, not a constant: a returning borrower's journey is genuinely
+ * shorter because their DigiLocker, references, selfie and address carried over (V47), and telling
+ * them "step 1 of 11" when they will walk seven would be a lie the progress bar then repeats.
+ */
+export default function LoanLayout({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const seg = pathname.split("/").filter(Boolean).pop() ?? "";
+  const isOfferStep = OFFER_SEGMENTS.has(seg);
+  const { steps, resolved } = useOfferSteps();
+
+  const [appId, setAppId] = React.useState<number | null>(null);
+  React.useEffect(() => setAppId(readStoredAppId()), []);
+  // Resume is server-side (revamp.md C1): a borrower who left at the selfie comes back to the selfie.
+  // Not on the mandate screen: it is also reached by a staff invite on a loan that has long left the
+  // journey (ACTIVE, OVERDUE, CLOSED), where the journey's answer is /loan/status — so the guard bounced
+  // exactly the borrowers the invite is for. The page resolves its own application, and the server
+  // decides who may register (OfferService.MANDATE_SETUP_ALLOWED; init demands a confirmed account).
+  useOfferGuard(isOfferStep && seg !== "mandate" ? appId : null);
+
+  if (!isOfferStep) return <>{children}</>;
+
+  const idx = steps.findIndex((s) => s.seg === seg);
+  const step = steps[idx];
+  // A step outside this borrower's list (mid-navigation, before the server's list lands) has no
+  // number to show; render the chrome without a count rather than "step 0".
+  if (!step) return <div><div className="container max-w-content py-10">{children}</div></div>;
+  const pct = Math.round(((idx + 1) / steps.length) * 100);
+
+  return (
+    <div>
+      <div className="border-b border-line">
+        <div className="container py-5">
+          <div className="mb-2 flex items-center justify-between">
+            {/* Held back until the server's list lands. On a deep link the fallback is the full
+                eleven, so showing it here told a seven-step re-apply "Step 10 of 11" — a number
+                that then changed under them a moment later. */}
+            <span className="text-xs font-semibold uppercase tracking-wider text-gold-dark">
+              {resolved ? `Step ${idx + 1} of ${steps.length}` : " "}
+            </span>
+            <span className="flex items-center gap-1.5 text-xs text-muted">
+              <ShieldCheck size={14} className="text-success-600" /> Secure &amp; encrypted
+            </span>
+          </div>
+          <div className="mb-2 flex items-baseline justify-between gap-3">
+            <h2 className="font-serif text-xl text-navy">{step.label}</h2>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-grey-200">
+            <div className="h-full rounded-full bg-gold transition-all" style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+      </div>
+      <div className="container max-w-content py-10">{children}</div>
+    </div>
+  );
+}

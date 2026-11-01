@@ -1,0 +1,103 @@
+"use client";
+
+import * as React from "react";
+import Link from "next/link";
+import { ShieldCheck, Mail, CheckCircle2 } from "lucide-react";
+import { Brand } from "@/components/site/brand";
+import { Input, Turnstile } from "@/components/ui";
+import { config } from "@/lib/config";
+import { formatEnvelopeError, readEnvelopeError } from "@/lib/api/errors";
+
+/**
+ * Staff forgot-password. The email must match an active staff account; on a match the backend
+ * emails a one-time reset link. Generic response (no account enumeration) — the reset link only ever
+ * reaches that inbox, so owning it is the proof. Renders bare (StaffShell treats this as a public path).
+ */
+export default function StaffForgotPasswordPage() {
+  const [email, setEmail] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string>();
+  const [sent, setSent] = React.useState(false);
+  const [captcha, setCaptcha] = React.useState("");
+  const [captchaKey, setCaptchaKey] = React.useState(0);
+  // The widget failed to load/render (usually a domain not on the site key's allowlist). Submit is
+  // unblocked rather than leaving a dead button — the backend still decides.
+  const [captchaBroken, setCaptchaBroken] = React.useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim().includes("@")) { setError("Enter your staff email."); return; }
+    setBusy(true);
+    setError(undefined);
+    try {
+      const res = await fetch("/api/auth/staff/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim(),
+          captchaToken: captcha,
+        }),
+      });
+      // See the borrower page: an unconditional setSent(true) showed the success ack for a
+      // rejection, so a failed captcha or a rate limit was invisible.
+      if (res.ok) {
+        setSent(true);
+      } else {
+        setError(formatEnvelopeError(await readEnvelopeError(res, "Something went wrong — please try again.")));
+        setCaptcha("");
+        setCaptchaKey((k) => k + 1);
+      }
+    } catch {
+      setError("Something went wrong — please try again.");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="mx-auto w-full max-w-sm">
+      <div className="mb-6 text-center">
+        <Brand />
+        <div className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-navy">
+          <ShieldCheck size={14} /> Staff password reset
+        </div>
+      </div>
+
+      {sent ? (
+        <div className="rounded-lg border border-line bg-white p-6 text-center shadow-sm">
+          <CheckCircle2 size={30} className="mx-auto mb-2 text-success-600" />
+          <p className="text-ink">If that email matches a staff account, we&apos;ve emailed a reset link (valid 30 minutes).</p>
+          <Link href="/staff/login" className="btn btn-navy btn-block mt-4">Back to staff sign-in</Link>
+        </div>
+      ) : (
+        <form onSubmit={submit} className="rounded-lg border border-line bg-white p-6 shadow-sm">
+          <Input
+            label="Work email"
+            type="email"
+            value={email}
+            onChange={(e) => { setEmail(e.target.value); setError(undefined); }}
+            placeholder="you@navix.example"
+            leftIcon={<Mail size={16} />}
+            autoComplete="email"
+            error={error}
+          />
+          <Turnstile
+                action="staff-forgot-password"
+                onToken={setCaptcha}
+                onError={() => setCaptchaBroken(true)}
+                resetKey={captchaKey}
+              />
+          <button
+            type="submit"
+            disabled={busy || (!!config.turnstileSiteKey && !captcha && !captchaBroken)}
+            className="btn btn-navy btn-block"
+          >
+            {busy ? "Sending…" : "Email me a reset link"}
+          </button>
+          <p className="mt-3 text-center text-sm">
+            <Link href="/staff/login" className="font-semibold text-navy hover:underline">Back to staff sign-in</Link>
+          </p>
+        </form>
+      )}
+    </div>
+  );
+}

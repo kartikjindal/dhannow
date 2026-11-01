@@ -1,0 +1,753 @@
+package com.navix.collections.service;
+
+import com.navix.collections.dto.CollectionsDtos.CaseDetailView;
+import com.navix.collections.dto.CollectionsDtos.CaseView;
+import com.navix.collections.dto.CollectionsDtos.UpcomingLoanView;
+import com.navix.collections.dto.CollectionsDtos.WorklistRow;
+import com.navix.collections.entity.CollectionCase;
+import com.navix.collections.entity.InteractionLog;
+import com.navix.collections.repository.CollectionCaseRepository;
+import com.navix.collections.repository.InteractionLogRepository;
+import com.navix.common.exception.BusinessException;
+import com.navix.common.exception.ResourceNotFoundException;
+import com.navix.common.loan.ApplicationActorDirectory;
+import com.navix.common.loan.ApplicationActorDirectory.HandledBy;
+import com.navix.common.loan.LoanDirectory;
+import com.navix.common.loan.LoanSummary;
+import com.navix.common.notification.event.CollectionCaseOpenedEvent;
+import com.navix.common.query.ColumnFilter;
+import com.navix.common.query.FilterColumns;
+import com.navix.common.query.FilterSpec;
+import com.navix.common.query.SqlFacets;
+import com.navix.common.security.ActorContext;
+import com.navix.common.security.CurrentActor;
+import com.navix.common.staff.StaffDirectory;
+import com.navix.common.staff.StaffSummary;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+/**
+ * Core collections operations: opening cases for collectible loans, assigning
+ * officers, and logging borrower interactions. Cases are bridged to the real
+ * loans via {@link LoanDirectory} (loan + borrower detail) and to real staff via
+ * {@link StaffDirectory} (officer names + activation gating). The live DPD bucket
+ * is never stored — it is computed on read by {@link DpdCalculator}.
+ */
+@Service
+@RequiredArgsConstructor
+public class CollectionsService {
+
+    /**
+     * Every date this service resolves is an <em>Indian</em> calendar date. The server clock runs UTC
+     * in ECS, so a bare {@code LocalDate.now()} reports yesterday between 00:00 and 05:30 IST — which
+     * on this service means a DPD one day short, a bucket boundary crossed a day late, and a
+     * collectible set that silently differs from the one the loan's own due date implies (that side
+     * already resolves IST correctly, in {@code LoanDirectoryAdapter}). Matches
+     * {@code RepaymentService}/{@code DashboardService} in navix-loan.
+     */
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
+
+    /** Outcome value that signals the borrower paid and therefore requires proof. */
+    private static final String PAID_OUTCOME = "PAID";
+
+    /** Role an assigned collections officer must hold (and be ACTIVE in). */
+    private static final String OFFICER_ROLE = "COLLECTION_EXECUTIVE";
+
+    /** Role allowed to *assign* a case to an officer (collections management). */
+    private static final String MANAGER_ROLE = "COLLECTION_HEAD";
+
+    /** Loan statuses that mean the loan is settled — its case drops off the collections worklist. */
+    private static final Set<String> TERMINAL_LOAN_STATUSES = Set.of("CLOSED", "REPAID", "WRITTEN_OFF");
+
+    private final CollectionCaseRepository caseRepository;
+    private final InteractionLogRepository interactionRepository;
+    private final LoanDirectory loanDirectory;
+    private final StaffDirectory staffDirectory;
+    private final DpdCalculator dpdCalculator;
+    private final ApplicationActorDirectory applicationActorDirectory;
+    private final com.navix.common.loan.CustomerTrustDirectory customerTrustDirectory;
+    private final ApplicationEventPublisher eventPublisher;
+    private final CollectionsWorklistQuery worklistQuery;
+
+    /**
+     * Open (or fetch) the single collection case for a real loan, and move that
+     * loan into collections. Idempotent: an existing case for the loan is returned
+     * unchanged. The loan must resolve via {@link LoanDirectory}.
+     *
+     * @throws ResourceNotFoundException if no such loan exists
+     */
+    @Transactional
+    public CaseDetailView openCase(Long loanId) {
+        // Opening a case moves the loan to IN_COLLECTIONS and notifies the borrower, so it is the
+        // collections desk's call: the worklist page (Head/Executive) and the assign dialog (Head).
+        requireCollectionsDesk();
+        LoanSummary loan = loanDirectory.findLoan(loanId)
+                .orElseThrow(() -> new ResourceNotFoundException("Loan", String.valueOf(loanId)));
+        Optional<CollectionCase> existing = caseRepository.findByLoanId(loanId);
+        existing.ifPresent(this::requireCaseOwnership);
+        CollectionCase c = existing.orElseGet(() -> {
+            CollectionCase nc = new CollectionCase();
+            nc.setLoanId(loanId);
+            return caseRepository.save(nc);
+        });
+        loanDirectory.markInCollections(loanId);
+        if (existing.isEmpty()) {
+            // Only a freshly-opened case fires the notification (an idempotent re-open is silent).
+            eventPublisher.publishEvent(new CollectionCaseOpenedEvent(
+                    c.getId(), loanId, loan.customerId(), Instant.now()));
+        }
+        return buildDetail(c);
+    }
+
+    /** Full case detail (loan figures + borrower + live DPD + officer name). */
+    @Transactional(readOnly = true)
+    public CaseDetailView getCaseDetail(UUID caseId) {
+        // The UUID alone is not a secret: the settlements and payments lists hand it to every staff
+        // role. Borrower PII in the detail needs the same DSA firewall as the by-loan lookup.
+        requireStaff();
+        CollectionCase c = getCase(caseId);
+        requireCaseOwnership(c);
+        return buildDetail(c);
+    }
+
+    /**
+     * Full case detail for a real loan, resolved by loan id rather than the case's own UUID —
+     * for staff surfaces (e.g. a loan detail modal) that only know the loan id and want its
+     * collections activity. A loan with no open case is the normal state for a healthy loan, so
+     * that's a {@code ResourceNotFoundException} (404) here, not an error condition — callers
+     * treat 404 as "no case" rather than a failure to be surfaced.
+     *
+     * <p>If more than one case exists for the loan (not expected — {@link #openCase} is
+     * idempotent per loan — but not structurally prevented; see
+     * {@link CollectionCaseRepository#findFirstByLoanIdOrderByCreatedAtDesc}), this returns the
+     * most recently opened one rather than throwing.
+     *
+     * <p><b>Staff-only, unlike the sibling {@link #getCaseDetail(UUID)}.</b> That lookup is keyed
+     * by the case's random UUID, which is not practically guessable. This one is keyed by the
+     * loan id — a sequential bigint — so leaving it open the way its sibling is would let any
+     * authenticated borrower walk loan ids upward and harvest other borrowers' collections data.
+     * {@link #requireStaff()} closes that off.
+     *
+     * @throws ResourceNotFoundException if no case has been opened for this loan
+     * @throws BusinessException {@code FORBIDDEN_ROLE} if the caller is not staff
+     */
+    @Transactional(readOnly = true)
+    public CaseDetailView getCaseDetailByLoanId(Long loanId) {
+        requireStaff();
+        CollectionCase c = caseRepository.findFirstByLoanIdOrderByCreatedAtDesc(loanId)
+                .orElseThrow(() -> new ResourceNotFoundException("CollectionCase", "loan:" + loanId));
+        requireCaseOwnership(c);
+        return buildDetail(c);
+    }
+
+    /**
+     * Staff-only guard for {@link #getCaseDetailByLoanId}. Mirrors the established
+     * {@code requireStaff}/{@code rejectDsa} shape used elsewhere in the codebase (see
+     * {@code ApplicationController.requireStaff} in navix-loan) — reject BORROWER/ANONYMOUS,
+     * then reject DSA (a DSA is staff but must never reach borrower-identifying data).
+     * Duplicated locally rather than shared cross-module, matching how the loan module
+     * keeps its own copy rather than factoring it into navix-common.
+     */
+    private void requireStaff() {
+        CurrentActor actor = ActorContext.get();
+        String role = actor != null ? actor.role() : null;
+        if (role == null || "BORROWER".equals(role) || "ANONYMOUS".equals(role)) {
+            throw new BusinessException("FORBIDDEN_ROLE", "Staff role required");
+        }
+        if ("DSA".equals(role)) {
+            throw new BusinessException("FORBIDDEN_ROLE", "DSAs cannot view collections cases");
+        }
+    }
+
+    /**
+     * The collections worklist as enriched rows. Cases whose loan has settled (CLOSED/REPAID/
+     * WRITTEN_OFF) are dropped so a fully-repaid loan no longer surfaces as an open case.
+     */
+    @Transactional(readOnly = true)
+    public List<CaseView> listCaseViews() {
+        requireCollectionsStaff();
+        Long me = scopeOfficerId();
+        List<CollectionCase> cases = me != null
+                ? caseRepository.findByAssignedOfficerId(me).stream()
+                        .sorted(java.util.Comparator.comparing(CollectionCase::getCreatedAt,
+                                java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
+                        .toList()
+                : caseRepository.findAll(org.springframework.data.domain.Sort.by(
+                        org.springframework.data.domain.Sort.Direction.DESC, "createdAt"));
+        List<Long> loanIds = cases.stream().map(CollectionCase::getLoanId).filter(Objects::nonNull).toList();
+        Map<Long, LoanSummary> loanById = loanDirectory.findLoans(loanIds);
+        Map<Long, String> officerNames = officerNames(cases.stream()
+                .map(CollectionCase::getAssignedOfficerId).filter(Objects::nonNull).distinct().toList());
+        return cases.stream()
+                .map(c -> toListView(c, loanById, officerNames))
+                .filter(v -> v.loanStatus() == null || !TERMINAL_LOAN_STATUSES.contains(v.loanStatus()))
+                .toList();
+    }
+
+    /**
+     * The collections worklist: one row per live loan, past due or falling due within the next week.
+     *
+     * <p>Loan-driven, not case-driven. The DPD buckets used to list {@code collection_case} rows and
+     * nothing created those automatically, so an overdue borrower nobody had clicked "Open case" on
+     * appeared in no bucket at all — the register showed the bookkeeping, not the debt. A case is now
+     * an implementation detail created behind the first real action, so every case field here is
+     * simply null until then.
+     *
+     * <p>Four batched reads for the whole page (loans, cases, officer names, handled-by), never a
+     * lookup per row: the previous per-case {@code findLoan} alone cost three queries each.
+     */
+    @Transactional(readOnly = true)
+    public List<WorklistRow> worklist(LocalDate asOf) {
+        requireCollectionsStaff();
+        LocalDate at = asOf != null ? asOf : LocalDate.now(IST);
+        List<LoanSummary> loans = loanDirectory.listCollectible(at).stream()
+                .filter(loan -> loan.status() == null || !TERMINAL_LOAN_STATUSES.contains(loan.status()))
+                .toList();
+        if (loans.isEmpty()) {
+            return List.of();
+        }
+        return enrichRows(loans, scopeOfficerId());
+    }
+
+    /** One page of the worklist, with the total across every page under the same filters. */
+    public record WorklistPage(List<WorklistRow> rows, int page, int size, long total) {
+    }
+
+    /** A request is capped here; the export loops pages of this size rather than asking for the book. */
+    public static final int MAX_PAGE_SIZE = 200;
+
+    /**
+     * Columns whose value is DERIVED, so they cannot be filtered in SQL: {@code outstanding} is
+     * compute-on-read ({@code RepaymentService.outstandingAsOf}) and a SQL twin would be a second
+     * source of truth for what a borrower owes; the two names come out of the event trail. The
+     * {@code sql} strings are placeholders for {@link FilterColumns}' validation and are NEVER emitted
+     * — this registry is only handed to {@link FilterSpec#parse}, and matched in Java by
+     * {@link #matchesDerived}. Outstanding is rupees on the wire and paise stored (scale 100).
+     */
+    private static final FilterColumns DERIVED_COLUMNS = FilterColumns.builder()
+            .scaled("outstandingPaise", "derived_outstanding", 100, ColumnFilter.Kind.NUM)
+            .column("creditDecidedByName", "derived_credit_decided_by", ColumnFilter.Kind.IN)
+            .column("disbursedByName", "derived_disbursed_by", ColumnFilter.Kind.IN)
+            .build();
+
+    /** Sorts that need the derived value, so they run in Java over the filtered ids. */
+    private static final java.util.Set<String> JAVA_SORTS =
+            java.util.Set.of("outstandingPaise", "creditDecidedByName", "disbursedByName");
+
+    /**
+     * One page of the worklist: filtering, sorting and paging on STORED columns run in SQL
+     * ({@link CollectionsWorklistQuery}); only the ids on the page are enriched. When a derived column
+     * is filtered or sorted, the stored filters still narrow in SQL first, the derived value is then
+     * computed for just those ids and the survivors are paged in Java — the cost of the old
+     * whole-list read, but only for a request that actually asked for a derived filter/sort.
+     *
+     * <p>Scope is applied inside the SQL (an executive sees only their own cases) and the column
+     * filters are ANDed after it, so a filter can only narrow. {@code params} is the raw request map;
+     * {@link FilterSpec} drops anything that is not a registered column.
+     */
+    @Transactional(readOnly = true)
+    public WorklistPage worklistPage(String q, LocalDate from, LocalDate to, String bucket, LocalDate asOf,
+            int page, int size, String sort, String dir, Map<String, String> params) {
+        requireCollectionsStaff();
+        CollectionsWorklistQuery.WorklistFilter filter = worklistFilter(q, from, to, bucket, asOf);
+        FilterSpec sqlSpec = FilterSpec.parse(params, CollectionsWorklistQuery.FILTER_COLUMNS);
+        FilterSpec derived = FilterSpec.parse(params, DERIVED_COLUMNS);
+        int safeSize = Math.max(1, Math.min(size, MAX_PAGE_SIZE));
+        int safePage = Math.max(1, page);
+        int offset = (safePage - 1) * safeSize;
+
+        boolean javaSort = sort != null && JAVA_SORTS.contains(sort);
+        if (derived.isEmpty() && !javaSort) {
+            long total = worklistQuery.count(filter, sqlSpec);
+            List<Long> ids = worklistQuery.pageIds(filter, sqlSpec, offset, safeSize, sort, dir);
+            return new WorklistPage(rowsFor(ids), safePage, safeSize, total);
+        }
+
+        List<Long> ids = worklistQuery.allIds(filter, sqlSpec, javaSort ? null : sort, dir);
+        boolean needLoans = derived.get("outstandingPaise") != null || "outstandingPaise".equals(sort);
+        boolean needHandled = derived.get("creditDecidedByName") != null || derived.get("disbursedByName") != null
+                || "creditDecidedByName".equals(sort) || "disbursedByName".equals(sort);
+        Map<Long, LoanSummary> loans = needLoans ? loanDirectory.findLoans(ids) : Map.of();
+        Map<Long, HandledBy> handled = needHandled ? applicationActorDirectory.byLoanId(ids) : Map.of();
+
+        List<Long> kept = new ArrayList<>();
+        for (Long id : ids) {
+            if (matchesDerived(derived, loans.get(id), handled.getOrDefault(id, HandledBy.NONE))) {
+                kept.add(id);
+            }
+        }
+        if (javaSort) {
+            kept.sort(derivedComparator(sort, "asc".equalsIgnoreCase(dir), loans, handled)); // stable: SQL order breaks ties
+        }
+        int fromIdx = Math.min(offset, kept.size());
+        List<Long> pageIds = kept.subList(fromIdx, Math.min(fromIdx + safeSize, kept.size()));
+        return new WorklistPage(rowsFor(pageIds), safePage, safeSize, kept.size());
+    }
+
+    /** One bucket card: how many loans, and the derived balance across them. */
+    public record BucketSummary(String bucket, long n, long outstandingPaise) {
+    }
+
+    /**
+     * The bucket cards: a row per DPD bucket over the caller's whole scoped collectible set. They
+     * deliberately ignore search, window, bucket and column filters — they are the page's navigation and
+     * would collapse as it is used. The count is a grouped read of stored columns; the balance is the
+     * DERIVED outstanding (compute-on-read), summed in Java over the bucket's ids exactly as the old
+     * whole-list path did, so the cards mean what they always meant.
+     */
+    @Transactional(readOnly = true)
+    public List<BucketSummary> worklistSummary(LocalDate asOf) {
+        requireCollectionsStaff();
+        Map<Long, String> bucketById = worklistQuery.bucketsInScope(worklistFilter(null, null, null, null, asOf));
+        Map<Long, LoanSummary> loans = bucketById.isEmpty() ? Map.of() : loanDirectory.findLoans(bucketById.keySet());
+        Map<String, long[]> acc = new LinkedHashMap<>();
+        for (com.navix.collections.domain.DpdBucket b : com.navix.collections.domain.DpdBucket.values()) {
+            acc.put(b.name(), new long[2]);
+        }
+        bucketById.forEach((id, bucket) -> {
+            long[] slot = acc.get(bucket);
+            slot[0]++;
+            LoanSummary l = loans.get(id);
+            slot[1] += l == null || l.outstandingPaise() == null ? 0 : l.outstandingPaise();
+        });
+        return acc.entrySet().stream().map(e -> new BucketSummary(e.getKey(), e.getValue()[0], e.getValue()[1])).toList();
+    }
+
+    /**
+     * The distinct values of one column's checklist, inside the caller's scope and under the OTHER
+     * columns' filters. Stored columns come from SQL ({@link CollectionsWorklistQuery#facet}); the two
+     * handled-by names are derived, so their values are read off the in-scope ids. Identity columns
+     * and money columns are not facetable, so they answer with an empty list (never a dropdown of
+     * borrowers). A SQL facet is not narrowed by an active derived filter — it may offer a value
+     * that then matches nothing, never one from outside the caller's scope.
+     */
+    @Transactional(readOnly = true)
+    public SqlFacets.Facet worklistFacet(String column, String q, LocalDate from, LocalDate to, String bucket,
+            LocalDate asOf, Map<String, String> params) {
+        requireCollectionsStaff();
+        CollectionsWorklistQuery.WorklistFilter filter = worklistFilter(q, from, to, bucket, asOf);
+        FilterSpec sqlSpec = FilterSpec.parse(params, CollectionsWorklistQuery.FILTER_COLUMNS);
+        if (CollectionsWorklistQuery.FILTER_COLUMNS.get(column) != null) {
+            return worklistQuery.facet(filter, sqlSpec.without(column), column);
+        }
+        if (!"creditDecidedByName".equals(column) && !"disbursedByName".equals(column)) {
+            return new SqlFacets.Facet(List.of(), false);
+        }
+        FilterSpec derived = FilterSpec.parse(params, DERIVED_COLUMNS).without(column);
+        List<Long> ids = worklistQuery.allIds(filter, sqlSpec, null, null);
+        Map<Long, LoanSummary> loans = derived.get("outstandingPaise") != null
+                ? loanDirectory.findLoans(ids) : Map.of();
+        Map<Long, HandledBy> handled = applicationActorDirectory.byLoanId(ids);
+        java.util.TreeSet<String> names = new java.util.TreeSet<>();
+        boolean blank = false;
+        for (Long id : ids) {
+            HandledBy h = handled.getOrDefault(id, HandledBy.NONE);
+            if (!matchesDerived(derived, loans.get(id), h)) {
+                continue;
+            }
+            String name = "creditDecidedByName".equals(column) ? h.creditDecidedByName() : h.disbursedByName();
+            if (name == null || name.isEmpty()) {
+                blank = true;
+            } else {
+                names.add(name);
+            }
+        }
+        List<String> values = new ArrayList<>(names);
+        if (blank) {
+            values.add(ColumnFilter.BLANK);
+        }
+        boolean truncated = values.size() > SqlFacets.MAX_VALUES;
+        return new SqlFacets.Facet(truncated ? values.subList(0, SqlFacets.MAX_VALUES) : values, truncated);
+    }
+
+    private CollectionsWorklistQuery.WorklistFilter worklistFilter(String q, LocalDate from, LocalDate to,
+            String bucket, LocalDate asOf) {
+        LocalDate today = LocalDate.now(IST);
+        boolean scoped = OFFICER_ROLE.equals(ActorContext.get().effectiveRole());
+        return new CollectionsWorklistQuery.WorklistFilter(q, from, to, bucket, scoped, scopeOfficerId(),
+                asOf != null ? asOf : today, today);
+    }
+
+    /** Rows for these ids, in the order given; ids the directory no longer resolves are skipped. */
+    private List<WorklistRow> rowsFor(List<Long> ids) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, LoanSummary> byId = loanDirectory.findLoans(ids);
+        List<LoanSummary> ordered = ids.stream().map(byId::get).filter(Objects::nonNull).toList();
+        return enrichRows(ordered, null);
+    }
+
+    /** Java twin of the SQL filters, for the derived columns. Every active derived filter must hold. */
+    private static boolean matchesDerived(FilterSpec derived, LoanSummary loan, HandledBy handled) {
+        for (Map.Entry<String, ColumnFilter> e : derived.filters().entrySet()) {
+            boolean ok = switch (e.getKey()) {
+                case "outstandingPaise" -> inPaiseRange((ColumnFilter.Num) e.getValue(), loan == null ? null : loan.outstandingPaise());
+                case "creditDecidedByName" -> inNames((ColumnFilter.In) e.getValue(), handled.creditDecidedByName());
+                case "disbursedByName" -> inNames((ColumnFilter.In) e.getValue(), handled.disbursedByName());
+                default -> true;
+            };
+            if (!ok) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Bounds are rupees; the same display→stored conversion as {@code SqlFilter} (HALF_UP to whole paise). */
+    private static boolean inPaiseRange(ColumnFilter.Num num, Long paise) {
+        if (paise == null) {
+            return false;
+        }
+        if (num.min() != null && paise < num.min().multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP).longValueExact()) {
+            return false;
+        }
+        return num.max() == null
+                || paise <= num.max().multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP).longValueExact();
+    }
+
+    private static boolean inNames(ColumnFilter.In in, String name) {
+        return in.values().contains(name == null || name.isEmpty() ? ColumnFilter.BLANK : name);
+    }
+
+    private static Comparator<Long> derivedComparator(String sort, boolean asc, Map<Long, LoanSummary> loans,
+            Map<Long, HandledBy> handled) {
+        // Nulls last in either direction, as the SQL sorts do.
+        Comparator<Long> byValue = switch (sort) {
+            case "outstandingPaise" -> Comparator.comparing(
+                    (Long id) -> loans.get(id) == null ? null : loans.get(id).outstandingPaise(),
+                    asc ? Comparator.nullsLast(Comparator.<Long>naturalOrder())
+                        : Comparator.nullsLast(Comparator.<Long>reverseOrder()));
+            default -> Comparator.comparing(
+                    (Long id) -> {
+                        HandledBy h = handled.getOrDefault(id, HandledBy.NONE);
+                        String n = "creditDecidedByName".equals(sort) ? h.creditDecidedByName() : h.disbursedByName();
+                        return n == null || n.isEmpty() ? null : n.toLowerCase(java.util.Locale.ROOT);
+                    },
+                    asc ? Comparator.nullsLast(Comparator.<String>naturalOrder())
+                        : Comparator.nullsLast(Comparator.<String>reverseOrder()));
+        };
+        return byValue;
+    }
+
+    /**
+     * Turns loan snapshots into worklist rows in the order given: four batched reads (cases, officer
+     * names, handled-by, trust) however many loans, never a lookup per row. Shared by the whole
+     * worklist and by {@link #worklistPage}, which hands it only the ids on the page — so a page
+     * costs a page, not the book.
+     *
+     * @param scopeOfficer when non-null, rows whose case is not assigned to this officer are dropped
+     *     (the whole-worklist path scopes here; the SQL page path already scoped in the query)
+     */
+    private List<WorklistRow> enrichRows(List<LoanSummary> loans, Long scopeOfficer) {
+        if (loans.isEmpty()) {
+            return List.of();
+        }
+        List<Long> loanIds = loans.stream().map(LoanSummary::loanId).filter(Objects::nonNull).toList();
+
+        Map<Long, CollectionCase> caseByLoanId = new LinkedHashMap<>();
+        for (CollectionCase c : caseRepository.findByLoanIdIn(loanIds)) {
+            caseByLoanId.putIfAbsent(c.getLoanId(), c);
+        }
+        Map<Long, String> officerNames = officerNames(caseByLoanId.values().stream()
+                .map(CollectionCase::getAssignedOfficerId).filter(Objects::nonNull).distinct().toList());
+        Map<Long, HandledBy> handledBy = applicationActorDirectory.byLoanId(loanIds);
+        Map<Long, com.navix.common.loan.TrustSignals> trustByCustomer = customerTrustDirectory.forCustomers(
+                loans.stream().map(LoanSummary::customerId).filter(Objects::nonNull).distinct().toList());
+
+        Long me = scopeOfficer;
+        return loans.stream().filter(loan -> {
+            if (me == null) return true;
+            CollectionCase c = caseByLoanId.get(loan.loanId());
+            return c != null && me.equals(c.getAssignedOfficerId());
+        }).map(loan -> {
+            CollectionCase c = caseByLoanId.get(loan.loanId());
+            HandledBy handled = handledBy.getOrDefault(loan.loanId(), HandledBy.NONE);
+            int dpd = dpd(loan);
+            return new WorklistRow(
+                    loan.loanId(), dpd, dpdCalculator.bucket(dpd), loan.preDue(),
+                    c == null ? null : c.getId(),
+                    c == null ? null : c.getAssignedOfficerId(),
+                    c == null ? null : officerNames.get(c.getAssignedOfficerId()),
+                    c == null ? null : c.getCreatedAt(),
+                    handled.creditDecidedByName(), handled.disbursedByName(),
+                    loan, trustByCustomer.get(loan.customerId()));
+        }).toList();
+    }
+
+    /**
+     * Batched id → name for a page of officers, one {@link StaffDirectory#namesFor} call for the
+     * whole page. An id that does not resolve is simply absent from the map rather than mapped to
+     * {@code null} the way the old per-id loop left it — equivalent for every caller here, since
+     * they all read it with {@code .get(id)}, which returns {@code null} either way. Left as a
+     * standalone comment so nobody "fixes" this back into a {@code containsKey} check later.
+     */
+    private Map<Long, String> officerNames(List<Long> officerIds) {
+        return new HashMap<>(staffDirectory.namesFor(officerIds));
+    }
+
+    /** Loans eligible to open a case against (ACTIVE/OVERDUE, due on or before {@code asOf}). */
+    @Transactional(readOnly = true)
+    public List<LoanSummary> collectibleLoans(LocalDate asOf) {
+        // Name, PAN, mobile, employer and salary for the whole live book. No screen calls this any
+        // more; the collections desk (and the demo seed, as ADMIN) are the only legitimate readers.
+        requireCollectionsDesk();
+        return loanDirectory.listCollectible(asOf);
+    }
+
+    /**
+     * The pre-due watchlist behind the UPCOMING DPD bucket: live loans whose repayment date has not
+     * arrived yet, soonest first.
+     *
+     * <p>This exists because UPCOMING was otherwise unreachable. The worklist in
+     * {@link #listCaseViews()} renders {@code collection_case} rows and nothing else, and a case is
+     * only ever opened against a loan that is already due -- so a loan still ahead of its due date
+     * could never appear in the bucket named for exactly that state.
+     *
+     * <p><b>Strictly read-only.</b> It deliberately does not call {@link #openCase(Long)}: opening a
+     * case flips the loan into IN_COLLECTIONS, which is a statement that the loan is being chased.
+     * A current loan is watched, not chased, and nothing here writes.
+     *
+     * <p>Loans that already have a case are dropped -- they surface through {@link #listCaseViews()}
+     * with a real case id, and listing them here too would double them inside one bucket.
+     *
+     * @throws BusinessException {@code FORBIDDEN_ROLE} if the caller is not staff (or is a DSA)
+     */
+    @Transactional(readOnly = true)
+    public List<UpcomingLoanView> upcomingWatchlist(LocalDate asOf) {
+        requireStaff();
+        if (scopeOfficerId() != null) {
+            return List.of(); // an executive's book is only their assigned cases
+        }
+        LocalDate on = asOf != null ? asOf : LocalDate.now(IST);
+        List<LoanSummary> loans = loanDirectory.listUpcoming(on);
+        if (loans.isEmpty()) {
+            // Short-circuit: findByLoanIdIn is not valid SQL against an empty collection.
+            return List.of();
+        }
+        Set<Long> withCase = caseRepository
+                .findByLoanIdIn(loans.stream().map(LoanSummary::loanId).toList()).stream()
+                .map(CollectionCase::getLoanId)
+                .collect(Collectors.toSet());
+        return loans.stream()
+                .filter(l -> !withCase.contains(l.loanId()))
+                .map(l -> new UpcomingLoanView(l.loanId(), l.customerId(), l.borrowerName(),
+                        l.outstandingPaise(), l.dueDate(),
+                        (int) ChronoUnit.DAYS.between(on, l.dueDate()), l.status()))
+                .toList();
+    }
+
+    /** ACTIVE collections officers, for the assignee picker (activation gating). */
+    @Transactional(readOnly = true)
+    public List<StaffSummary> assignableOfficers() {
+        return staffDirectory.listActive(OFFICER_ROLE);
+    }
+
+    /** Load the case entity (used internally and by interaction logging). */
+    @Transactional(readOnly = true)
+    public CollectionCase getCase(UUID caseId) {
+        return caseRepository.findById(caseId)
+                .orElseThrow(() -> new ResourceNotFoundException("CollectionCase", String.valueOf(caseId)));
+    }
+
+    /**
+     * Assign a collections officer to a case. Assigning is a **collections-management** action:
+     * only a {@code COLLECTION_HEAD} (or ADMIN) may do it — a Collection Executive can log
+     * interactions and propose settlements, but not assign cases. The officer being assigned must
+     * itself be an ACTIVE {@code COLLECTION_EXECUTIVE} (activation gating).
+     *
+     * @throws BusinessException {@code FORBIDDEN_ROLE} if the actor is not a Collection Head/ADMIN
+     * @throws BusinessException {@code INVALID_OFFICER} if the officer is not an active executive
+     */
+    @Transactional
+    public CollectionCase assignOfficer(UUID caseId, Long officerId) {
+        CurrentActor actor = ActorContext.get();
+        String actorRole = actor != null ? actor.role() : null;
+        if (!MANAGER_ROLE.equals(actorRole) && !"ADMIN".equals(actorRole)) {
+            throw new BusinessException("FORBIDDEN_ROLE",
+                    "Only the Collection Head can assign a case to an officer");
+        }
+        CollectionCase c = getCase(caseId);
+        boolean selfAssign = ("COLLECTION_HEAD".equals(actorRole) || "ADMIN".equals(actorRole))
+                && officerId != null && officerId.equals(actorStaffIdOrNull());
+        if (!selfAssign && !staffDirectory.isActiveWithRole(officerId, OFFICER_ROLE)) {
+            throw new BusinessException("INVALID_OFFICER",
+                    "The assignee must be an ACTIVE collections executive");
+        }
+        c.setAssignedOfficerId(officerId);
+        return caseRepository.save(c);
+    }
+
+    /**
+     * Log a borrower interaction on a case. Enforces the proof rule: when the
+     * outcome indicates payment ({@code PAID}) a non-blank {@code proofRef}
+     * (transaction id / screenshot reference) is mandatory.
+     *
+     * @throws BusinessException {@code PROOF_REQUIRED} if a PAID outcome lacks proof
+     */
+    @Transactional
+    public InteractionLog logInteraction(UUID caseId, String type, String outcome,
+                                         LocalDate promiseToPayDate, String proofRef) {
+        CollectionCase c = getCase(caseId);
+        requireCaseOwnership(c);
+        if (PAID_OUTCOME.equalsIgnoreCase(outcome) && (proofRef == null || proofRef.isBlank())) {
+            throw new BusinessException("PROOF_REQUIRED",
+                    "A PAID outcome requires a proof reference (transaction id or screenshot)");
+        }
+        InteractionLog log = new InteractionLog();
+        log.setCollectionCaseId(c.getId());
+        log.setType(type);
+        log.setOutcome(outcome);
+        log.setPromiseToPayDate(promiseToPayDate);
+        log.setProofRef(proofRef);
+        log.setLoggedAt(Instant.now());
+        log.setLoggedByStaffId(actorStaffIdOrNull());
+        return interactionRepository.save(log);
+    }
+
+    @Transactional(readOnly = true)
+    public List<InteractionLog> listInteractions(UUID caseId) {
+        // Read from the loan detail dialog by every non-DSA staff role; DSA never.
+        requireCollectionsStaff();
+        caseRepository.findById(caseId).ifPresent(this::requireCaseOwnership);
+        return interactionRepository.findByCollectionCaseIdOrderByLoggedAtDesc(caseId);
+    }
+
+    /**
+     * Own staff id when the caller works as a COLLECTION_EXECUTIVE (real role or "work as"), else
+     * null = unscoped. Scoping only — authorization still keys off the real role.
+     */
+    private Long scopeOfficerId() {
+        return OFFICER_ROLE.equals(ActorContext.get().effectiveRole()) ? actorStaffIdOrNull() : null;
+    }
+
+    /** An executive may only touch cases assigned to them. */
+    private void requireCaseOwnership(CollectionCase c) {
+        if (!OFFICER_ROLE.equals(ActorContext.get().effectiveRole())) return;
+        Long me = actorStaffIdOrNull();
+        if (me == null || !me.equals(c.getAssignedOfficerId())) {
+            throw new BusinessException("CASE_NOT_ASSIGNED", "This case is not assigned to you");
+        }
+    }
+
+    /** For sibling services (settlements, payments): throws CASE_NOT_ASSIGNED when out of scope. */
+    @Transactional(readOnly = true)
+    public void assertCaseAccessible(UUID caseId) {
+        requireCaseOwnership(getCase(caseId));
+    }
+
+    /** Ids of the cases the caller is scoped to, or null when unscoped. */
+    @Transactional(readOnly = true)
+    public Set<UUID> scopedCaseIdsOrNull() {
+        Long me = scopeOfficerId();
+        if (OFFICER_ROLE.equals(ActorContext.get().effectiveRole()) && me == null) return Set.of();
+        return me == null ? null : caseRepository.findByAssignedOfficerId(me).stream()
+                .map(CollectionCase::getId).collect(Collectors.toSet());
+    }
+
+    /** The acting staff id, or null when it isn't resolvable (system paths) — never a guess. */
+    private Long actorStaffIdOrNull() {
+        try {
+            return Long.valueOf(ActorContext.get().id());
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    // --- view builders -----------------------------------------------------
+
+    private CaseDetailView buildDetail(CollectionCase c) {
+        LoanSummary loan = loanDirectory.findLoan(c.getLoanId()).orElse(null);
+        int dpd = dpd(loan);
+        return new CaseDetailView(c.getId(), c.getLoanId(), c.getAssignedOfficerId(),
+                officerName(c.getAssignedOfficerId()), c.getCreatedAt(),
+                dpd, dpdCalculator.bucket(dpd), loan);
+    }
+
+    private CaseView toListView(CollectionCase c) {
+        LoanSummary loan = loanDirectory.findLoan(c.getLoanId()).orElse(null);
+        int dpd = dpd(loan);
+        return new CaseView(c.getId(), c.getLoanId(), c.getAssignedOfficerId(),
+                officerName(c.getAssignedOfficerId()), c.getCreatedAt(),
+                dpd, dpdCalculator.bucket(dpd),
+                loan != null ? loan.status() : null,
+                loan != null ? loan.borrowerName() : null,
+                loan != null ? loan.outstandingPaise() : null,
+                loan != null ? loan.dueDate() : null);
+    }
+
+    /** Batched variant of {@link #toListView(CollectionCase)} for {@link #listCaseViews()} — reads
+     *  pre-resolved loans/officer names instead of hitting {@link LoanDirectory#findLoan} and
+     *  {@link StaffDirectory#findStaff} per row. */
+    private CaseView toListView(CollectionCase c, Map<Long, LoanSummary> loanById,
+                                Map<Long, String> officerNames) {
+        LoanSummary loan = c.getLoanId() == null ? null : loanById.get(c.getLoanId());
+        int dpd = dpd(loan);
+        Long officerId = c.getAssignedOfficerId();
+        return new CaseView(c.getId(), c.getLoanId(), officerId,
+                officerId == null ? null : officerNames.get(officerId), c.getCreatedAt(),
+                dpd, dpdCalculator.bucket(dpd),
+                loan != null ? loan.status() : null,
+                loan != null ? loan.borrowerName() : null,
+                loan != null ? loan.outstandingPaise() : null,
+                loan != null ? loan.dueDate() : null);
+    }
+
+    /**
+     * The collections worklist carries borrower name, masked PAN, employer and salary for every live
+     * loan, so it is customer data in the sense the DSA firewall means. A DSA token satisfies
+     * {@code hasRole("STAFF")} at the namespace boundary — the audience is staff — so the role has to
+     * be rejected here, exactly as {@code CustomerController.requireStaff} does.
+     */
+    /** The collections desk itself — the roles that act on cases, not just read them. */
+    private void requireCollectionsDesk() {
+        String role = ActorContext.get().role();
+        if (!"COLLECTION_HEAD".equals(role) && !"COLLECTION_EXECUTIVE".equals(role) && !"ADMIN".equals(role)) {
+            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role COLLECTION_HEAD, COLLECTION_EXECUTIVE or ADMIN");
+        }
+    }
+
+    private void requireCollectionsStaff() {
+        String role = ActorContext.get().role();
+        if (role == null || "BORROWER".equals(role) || "ANONYMOUS".equals(role)) {
+            throw new BusinessException("FORBIDDEN_ROLE", "Staff role required");
+        }
+        if ("DSA".equals(role)) {
+            throw new BusinessException("FORBIDDEN_ROLE", "DSAs cannot view customer data");
+        }
+    }
+
+    private int dpd(LoanSummary loan) {
+        if (loan == null || loan.dueDate() == null) {
+            return 0;
+        }
+        return dpdCalculator.daysPastDue(loan.dueDate(), LocalDate.now(IST));
+    }
+
+    private String officerName(Long officerId) {
+        if (officerId == null) {
+            return null;
+        }
+        return staffDirectory.findStaff(officerId).map(StaffSummary::name).orElse(null);
+    }
+}

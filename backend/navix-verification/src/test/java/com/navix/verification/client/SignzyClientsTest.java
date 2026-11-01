@@ -1,0 +1,486 @@
+package com.navix.verification.client;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withBadRequest;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.navix.common.verification.ProviderFailureDetails;
+import com.navix.verification.dto.SignzyDtos.AadhaarResponse;
+import com.navix.verification.dto.SignzyDtos.BankVerificationResponse;
+import com.navix.verification.dto.SignzyDtos.ContractInitiateRequest;
+import com.navix.verification.dto.SignzyDtos.ContractInitiateResponse;
+import com.navix.verification.dto.SignzyDtos.ContractPullResponse;
+import com.navix.verification.dto.SignzyDtos.ContractSignaturePlacement;
+import com.navix.verification.dto.SignzyDtos.ContractSigner;
+import com.navix.verification.dto.SignzyDtos.CrifResponse;
+import com.navix.verification.dto.SignzyDtos.DigiLockerSession;
+import com.navix.verification.dto.SignzyDtos.EmailV2Response;
+import com.navix.verification.dto.SignzyDtos.ExperianResponse;
+import com.navix.verification.dto.SignzyDtos.LivenessResult;
+import com.navix.verification.dto.SignzyDtos.LivenessSession;
+import com.navix.verification.dto.SignzyDtos.PanResponse;
+import com.navix.verification.exception.TerminalVerificationException;
+import com.navix.verification.exception.VerificationException;
+import com.navix.verification.support.VendorEnvelopes;
+import java.util.Arrays;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.RestClient;
+
+/**
+ * Offline tests for the Signzy clients: each binds a {@link MockRestServiceServer} to a fresh
+ * {@link RestClient.Builder}, stubs the endpoint with a representative Signzy envelope (from
+ * {@code docs/signzy/signzy-apis.json}), and asserts the mapped DTO.
+ */
+class SignzyClientsTest {
+
+    private static final String BASE = "https://signzy.test";
+
+    private record Bound(MockRestServiceServer server, RestClient restClient) {
+    }
+
+    private Bound bind() {
+        RestClient.Builder builder = RestClient.builder().baseUrl(BASE);
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        return new Bound(server, builder.build());
+    }
+
+    private void stub(MockRestServiceServer server, String endpoint, String json) {
+        server.expect(requestTo(BASE + endpoint))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess(json, MediaType.APPLICATION_JSON));
+    }
+
+    @Test
+    void bankVerificationMapsActiveAndName() {
+        Bound b = bind();
+        stub(b.server(), "/api/v3/bankaccountverification/pennydrop-v1", """
+                {"result":{"active":"yes","reason":"success","nameMatch":"yes",
+                "signzyReferenceId":"SGZ-REF-1","auditTrail":{"nature":"BANK RRN","value":"334912557776"},
+                "bankTransfer":{"response":"Transaction Successful","beneName":"RAVI KUMAR","beneIFSC":"KKBK0008066"}}}
+                """);
+
+        BankVerificationResponse r = new SignzyBankVerificationClient(b.restClient())
+                .verify("00123456789", "KKBK0008066", "Ravi Kumar");
+
+        assertThat(r.txnId()).isEqualTo("SGZ-REF-1");
+        assertThat(r.active()).isTrue();
+        assertThat(r.beneName()).isEqualTo("RAVI KUMAR");
+        assertThat(r.beneIfsc()).isEqualTo("KKBK0008066");
+        b.server().verify();
+    }
+
+    @Test
+    void emailV2MapsDeliverabilityAndEnrichment() {
+        Bound b = bind();
+        // Booleans arrive as JSON strings; enrichment lives under personalDetails/companyDetails.
+        stub(b.server(), "/api/v3/email/verificationV2", """
+                {"result":{"emailId":"vikram@sampleco.com","validEmail":"true","status":"valid",
+                "freeEmail":"false","didYouMean":"","domain":"sampleco.com","mxFound":"true",
+                "mxRecord":"sampleco-com.mail.protection.outlook.com","smtpProvider":"microsoft",
+                "personalDetails":{"name":"VIKRAM SHARMA"},"companyDetails":{"name":"SAMPLECO"}}}
+                """);
+
+        EmailV2Response r = new SignzyEmailClient(b.restClient()).verify("vikram@sampleco.com");
+
+        assertThat(r.validEmail()).isTrue();
+        assertThat(r.status()).isEqualTo("valid");
+        assertThat(r.freeEmail()).isFalse();
+        assertThat(r.mxFound()).isTrue();
+        assertThat(r.smtpProvider()).isEqualTo("microsoft");
+        assertThat(r.personName()).isEqualTo("VIKRAM SHARMA");
+        assertThat(r.companyName()).isEqualTo("SAMPLECO");
+        b.server().verify();
+    }
+
+    @Test
+    void pan206abMapsTopLevelFields() {
+        Bound b = bind();
+        stub(b.server(), "/api/v3/pan/compliance-206-individual-search", """
+                {"number":"ABCPE1234Z","entityName":"  FXXL NXXE","unMaskedName":"  FIRST NAME",
+                "panAllotmentDate":"20-07-2010",
+                "panAadhaarLinkStatus":"linked","compliant":"true","isSpecified":"No","panStatus":"operative"}
+                """);
+
+        PanResponse r = new SignzyPanClient(b.restClient()).verify("ABCPE1234Z");
+
+        assertThat(r.number()).isEqualTo("ABCPE1234Z");
+        assertThat(r.entityName()).isEqualTo("FXXL NXXE");
+        assertThat(r.unMaskedName()).isEqualTo("FIRST NAME");
+        assertThat(r.panAadhaarLinkStatus()).isEqualTo("linked");
+        assertThat(r.isSpecified()).isEqualTo("No");
+        assertThat(r.panStatus()).isEqualTo("operative");
+        b.server().verify();
+    }
+
+    @Test
+    void reverseGeocodeMapsAddress() {
+        Bound b = bind();
+        stub(b.server(), "/api/v3/geocoding/reverse-geocode", """
+                {"address":"RXJ8+22, VALUKKUPARAI, TAMIL NADU 641032, INDIA","latitude":"10.83","longitude":"76.96",
+                "confidenceScore":0.7,"city":"VALUKKUPARAI","state":"TAMIL NADU","stateCode":"TN",
+                "country":"INDIA","countryCode":"IN","zipcode":"641032"}
+                """);
+
+        var r = new SignzyGeocodeClient(b.restClient()).reverseGeocode(10.83, 76.96);
+
+        assertThat(r.address()).contains("VALUKKUPARAI");
+        assertThat(r.state()).isEqualTo("TAMIL NADU");
+        assertThat(r.zipcode()).isEqualTo("641032");
+        assertThat(r.countryCode()).isEqualTo("IN");
+        b.server().verify();
+    }
+
+    @Test
+    void experianMapsScoreAndFacts() {
+        Bound b = bind();
+        stub(b.server(), "/api/v3/bureau/experian-lite", """
+                {"statusCode":200,"message":"SUCCESS","data":{"jsonExperianReport":{
+                "CreditProfileHeader":{"ReportNumber":"1712213567495","Version":"V2.4"},
+                "SCORE":{"FCIREXScore":742},
+                "CAIS_Account":{"CAIS_Summary":{"Credit_Account":{"CreditAccountTotal":"5",
+                "CreditAccountActive":"3","CreditAccountClosed":"2","CreditAccountDefault":"0"},
+                "Total_Outstanding_Balance":{"Outstanding_Balance_All":"120000"}}},
+                "TotalCAPS_Summary":{"TotalCAPSLast30Days":"1"}}}}
+                """);
+
+        ExperianResponse r = new SignzyExperianClient(b.restClient(), new ObjectMapper(), "", "3.109.169.131")
+                .pull("ABCPE1234Z", "Ravi Kumar", "9999999999", "1990-01-01");
+
+        assertThat(r.txnId()).isEqualTo("1712213567495");
+        assertThat(r.creditScore()).isEqualTo(742);
+        assertThat(r.noRecord()).isFalse();
+        assertThat(r.facts()).isNotNull();
+        assertThat(r.facts().activeAccounts()).isEqualTo(3);
+        assertThat(r.facts().totalBalanceRupees()).isEqualTo(120000L);
+        assertThat(r.rawResponseJson()).contains("\"jsonExperianReport\"", "\"ReportNumber\":\"1712213567495\"");
+        b.server().verify();
+    }
+
+    @Test
+    void crifMapsScore() {
+        Bound b = bind();
+        stub(b.server(), "/api/v3/bureau/crif", """
+                {"statusCode":200,"message":"success","data":{"crifReport":{"INDV-REPORT-FILE":{
+                "INDV-REPORTS":[{"INDV-REPORT":{"SCORES":[{"SCORE-VALUE":"690","SCORE-FACTORS":"SF02|"}]}}]}}}}
+                """);
+
+        CrifResponse r = new SignzyCrifClient(b.restClient())
+                .pull("ABCPE1234Z", "Ravi Kumar", "9999999999", "1990-01-01");
+
+        assertThat(r.score()).isEqualTo(690);
+        assertThat(r.noRecord()).isFalse();
+        assertThat(r.rawResponseJson()).contains("\"crifReport\"", "\"SCORE-FACTORS\":\"SF02|\"");
+        b.server().verify();
+    }
+
+    @Test
+    void livenessCreateUrlMapsSession() {
+        Bound b = bind();
+        stub(b.server(), "/api/v3/liveness-secure/createUrl", """
+                {"token":"TKN-1","consumerId":"CID-1",
+                "videoUrl":"https://liveliness.signzy.app/consumer/CID-1/token/TKN-1"}
+                """);
+
+        LivenessSession s = new SignzyLivenessClient(b.restClient())
+                .createUrl("https://s3/presigned-aadhaar.jpg");
+
+        assertThat(s.token()).isEqualTo("TKN-1");
+        assertThat(s.consumerId()).isEqualTo("CID-1");
+        assertThat(s.videoUrl()).contains("/token/TKN-1");
+        b.server().verify();
+    }
+
+    @Test
+    void livenessCreateUrlRequestOmitsNullMatchImage() throws Exception {
+        // Signzy 400s on "matchImage":null ("must be an array") — it must be absent for liveness-only.
+        String withNull = new ObjectMapper().writeValueAsString(
+                new com.navix.verification.dto.SignzyDtos.LivenessCreateUrlRequest(null, 0.6));
+        assertThat(withNull).doesNotContain("matchImage");
+
+        String withImage = new ObjectMapper().writeValueAsString(
+                new com.navix.verification.dto.SignzyDtos.LivenessCreateUrlRequest(
+                        java.util.List.of("https://ref.jpg"), 0.6));
+        assertThat(withImage).contains("matchImage");
+    }
+
+    @Test
+    void livenessGetDataMapsResult() {
+        Bound b = bind();
+        stub(b.server(), "/api/v3/liveness-secure/getData", """
+                {"result":{"token":"TKN-1","isUsed":1,"passiveLiveliness":{"liveness":true,"score":0.97},
+                "faceMatch":{"verified":true,"matchPercentage":"98.00%"},
+                "capturedImage":"https://persist.signzy.tech/selfie.jpg","status":true}}
+                """);
+
+        LivenessResult r = new SignzyLivenessClient(b.restClient()).getData("TKN-1");
+
+        assertThat(r.completed()).isTrue();
+        assertThat(r.txnId()).isEqualTo("TKN-1");
+        assertThat(r.live()).isTrue();
+        assertThat(r.livenessScore()).isEqualTo(0.97);
+        assertThat(r.faceVerified()).isTrue();
+        assertThat(r.matchPercentage()).isEqualTo("98.00%");
+        assertThat(r.capturedImage()).contains("selfie.jpg");
+        assertThat(r.overallStatus()).isTrue();
+        b.server().verify();
+    }
+
+    @Test
+    void livenessGetDataReturnsPendingOn404() {
+        Bound b = bind();
+        // Signzy returns 404 "Video Verification is not completed till now" until the borrower finishes.
+        b.server().expect(requestTo(BASE + "/api/v3/liveness-secure/getData"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .body("{\"error\":{\"message\":\"Video Verification is not completed till now\"}}")
+                        .contentType(MediaType.APPLICATION_JSON));
+
+        LivenessResult r = new SignzyLivenessClient(b.restClient()).getData("TKN-1");
+
+        assertThat(r.completed()).isFalse();
+        assertThat(r.txnId()).isEqualTo("TKN-1");
+        assertThat(r.live()).isNull();
+        b.server().verify();
+    }
+
+    @Test
+    void digilockerCreateUrlAndEAadhaar() {
+        Bound b = bind();
+        stub(b.server(), "/api/v3/digilocker-v2/createUrl", """
+                {"result":{"url":"https://api.digitallocker.gov.in/.../authorize?state=REQ-1","requestId":"REQ-1"}}
+                """);
+        DigiLockerSession s = new SignzyDigiLockerClient(b.restClient())
+                .createUrl("https://navix.app/kyc/callback?app=1&sid=n", true);
+        assertThat(s.requestId()).isEqualTo("REQ-1");
+        assertThat(s.url()).contains("authorize");
+        b.server().verify();
+
+        Bound b2 = bind();
+        stub(b2.server(), "/api/v3/digilocker-v2/geteAadhaar", """
+                {"result":{"name":"  NAME","uid":"xxxxxxxx0353","dob":"01/01/1990","gender":"FEMALE",
+                "x509Data":{"validAadhaarDSC":"yes","subjectName":"DS NATIONAL E-GOVERNANCE DIVISION 1"},"address":"addr",
+                "splitAddress":{"district":["THANJAVUR"],"state":[["TAMIL NADU","TN"]],"city":["KUMBAKONAM"],
+                "pincode":"612001","country":["IN","IND","INDIA"],"addressLine":"Address","landMark":"KUMBAKONAM"},
+                "photo":"https://persist.signzy.tech/p.jpeg","aadhaarPdf":"https://persist.signzy.tech/a.pdf",
+                "aadhaarJpeg":"https://persist.signzy.tech/a.jpeg","eAadhaarXmlLink":"https://persist.signzy.tech/a.xml"}}
+                """);
+        AadhaarResponse a = new SignzyDigiLockerClient(b2.restClient()).getEAadhaar("REQ-1");
+        assertThat(a.fullName()).isEqualTo("NAME");
+        assertThat(a.maskedUid()).isEqualTo("xxxxxxxx0353");
+        assertThat(a.validDsc()).isTrue();
+        assertThat(a.state()).isEqualTo("TAMIL NADU");
+        assertThat(a.district()).isEqualTo("THANJAVUR");
+        assertThat(a.city()).isEqualTo("KUMBAKONAM");
+        assertThat(a.country()).isEqualTo("INDIA");
+        assertThat(a.addressLine()).isEqualTo("Address");
+        assertThat(a.landmark()).isEqualTo("KUMBAKONAM");
+        assertThat(a.dscSubject()).isEqualTo("DS NATIONAL E-GOVERNANCE DIVISION 1");
+        assertThat(a.pdfUrl()).endsWith(".pdf");
+        assertThat(a.jpegUrl()).endsWith(".jpeg");
+        assertThat(a.xmlUrl()).endsWith(".xml");
+        b2.server().verify();
+    }
+
+    @Test
+    void eAadhaarResponseRetainsAdminSafeDocumentAndAddressFields() {
+        var fields = Arrays.stream(AadhaarResponse.class.getRecordComponents())
+                .map(component -> component.getName())
+                .toList();
+
+        assertThat(fields).contains("district", "city", "country", "addressLine", "landmark",
+                "dscSubject", "pdfUrl", "jpegUrl");
+    }
+
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void panErrorLogsTemporaryRawRequestAndResponse(CapturedOutput output) {
+        Bound b = bind();
+        b.server().expect(requestTo(BASE + "/api/v3/pan/compliance-206-individual-search"))
+                .andRespond(withBadRequest()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"error\":{\"message\":\"PAN ABCPE1234Z is not entitled\"}}"));
+
+        SignzyPanClient client = new SignzyPanClient(b.restClient());
+        assertThatThrownBy(() -> client.verify("ABCPE1234Z"))
+                .isInstanceOf(VerificationException.class);
+        assertThat(output).contains(
+                "PROVIDER_CALL",
+                "provider=SIGNZY",
+                "operation=PAN",
+                "requestPayload={\"panNumber\":\"[REDACTED]\",\"maskedName\":\"false\"}",
+                "responsePayload={\"error\":{\"message\":\"PAN [REDACTED] is not entitled\"}}");
+        assertThat(output).doesNotContain("ABCPE1234Z");
+        b.server().verify();
+    }
+
+    /**
+     * Signzy's verdict on a PAN that does not exist: {@code 404} with
+     * {@code {"error":{"reason":"NOT_FOUND","message":"Pan Number Not Found"}}}. That is an ANSWER,
+     * and a final one — of the 18 applications traced through the Sep-2026 provider audit that hit
+     * it, not one ever produced a valid PAN afterwards.
+     *
+     * <p>Read as an ordinary failure it made the router fall through: on to Digitap, which 412s
+     * because we are not provisioned for that product, and on to Fintrix, which happily bills us to
+     * reply "Invalid PAN" — 41 paid calls on PANs already known not to exist, in one window. It is
+     * raised as a {@link TerminalVerificationException} so {@code RoutingVerificationPort} stops
+     * instead of paying two more vendors to repeat a settled question, and it carries
+     * {@link ProviderFailureDetails#PAN_NOT_FOUND} so {@code navix-loan} — which cannot see this
+     * exception class — can still tell staff the PAN is wrong rather than that the vendor was down.
+     */
+    @Test
+    void pan404NotFoundIsATerminalAnswer() {
+        Bound b = bind();
+        b.server().expect(requestTo(BASE + "/api/v3/pan/compliance-206-individual-search"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(VendorEnvelopes.load("signzy-pan-404-not-found.json")));
+
+        SignzyPanClient client = new SignzyPanClient(b.restClient());
+        Throwable thrown = catchThrowable(() -> client.verify("ABCPE1234Z"));
+
+        assertThat(thrown).isInstanceOf(TerminalVerificationException.class);
+        TerminalVerificationException terminal = (TerminalVerificationException) thrown;
+        assertThat(terminal.httpStatus()).isEqualTo(404);
+        assertThat(terminal.providerCode()).isEqualTo(ProviderFailureDetails.PAN_NOT_FOUND);
+        assertThat(terminal.safeDetail()).contains("Pan Number Not Found");
+        b.server().verify();
+    }
+
+    /**
+     * The load-bearing half of the rule above, and the reason the not-found match is on the message
+     * rather than on the status code. Signzy's {@code reason} field is not one of
+     * {@code ProviderJson}'s allow-listed code fields, so a 404 arrives with no {@code providerCode}
+     * to match on — and a 404 from a mistyped {@code SIGNZY_BASE_URL}, a withdrawn route or a bad
+     * gateway looks identical on status alone.
+     *
+     * <p>Matching on 404 by itself would therefore stamp {@code PAN_NOT_FOUND} on every borrower in
+     * the book the moment a base URL went stale, stop the chain that exists to rescue exactly that
+     * situation, and tell staff the borrower's PAN is fake. A 404 that does not say "not found" stays
+     * an ordinary {@link VerificationException} and keeps falling through to the next provider.
+     */
+    @Test
+    void pan404WithoutNotFoundDetailIsStillAGenericFailure() {
+        Bound b = bind();
+        b.server().expect(requestTo(BASE + "/api/v3/pan/compliance-206-individual-search"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"error\":{\"message\":\"Cannot POST /api/v3/pan/typo\","
+                                + "\"statusCode\":404}}"));
+
+        SignzyPanClient client = new SignzyPanClient(b.restClient());
+        Throwable thrown = catchThrowable(() -> client.verify("ABCPE1234Z"));
+
+        assertThat(thrown)
+                .isInstanceOf(VerificationException.class)
+                .isNotInstanceOf(TerminalVerificationException.class);
+        assertThat(((VerificationException) thrown).providerCode())
+                .isNotEqualTo(ProviderFailureDetails.PAN_NOT_FOUND);
+        b.server().verify();
+    }
+
+    // ---- Contract eSign ---------------------------------------------------------
+    // Envelopes below are trimmed copies of real production responses, not the published docs — the
+    // docs are wrong in two places (see contractPullReadsNameMatchResult).
+
+    private static ContractInitiateRequest contractRequest() {
+        return new ContractInitiateRequest("https://s3.test/kfs.pdf", "Agreement", "NAVIX Finance",
+                "https://app.test/ok", "https://app.test/no", "https://app.test/hook", null,
+                "EMUDHRA", null,
+                List.of(new ContractSigner("Ravi Kumar", "AADHAARESIGN-OTP", null, null, null,
+                        List.of(new ContractSignaturePlacement(List.of("All"), List.of("BottomLeft"))))),
+                null, null, null);
+    }
+
+    @Test
+    void contractInitiateMapsContractIdAndSignerEsignUrl() {
+        Bound b = bind();
+        stub(b.server(), "/api/v3/contract/initiate", """
+                {"contractId":"8160860a-32eb-4114-83ee-b0346c98c63f","contractStatus":"INITIATED",
+                "initialContractHash":"65c239140cbbd05d","pdf":"https://persist.signzy.tech/x.pdf",
+                "signerdetail":[{"signerId":"b54ef53b-9132-4ea5-86c2-b1f49a873114",
+                "signerName":"Ravi Kumar","status":"PENDING",
+                "esignUrl":"https://api.signzy.app/api/v3/contract/esign/b54ef53b-9132-4ea5-86c2-b1f49a873114"}]}
+                """);
+
+        ContractInitiateResponse r = new SignzyContractClient(b.restClient()).initiate(contractRequest());
+
+        assertThat(r.contractId()).isEqualTo("8160860a-32eb-4114-83ee-b0346c98c63f");
+        assertThat(r.signerId()).isEqualTo("b54ef53b-9132-4ea5-86c2-b1f49a873114");
+        assertThat(r.esignUrl()).endsWith("/contract/esign/b54ef53b-9132-4ea5-86c2-b1f49a873114");
+        assertThat(r.initialContractHash()).isEqualTo("65c239140cbbd05d");
+        b.server().verify();
+    }
+
+    @Test
+    void contractPullReadsSignedCopyWhenComplete() {
+        Bound b = bind();
+        stub(b.server(), "/api/v3/contract/pullData", """
+                {"contractId":"C-1","isCompleted":true,"contractStatus":"COMPLETED","signedSignerCount":1,
+                "finalSignedContract":"https://persist.signzy.tech/signed.pdf",
+                "finalSignedContractHash":"abc123","auditCertificateUrl":"https://persist.signzy.tech/audit.pdf",
+                "contractCompletionTime":"2026-08-11T12:30:00Z",
+                "signerdetail":[{"status":"SIGNED","errorMessage":"","nameMatchResult":"0.98"}]}
+                """);
+
+        ContractPullResponse r = new SignzyContractClient(b.restClient()).pullData("C-1");
+
+        assertThat(r.found()).isTrue();
+        assertThat(r.completed()).isTrue();
+        assertThat(r.signedSignerCount()).isEqualTo(1);
+        assertThat(r.finalSignedContract()).isEqualTo("https://persist.signzy.tech/signed.pdf");
+        assertThat(r.signerStatus()).isEqualTo("SIGNED");
+        b.server().verify();
+    }
+
+    @Test
+    void contractPullReadsNameMatchResult() {
+        // The published docs name this field matchScoreResult and type it as an object, and also list a
+        // noOfFailureAttempts that the live API never returns. Verified against production.
+        Bound b = bind();
+        stub(b.server(), "/api/v3/contract/pullData", """
+                {"contractId":"C-2","isCompleted":true,"signedSignerCount":0,
+                "signerdetail":[{"status":"FAILED","nameMatchResult":"0.42"}]}
+                """);
+
+        ContractPullResponse r = new SignzyContractClient(b.restClient()).pullData("C-2");
+
+        assertThat(r.nameMatchResult()).isEqualTo("0.42");
+        assertThat(r.signedSignerCount()).isZero();
+        b.server().verify();
+    }
+
+    @Test
+    void contractPullReturnsNotFoundOn404() {
+        // A lapsed contract is normal — our sanctions never expire but Signzy's contracts do — so the
+        // caller mints a fresh one rather than showing the borrower an error.
+        Bound b = bind();
+        b.server().expect(requestTo(BASE + "/api/v3/contract/pullData"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND)
+                        .body("{\"name\":\"error\",\"message\":\"Contract Not Found\",\"statusCode\":404}")
+                        .contentType(MediaType.APPLICATION_JSON));
+
+        ContractPullResponse r = new SignzyContractClient(b.restClient()).pullData("C-gone");
+
+        assertThat(r.found()).isFalse();
+        assertThat(r.completed()).isFalse();
+        assertThat(r.contractId()).isEqualTo("C-gone");
+        b.server().verify();
+    }
+}

@@ -1,0 +1,565 @@
+"use client";
+
+import * as React from "react";
+import Link from "next/link";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Wallet, Smartphone, Landmark, CheckCircle2, ArrowRight, AlertTriangle, Clock, Paperclip, X } from "lucide-react";
+import { Input } from "@/components/ui";
+import { ZoomableImage } from "@/components/ui/image-lightbox";
+import { PaymentProofLink } from "@/components/ui/payment-proof-link";
+import { InfoRow } from "@/components/borrower/summary";
+import { PaymentHelp } from "@/components/borrower/payment-help";
+import { useMounted } from "@/hooks/use-mounted";
+import { useLiveApplication } from "@/lib/api/live-journey";
+import {
+  borrowerApi,
+  paymentSettingsApi,
+  storageApi,
+  paiseToINR,
+  rupeesToPaise,
+  REJECTION_REASON_LABEL,
+  type PaymentMethodName,
+  type PaymentView,
+  loanGraceDays,
+} from "@/lib/api/applications";
+import { formatApiError } from "@/lib/api/errors";
+import { compressImage } from "@/lib/compress-image";
+import { formatDate } from "@/lib/utils";
+import { daysBetween } from "@/lib/calc/loan-math";
+import { addIsoCalendarDays } from "@/lib/borrower-flow";
+
+const todayISO = () => new Date().toISOString().slice(0, 10);
+
+export default function RepayPage() {
+  const mounted = useMounted();
+  const { app, isLoading: appLoading } = useLiveApplication();
+  const qc = useQueryClient();
+
+  const loanId =
+    app && (app.status === "ACTIVE" || app.status === "OVERDUE" || app.status === "CLOSED")
+      ? app.loanId
+      : null;
+
+  const [method, setMethod] = React.useState<PaymentMethodName>("UPI");
+  const [mode, setMode] = React.useState<"full" | "custom">("full");
+  const [custom, setCustom] = React.useState("");
+  const [txnRef, setTxnRef] = React.useState("");
+  // The payment screenshot is mandatory (uploaded to S3 only when Pay is pressed, so a borrower who
+  // changes the amount or method after picking a file doesn't re-upload for nothing).
+  const [proof, setProof] = React.useState<File | null>(null);
+  const [proofError, setProofError] = React.useState<string | null>(null);
+  const proofPreviewUrl = React.useMemo(() => (proof ? URL.createObjectURL(proof) : null), [proof]);
+  React.useEffect(() => () => { if (proofPreviewUrl) URL.revokeObjectURL(proofPreviewUrl); }, [proofPreviewUrl]);
+
+  const loanQuery = useQuery({
+    queryKey: ["repay-loan", loanId],
+    queryFn: () => borrowerApi.loan(loanId as number),
+    enabled: loanId != null,
+  });
+  // Every balance this screen quotes, in ONE request: as of today (the prepayment-aware figure the
+  // borrower actually pays), as of the due date, and as of the grace day. Each field is the identical
+  // figure the per-date `outstanding` endpoint returns — this used to be three calls to that endpoint
+  // for the same loan at three dates.
+  const schedule = useQuery({
+    queryKey: ["repay-schedule", loanId, todayISO()],
+    queryFn: () => borrowerApi.outstandingSchedule(loanId as number, todayISO()),
+    enabled: loanId != null,
+  });
+  const payQuery = useQuery({
+    queryKey: ["repay-payments", loanId],
+    queryFn: () => borrowerApi.repayments(loanId as number),
+    enabled: loanId != null,
+  });
+  // Admin-managed company payee (UPI QR + bank details). Falls back to the bundled static assets
+  // when the backend has no S3 keys yet; presigned URLs are short-lived, so don't cache long.
+  const settingsQuery = useQuery({
+    queryKey: ["payment-settings"],
+    queryFn: () => paymentSettingsApi.get(),
+  });
+  // The penalty-free pay-by dates: the salary day (the loan's due date) and, on loans written with a
+  // grace day, the day after — the labels for `schedule`'s `due` / `grace` balances. A grace day adds
+  // one normal-interest day but no late penalty; newer loans carry none and show no such column.
+  const dueISO = loanQuery.data?.dueDate ?? null;
+  const graceDays = loanGraceDays(loanQuery.data);
+  const graceISO = dueISO && graceDays > 0 ? addIsoCalendarDays(dueISO, graceDays) : null;
+
+  const record = useMutation({
+    mutationFn: async (payload: { amountPaise: number; method: PaymentMethodName; txnRef: string }) => {
+      if (!proof) throw new Error("Attach a screenshot of your payment before submitting.");
+      // Direct browser -> S3 PUT via a presigned URL, same pattern as every other upload in the app —
+      // the bytes never pass through the BFF. Uploaded only now (not on file-select) so switching the
+      // amount/method after picking a screenshot never re-uploads it for nothing.
+      const upload = await compressImage(proof);
+      const up = await storageApi.presignUpload({
+        category: "REPAYMENT_PROOF",
+        filename: upload.name,
+        contentType: upload.type || "application/octet-stream",
+      });
+      await storageApi.putToPresignedUrl(up.url, upload);
+      return borrowerApi.recordRepayment(loanId as number, { ...payload, proofUrl: up.key, paidOn: todayISO() });
+    },
+    onSuccess: () => {
+      setTxnRef("");
+      setCustom("");
+      setProof(null);
+      qc.invalidateQueries({ queryKey: ["repay-payments", loanId] });
+      qc.invalidateQueries({ queryKey: ["repay-schedule", loanId] });
+      qc.invalidateQueries({ queryKey: ["repay-loan", loanId] });
+    },
+  });
+
+  if (!mounted || (appLoading && !app)) {
+    return (
+      <div className="container max-w-content py-10">
+        <div className="h-72 animate-pulse rounded border border-line bg-white" />
+      </div>
+    );
+  }
+
+  // No live, repayable loan.
+  if (loanId == null) {
+    return (
+      <div className="container max-w-content py-10">
+        <div className="rounded border border-line bg-white p-8 text-center shadow-sm">
+          <h1 className="text-2xl">No active loan</h1>
+          <p className="mb-4 text-muted">You don&apos;t have anything to repay right now.</p>
+          <Link href="/dashboard" className="btn btn-gold">Go to dashboard <ArrowRight size={16} /></Link>
+        </div>
+      </div>
+    );
+  }
+
+  const loan = loanQuery.data;
+  if (loanQuery.isLoading || !loan) {
+    return (
+      <div className="container max-w-content py-10">
+        <div className="h-72 animate-pulse rounded border border-line bg-white" />
+      </div>
+    );
+  }
+
+  // If the resolved loan is CLOSED we show the "fully repaid" card below. We deliberately do NOT
+  // re-scan /mine for a newer ACTIVE/OVERDUE reborrow here: `useLiveApplication` branch (b) already
+  // reconciles the shared ["my-apps"] pointer forward to the newest relevant application (now that it
+  // no longer skips already-ACTIVE apps), which re-resolves `app` → `loanId` → the live loan. So this
+  // card only renders when the borrower genuinely has nothing newer in flight — no duplicate logic here.
+  const settled = loan.status === "CLOSED" || loan.outstandingPaise <= 0;
+  if (settled) {
+    return (
+      <div className="container max-w-content py-12">
+        <div className="mx-auto max-w-md rounded-lg border border-success-100 bg-success-50/50 p-10 text-center shadow-md">
+          <span className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-success-50 text-success-600">
+            <CheckCircle2 size={34} />
+          </span>
+          <h1 className="text-2xl">Loan fully repaid</h1>
+          <p className="mb-6 text-muted">Thank you — your advance is closed and in good standing.</p>
+          <Link href="/dashboard" className="btn btn-gold btn-block">Back to dashboard <ArrowRight size={16} /></Link>
+        </div>
+      </div>
+    );
+  }
+
+  // Prepayment-aware "pay today" figure (interest only to today); fall back to the
+  // ledger outstanding while it loads.
+  const dueToday = schedule.data?.asOf.outstandingPaise ?? loan.outstandingPaise;
+  const scheduled = loan.outstandingPaise; // full-tenure basis (minus verified payments)
+  const savingPaise = Math.max(0, scheduled - dueToday);
+  // An approved collections settlement caps the payable at a full-and-final figure: show it as a
+  // settlement (not the normal balance) and suppress the prepay-saving / penalty hints.
+  const settlementPaise = schedule.data?.asOf.settledAmountPaise ?? null;
+  const isSettlement = settlementPaise != null;
+  const overdue = !isSettlement && (app?.status === "OVERDUE" || dueToday > loan.totalRepayablePaise);
+
+  // Presentation-only interest breakdown for the "What you owe" card.
+  const daysSince = loan.disbursedOn ? daysBetween(new Date(loan.disbursedOn), new Date()) : null;
+  const interestPaise = schedule.data?.asOf.interestPaise ?? null;
+  const dueInFuture = loan.dueDate ? daysBetween(new Date(), new Date(loan.dueDate)) > 0 : false;
+  // Interest accrues only up to the tenure (the backend caps it at the due date), so an overdue loan's
+  // interest reflects the full tenure, not days-held — cap the label's day count to match interestPaise.
+  const tenureDays =
+    loan.disbursedOn && loan.dueDate ? daysBetween(new Date(loan.disbursedOn), new Date(loan.dueDate)) : null;
+  const interestDays =
+    daysSince == null ? 0 : tenureDays == null ? daysSince : Math.min(daysSince, tenureDays);
+  // Each day of accrual costs the borrower principal × 1%/day; paying a day earlier saves this.
+  const perDayInterestPaise = Math.round(loan.principalPaise * 0.01);
+
+  const customPaise = rupeesToPaise(Number(custom.replace(/\D/g, "")) || 0);
+  const amountPaise = mode === "full" ? dueToday : Math.min(customPaise, dueToday);
+  const canPay = amountPaise > 0 && txnRef.trim().length >= 4 && proof != null && !record.isPending;
+  // Pay is disabled SOLELY because the txn reference/screenshot is missing (amount is valid, not
+  // mid-record) — surface a hint under the button so the disabled state is never unexplained.
+  const needsTxnRef = amountPaise > 0 && !record.isPending && txnRef.trim().length < 4;
+  const needsProof = amountPaise > 0 && !record.isPending && txnRef.trim().length >= 4 && proof == null;
+
+  const MAX_PROOF_BYTES = 8 * 1024 * 1024;
+  const onProofSelected = (file: File | null) => {
+    setProofError(null);
+    if (!file) {
+      setProof(null);
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setProofError("Attach an image (screenshot) of your payment confirmation.");
+      setProof(null);
+      return;
+    }
+    if (file.size > MAX_PROOF_BYTES) {
+      setProofError("That screenshot is too large — please attach one under 8 MB.");
+      setProof(null);
+      return;
+    }
+    setProof(file);
+  };
+
+  const pay = () => {
+    if (!canPay) return;
+    record.mutate({ amountPaise, method, txnRef: txnRef.trim() });
+  };
+
+  const payments = payQuery.data ?? [];
+
+  // Payee block — fetched from the admin-managed settings, with the bundled static assets and the
+  // previously-hardcoded values as fallbacks so the screen always renders something usable.
+  const settings = settingsQuery.data;
+  const upiId = settings?.upiId || "navix.collections@hdfcbank";
+  const qrSrc = settings?.qrUrl || "/payment/upi-qr.jpg";
+  const accountName = settings?.accountName || "DhanBoost";
+  const accountNumber = settings?.accountNumber || "5010 0099 8877";
+  const ifsc = settings?.ifsc || "HDFC0000123";
+  const bankName = settings?.bankName || "HDFC Bank";
+  const accountInfoHref = settings?.accountInfoUrl || "/payment/account-info.pdf";
+
+  return (
+    <div className="container max-w-content py-10">
+      <h1 className="mb-1">Repay your advance</h1>
+      <p className="mb-7 text-muted">
+        Single repayment on your salary day — or prepay any amount, any day.
+        <strong className="text-ink"> No pre-closure or prepayment charges, ever</strong> — you only
+        pay interest up to the day you repay.
+      </p>
+
+      {record.isSuccess && (
+        <div className="mb-6 flex items-start gap-2 rounded border border-success-100 bg-success-50/60 p-4 text-sm text-success-700">
+          <Clock size={16} className="mt-0.5 flex-shrink-0" />
+          <span>
+            Payment recorded — <strong>pending verification</strong> by our accounts team. Your balance
+            updates once the transfer is confirmed.
+          </span>
+        </div>
+      )}
+      {record.isError && (
+        <div className="mb-6 flex items-start gap-2 rounded border border-error-100 bg-error-50 p-4 text-sm text-error-700">
+          <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+          {formatApiError(record.error, "Could not record your payment. Please try again.")}
+        </div>
+      )}
+
+      {loan.dueDate && !overdue && !isSettlement && (
+        <div className="mb-6 rounded border border-line bg-white p-6 shadow-sm">
+          <h3 className="mb-1 font-serif text-base text-navy">When will you pay?</h3>
+          <p className="mb-4 text-xs text-muted">
+            {graceISO ? "Paying on your salary day or the day after is penalty-free" : "Paying by your salary day is penalty-free"}
+            {" "}— and prepaying any day costs you less interest. Pick whatever suits you; we&apos;ll remind you before it&apos;s due.
+          </p>
+          <div className={`grid gap-3 ${graceISO ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+            <PayByOption
+              title="Prepay today"
+              date={todayISO()}
+              amount={dueToday}
+              note={savingPaise > 0 ? `Save ${paiseToINR(savingPaise)} interest` : "Lowest — least interest"}
+              highlight
+            />
+            <PayByOption
+              title="On salary day"
+              date={loan.dueDate}
+              amount={schedule.data?.due?.outstandingPaise ?? loan.totalRepayablePaise}
+              note="Penalty-free"
+            />
+            {graceISO && (
+              <PayByOption
+                title="Day after salary"
+                date={graceISO}
+                amount={schedule.data?.grace?.outstandingPaise ?? loan.totalRepayablePaise}
+                note="One extra interest day · no late penalty"
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded border border-line bg-white p-6 shadow-sm">
+          <h3 className="mb-2 font-serif text-base text-navy">What you owe</h3>
+          <InfoRow label="Principal" value={paiseToINR(loan.principalPaise)} />
+          <InfoRow label="Total repayable (on salary day)" value={paiseToINR(loan.totalRepayablePaise)} />
+          {loan.dueDate && <InfoRow label="Due date" value={formatDate(loan.dueDate)} />}
+          {daysSince != null && (
+            <InfoRow label="Days since disbursement" value={`${daysSince} ${daysSince === 1 ? "day" : "days"}`} />
+          )}
+          {interestPaise != null && (
+            <InfoRow
+              label={`Interest so far (principal × 1%/day × ${interestDays} days)`}
+              value={paiseToINR(interestPaise)}
+            />
+          )}
+          <div className="mt-2 flex items-baseline justify-between rounded bg-navy px-4 py-3 text-white">
+            <span className="text-sm font-semibold text-white/90">{isSettlement ? "Settlement — full & final" : overdue ? "Pay now (incl. penalty)" : "Pay today"}</span>
+            <span className="font-serif text-2xl font-bold text-gold">{paiseToINR(dueToday)}</span>
+          </div>
+          {!overdue && !isSettlement && dueInFuture && (
+            <p className="mt-3 flex items-start gap-2 text-xs text-success-700">
+              <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" />
+              Pay earlier &rarr; pay less interest. Every day saved = <strong>{paiseToINR(perDayInterestPaise)}</strong> less.
+            </p>
+          )}
+          {isSettlement && (
+            <p className="mt-3 flex items-start gap-2 text-xs text-navy">
+              <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" />
+              Our collections team approved a settlement of {paiseToINR(settlementPaise)} as <strong>full &amp; final</strong>.
+              Pay this to close your loan — no further amount will be due.
+            </p>
+          )}
+          {savingPaise > 0 && !overdue && !isSettlement && (
+            <p className="mt-3 flex items-start gap-2 text-xs text-success-700">
+              <CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" />
+              Pay early &amp; save {paiseToINR(savingPaise)} — interest is charged only to the day you pay.
+            </p>
+          )}
+          {overdue && (
+            <p className="mt-3 flex items-start gap-2 text-xs text-error-600">
+              <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" /> A late penalty (2%/day, capped 30 days)
+              is accruing. Clear it soon to stop the clock.
+            </p>
+          )}
+
+          {payments.length > 0 && (
+            <div className="mt-5 border-t border-grey-200 pt-4">
+              <div className="mb-2 text-sm font-semibold text-ink">Payments</div>
+              <ul className="space-y-2">
+                {payments.map((p) => (
+                  <PaymentRow key={p.id} p={p} />
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        <div className="rounded border border-line bg-white p-6 shadow-sm">
+          <h3 className="mb-3 font-serif text-base text-navy">How much to pay</h3>
+          <div className="mb-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setMode("full")}
+              className={`rounded border px-3 py-2.5 text-sm font-semibold transition ${mode === "full" ? "border-navy bg-navy-tint text-navy" : "border-line text-muted hover:border-navy"}`}
+            >
+              Pay in full
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("custom")}
+              className={`rounded border px-3 py-2.5 text-sm font-semibold transition ${mode === "custom" ? "border-navy bg-navy-tint text-navy" : "border-line text-muted hover:border-navy"}`}
+            >
+              Part payment
+            </button>
+          </div>
+
+          {mode === "custom" && (
+            <Input
+              label="Amount"
+              inputMode="numeric"
+              value={custom}
+              onChange={(e) => setCustom(e.target.value.replace(/\D/g, ""))}
+              placeholder={String(Math.round(dueToday / 100))}
+              leftIcon={<span className="font-serif text-muted">₹</span>}
+              helperText={`Up to ${paiseToINR(dueToday)}`}
+            />
+          )}
+
+          <div className="mb-2 mt-1 text-sm font-semibold text-ink">Payment method</div>
+          <div className="mb-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setMethod("UPI")}
+              className={`flex items-center justify-center gap-2 rounded border px-3 py-2.5 text-sm font-semibold transition ${method === "UPI" ? "border-navy bg-navy-tint text-navy" : "border-line text-muted hover:border-navy"}`}
+            >
+              <Smartphone size={16} /> UPI
+            </button>
+            <button
+              type="button"
+              onClick={() => setMethod("BANK_TRANSFER")}
+              className={`flex items-center justify-center gap-2 rounded border px-3 py-2.5 text-sm font-semibold transition ${method === "BANK_TRANSFER" ? "border-navy bg-navy-tint text-navy" : "border-line text-muted hover:border-navy"}`}
+            >
+              <Landmark size={16} /> Bank transfer
+            </button>
+          </div>
+
+          <div className="mb-4 rounded bg-grey-100 p-3 text-xs text-muted">
+            {method === "UPI" ? (
+              <div className="flex items-center gap-3">
+                {/* Tap/click the QR to open a full-screen, scannable lightbox (works on mobile). */}
+                <ZoomableImage
+                  src={qrSrc}
+                  alt="UPI QR code"
+                  caption="Scan to pay with any UPI app"
+                  wrapperClassName="flex-shrink-0"
+                  thumbClassName="h-24 w-24 rounded border border-line bg-white object-contain p-1"
+                />
+                <div>
+                  Scan the QR or pay to <strong className="text-ink">{upiId}</strong>, then paste the
+                  UPI reference below.
+                  <span className="mt-1 block text-[8.8px] text-muted">Tap the QR to enlarge it for scanning.</span>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-0.5">
+                <div>NEFT/IMPS to:</div>
+                <div><span className="text-ink">{accountName}</span></div>
+                <div>A/C <strong className="text-ink">{accountNumber}</strong> · IFSC <strong className="text-ink">{ifsc}</strong></div>
+                <div>{bankName}</div>
+                <a
+                  href={accountInfoHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 inline-flex items-center gap-1 font-semibold text-navy underline-offset-2 hover:underline"
+                >
+                  <Landmark size={13} /> Download account details (PDF)
+                </a>
+                <div className="pt-1">Then paste the UTR below.</div>
+              </div>
+            )}
+          </div>
+
+          <Input
+            label={method === "UPI" ? "UPI reference / txn ID" : "UTR number"}
+            value={txnRef}
+            onChange={(e) => setTxnRef(e.target.value)}
+            placeholder={method === "UPI" ? "e.g. 4287…" : "e.g. HDFCN…"}
+            helperText="We verify your payment against this reference before it reduces your balance"
+          />
+
+          <label className="field">
+            <span>Payment screenshot *</span>
+            {proof ? (
+              <div className="flex items-center gap-3 rounded border border-line bg-grey-50 p-2">
+                {proofPreviewUrl && (
+                  <ZoomableImage
+                    src={proofPreviewUrl}
+                    alt="Payment screenshot"
+                    thumbClassName="h-14 w-14 rounded border border-line bg-white object-cover"
+                  />
+                )}
+                <span className="flex-1 truncate text-xs text-ink">{proof.name}</span>
+                <button
+                  type="button"
+                  onClick={() => onProofSelected(null)}
+                  className="rounded border border-line bg-white p-1.5 text-muted hover:text-error-700"
+                  aria-label="Remove screenshot"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ) : (
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => onProofSelected(e.target.files?.[0] ?? null)}
+                className="block w-full text-sm text-muted file:mr-3 file:rounded file:border file:border-line file:bg-grey-50 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-navy hover:file:bg-grey-100"
+              />
+            )}
+          </label>
+          {proofError && <p className="-mt-2 mb-3 text-xs text-error-700">{proofError}</p>}
+          {!proof && !proofError && (
+            <p className="-mt-2 mb-3 flex items-center gap-1 text-xs text-muted">
+              <Paperclip size={12} /> A screenshot of the payment confirmation is required — this is
+              what our accounts team checks against your reference before verifying.
+            </p>
+          )}
+
+          <button onClick={pay} disabled={!canPay} className="btn btn-gold btn-block mt-2">
+            <Wallet size={16} /> {record.isPending ? "Uploading & recording…" : `Pay ${paiseToINR(amountPaise)}`}
+          </button>
+          {needsTxnRef && (
+            <p className="mt-2 text-center text-xs text-gold-dark">
+              Paste your UPI/UTR reference (min 4 characters) to enable payment
+            </p>
+          )}
+          {needsProof && (
+            <p className="mt-2 text-center text-xs text-gold-dark">
+              Attach a screenshot of your payment to enable payment
+            </p>
+          )}
+          <p className="mt-3 text-center text-xs text-muted">
+            Payments are confirmed manually by our accounts team — your balance updates once verified.
+          </p>
+        </div>
+      </div>
+
+      <PaymentHelp className="mt-6" />
+    </div>
+  );
+}
+
+function PayByOption({
+  title,
+  date,
+  amount,
+  note,
+  highlight,
+}: {
+  title: string;
+  date: string;
+  amount: number;
+  note: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div className={`rounded-lg border p-3 ${highlight ? "border-gold bg-gold-50/40" : "border-line bg-grey-50"}`}>
+      <div className="text-xs font-semibold text-muted">{title}</div>
+      <div className="font-serif text-lg font-bold text-navy">{paiseToINR(amount)}</div>
+      <div className="text-[8.8px] text-muted">{formatDate(date)}</div>
+      <div className={`mt-1 text-[8.8px] font-semibold ${highlight ? "text-gold-dark" : "text-success-700"}`}>{note}</div>
+    </div>
+  );
+}
+
+function PaymentRow({ p }: { p: PaymentView }) {
+  const map: Record<PaymentView["status"], { label: string; cls: string }> = {
+    PENDING_VERIFICATION: { label: "Pending verification", cls: "bg-gold-50 text-gold-dark" },
+    VERIFIED: { label: "Verified", cls: "bg-success-50 text-success-700" },
+    REJECTED: { label: "Rejected", cls: "bg-error-50 text-error-700" },
+  };
+  const s = map[p.status];
+  return (
+    <li>
+      <div className="flex items-center justify-between gap-3 text-sm">
+        <span className="flex items-center gap-2">
+          <span className="font-semibold text-ink">{paiseToINR(p.amountPaise)}</span>
+          <span className="text-xs text-muted">
+            {p.method === "UPI" ? "UPI" : "Bank"}
+            {p.txnRef ? ` · ${p.txnRef}` : ""}
+            {p.paidOn ? ` · ${formatDate(p.paidOn)}` : ""}
+          </span>
+          <PaymentProofLink url={p.proofUrl} className="text-xs" />
+        </span>
+        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${s.cls}`}>{s.label}</span>
+      </div>
+      {p.status === "REJECTED" && <RejectionBanner p={p} />}
+    </li>
+  );
+}
+
+/** Why a rejected payment didn't go through, plus the call/email escape hatch (item 5 + 7). */
+function RejectionBanner({ p }: { p: PaymentView }) {
+  const reason = p.rejectionReason ? REJECTION_REASON_LABEL[p.rejectionReason] : "See support for details";
+  return (
+    <div className="mt-2 rounded border border-error-100 bg-error-50 p-3 text-xs text-error-700">
+      <p className="flex items-start gap-1.5">
+        <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" />
+        <span>
+          Payment rejected — {reason}.{p.rejectionNote ? ` ${p.rejectionNote}` : ""}
+        </span>
+      </p>
+      <PaymentHelp variant="inline" compact className="mt-2" />
+    </div>
+  );
+}

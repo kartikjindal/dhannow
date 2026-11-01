@@ -1,0 +1,330 @@
+server:
+  port: 8080
+  compression:
+    enabled: true
+    mime-types: application/json,text/csv,text/plain
+    min-response-size: 2KB
+
+spring:
+  application:
+    name: navix-finance
+  mvc:
+    # Raise NoHandlerFoundException for an unmapped path so GlobalExceptionHandler can answer 404
+    # instead of letting it fall through and surface as a 500. The static-resource handler stays
+    # mapped (Swagger UI serves its assets through it); its NoResourceFoundException is handled too.
+    throw-exception-if-no-handler-found: true
+  # Config + secrets from AWS SSM Parameter Store, cloud only. The ECS task sets
+  #   NAVIX_SSM_IMPORT=aws-parameterstore:/dhannow/<staging|prod>/
+  # (not optional there, so a missing store fails the boot). Unset locally, so a local run never
+  # reads cloud config, whatever AWS credentials the machine holds. Parameters map to properties:
+  #   /dhannow/prod/spring/datasource/password  ->  spring.datasource.password
+  config:
+    import: ${NAVIX_SSM_IMPORT:}
+  cloud:
+    aws:
+      region:
+        static: ${AWS_REGION:ap-south-1}
+      # Credentials come from the DEFAULT provider chain: ECS task role in prod,
+      # env vars locally. Never hardcode access keys.
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/navix}
+    username: ${DB_USERNAME:navix}
+    password: ${DB_PASSWORD:navix}
+  jpa:
+    hibernate:
+      # Flyway owns the schema; Hibernate only validates against it.
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+# Logging — the appender/pattern live in logback-spring.xml (CloudWatch-friendly, MDC-aware).
+# Only the com.navix level is set here so ops can raise it to DEBUG in ECS via NAVIX_LOG_LEVEL
+# (env var) without a redeploy of the logback config. Framework loggers are tamed in the xml.
+logging:
+  level:
+    com.navix: ${NAVIX_LOG_LEVEL:INFO}
+
+# DhanBoost integration settings
+navix:
+  # Opt-in local fixture: when set, every Experian bureau pull returns this report instead of calling
+  # Fintrix (the live sandbox is thin-file). An absolute path to a report JSON. Leave blank in real
+  # environments.
+  bureau:
+    fixture: ${NAVIX_BUREAU_FIXTURE:}
+  # Verification providers. Signzy is PRIMARY, Digitap is the FALLBACK (see RoutingVerificationPort +
+  # docs/signzy, docs/digitap). Base URLs default to the PREPRODUCTION/UAT hosts and are env-overridable;
+  # switch to the prod hosts (api.signzy.app / svc.digitap.ai / api.digitap.ai) via the *_BASE_URL vars.
+  # API keys come from the environment / backend/.env (auto-loaded by spring-dotenv) — never committed.
+  signzy:
+    # Signzy sends the RAW opaque token in Authorization (not Basic/Bearer) + the account's
+    # unique id in the x-client-unique-id header.
+    base-url: ${SIGNZY_BASE_URL:https://api-preproduction.signzy.app}
+    token: ${SIGNZY_TOKEN:}
+    client-unique-id: ${SIGNZY_CLIENT_UNIQUE_ID:}
+    # Signzy PRODUCTION account — serves PAN 206AB (unmasked name) + reverse-geocode (address).
+    prod-base-url: ${SIGNZY_PROD_BASE_URL:https://api.signzy.app}
+    prod-token: ${SIGNZY_PROD_TOKEN:}
+    # Bank Statement Analysis is the one Signzy product that also wants a token in the request BODY:
+    # a short-lived JWT from their Authenticate API, separate from the header token above. Blank means
+    # the Banking tab reports "not configured" instead of calling; an expired one gets a 401. Rotate
+    # via SSM /navix/<env>/navix/signzy/bsa-auth-token.
+    bsa-auth-token: ${SIGNZY_BSA_AUTH_TOKEN:}
+    # Consent-block device IP (Signzy doesn't enforce an allow-list on this today, but keep it a real
+    # IP rather than 0.0.0.0 for consistency with the Digitap check below). aws.md §5.1's static NAT
+    # egress IP — never changes.
+    device-ip: ${NAVIX_STATIC_EGRESS_IP:3.109.169.131}
+  esign:
+    # Aadhaar eSign of the sanction letter, via Signzy's Contract API on the PRODUCTION account above
+    # (the preproduction account is not entitled — it answers 403). No separate credentials.
+    # `mock` signs inline without calling anyone: the demo seed script and the tests set it, because a
+    # real signature needs a human with an Aadhaar-linked handset. Never set it in a real environment.
+    provider: ${NAVIX_ESIGN_PROVIDER:signzy}
+    # BOTH ARE REQUIRED when provider=signzy — the app refuses to start without them. Signzy's contract
+    # spec marks callbackUrl mandatory and answers 400 "callbackUrl is not allowed to be empty" to a
+    # blank one; 156 production contracts failed that way, unnoticed for four weeks, because esignInit
+    # catches the error and silently offers the drawn-signature fallback. The secret is echoed back by
+    # Signzy in the callback's Authorization header and is how the webhook authenticates it — blank
+    # means every callback is rejected. The callback only accelerates the borrower's own poll (which
+    # stays the source of truth) for the case they close the tab before being redirected back.
+    # Set both via SSM /navix/<env>/navix/esign/callback-{url,secret}, or provider=mock for offline runs.
+    callback-url: ${NAVIX_ESIGN_CALLBACK_URL:}
+    callback-secret: ${NAVIX_ESIGN_CALLBACK_SECRET:}
+    # How closely the Aadhaar name must match ours before Signzy accepts the signature ("0.01".."1.00").
+    # Only honoured together with the year-of-birth and gender flags, which we send when DigiLocker gave
+    # us those fields.
+    name-match-threshold: ${NAVIX_ESIGN_NAME_MATCH_THRESHOLD:0.90}
+    # DhanBoost branding on eMudhra's signing pages.
+    logo-url: ${NAVIX_ESIGN_LOGO_URL:}
+    header-colour: ${NAVIX_ESIGN_HEADER_COLOUR:#0C2540}
+    button-colour: ${NAVIX_ESIGN_BUTTON_COLOUR:#E9B53A}
+    executer-name: ${NAVIX_ESIGN_EXECUTER_NAME:NAVIX Finance Private Limited}
+  digio:
+    # Digio NACH eMandate (MandatePort). `mock` answers inline without calling anyone and is the default
+    # until the real credentials are in SSM; `digio` files REAL, legally binding NPCI mandate requests.
+    # With provider=digio the app REFUSES TO START unless base-url, client-id, client-secret,
+    # webhook-secret and corporate-config-id are all set (SSM /navix/<env>/navix/digio/...), by design.
+    provider: ${NAVIX_DIGIO_PROVIDER:mock}
+    # NACH debit sweep (MandateDebitScheduler), 10:00 IST: early enough to beat the T-1 cutoff with the
+    # working day left to react. Off unless the `digio-debit` feature_flag row is enabled.
+    debit-cron: ${NAVIX_DIGIO_DEBIT_CRON:0 0 10 * * *}
+    base-url: ${NAVIX_DIGIO_BASE_URL:https://api.digio.in}
+    client-id: ${NAVIX_DIGIO_CLIENT_ID:}
+    client-secret: ${NAVIX_DIGIO_CLIENT_SECRET:}
+    webhook-secret: ${NAVIX_DIGIO_WEBHOOK_SECRET:}
+    corporate-config-id: ${NAVIX_DIGIO_CORPORATE_CONFIG_ID:}
+    narration: ${NAVIX_DIGIO_NARRATION:}
+    # The lender's own settlement account a NACH debit pays into. Blank = DebitService refuses to present.
+    corporate-account-number: ${NAVIX_DIGIO_CORPORATE_ACCOUNT_NUMBER:}
+    expire-in-days: ${NAVIX_DIGIO_EXPIRE_IN_DAYS:7}
+  digitap:
+    # Two hosts: svc (KYC/Employment/Email), api (Credit/Location/Face-Match/OCR). Auth = Basic base64(id:secret).
+    svc-base-url: ${DIGITAP_SVC_BASE_URL:https://svcdemo.digitap.work}
+    api-base-url: ${DIGITAP_API_BASE_URL:https://apidemo.digitap.work}
+    client-id: ${DIGITAP_CLIENT_ID:}
+    client-secret: ${DIGITAP_CLIENT_SECRET:}
+    # Digitap allow-lists this DECLARED value against the account's registered IP — confirmed by live
+    # testing that a placeholder (0.0.0.0) is rejected with 403 "IP not allowed" regardless of the
+    # caller's real network IP. aws.md §5.1's static NAT egress IP — never changes.
+    device-ip: ${NAVIX_STATIC_EGRESS_IP:3.109.169.131}
+  fintrix:
+    # Bureau PRIMARY — POST /crif_combine (CRIF Highmark), ahead of Digitap Experian. Auth = Basic base64(clientId:clientSecret),
+    # same scheme as Digitap. No sandbox — every call is live and billable (see FintrixCrifClient and
+    # the "fintrix-bureau" feature_flag kill switch in FintrixVerificationAdapter).
+    base-url: ${FINTRIX_BASE_URL:https://admin.fintrix.tech/__api/api/v1/}
+    client-id: ${FINTRIX_CLIENT_ID:}
+    client-secret: ${FINTRIX_CLIENT_SECRET:}
+  verification:
+    # Ordered provider chain the router tries per capability (skips unsupported, falls back on failure).
+    # The order is GLOBAL, not per-capability — a provider "opts out" of a capability by throwing
+    # CapabilityNotSupportedException. Signzy leads so it stays the PAN primary. Bureau reads
+    # Fintrix (CRIF) then Digitap (Experian), because Signzy's bureau leg is retired and skips itself.
+    # Fintrix leads (again, 2026-10-10) because only its CRIF reply carries the vendor report PDF that
+    # staff read in Documents; Digitap's CRIF leg is still 401 (not provisioned). Resetting this to
+    # signzy,digitap,fintrix makes Experian primary again, and moves PAN's fallback with it.
+    chain: ${NAVIX_VERIFICATION_CHAIN:signzy,fintrix,digitap}
+    # A bureau no-hit falls through to the next provider instead of ending the chain, so a thin file
+    # Fintrix/CRIF has never seen still reaches Digitap/Experian. Costs a second billable pull on a
+    # genuinely thin file; set false to restore "the first answer wins, no-hit included".
+    bureau-no-hit-fall-through: ${NAVIX_VERIFICATION_BUREAU_NO_HIT_FALL_THROUGH:true}
+    # Outbound provider HTTP timeouts (seconds). These must stay under the ALB idle timeout in front
+    # of the service (120s), because each chain is walked sequentially. Counting the 5s connect
+    # timeout on every leg, as the older note here failed to:
+    #   bureau: Fintrix CRIF 45 + Digitap Experian 45 + 2x5 connect = 100s  (20s headroom)
+    #   PAN:    Signzy 30 + Fintrix 45 + Digitap 30  + 3x5 connect  = 120s  (no headroom)
+    # Signzy's bureau legs are retired from routing and workbench-only, and its skip opens no socket,
+    # so they are outside both budgets.
+    # BEFORE re-enabling the digitap-crif flag, raise the ALB idle timeout: that third bureau leg
+    # takes the budget to 45 + 20 + 45 + 3x5 connect = 125s, over the 120s limit.
+    connect-timeout-seconds: ${NAVIX_VERIFICATION_CONNECT_TIMEOUT:5}
+    read-timeout-seconds: ${NAVIX_VERIFICATION_READ_TIMEOUT:30}
+    bureau-read-timeout-seconds: ${NAVIX_VERIFICATION_BUREAU_READ_TIMEOUT:45}
+    digitap-crif-read-timeout-seconds: ${NAVIX_VERIFICATION_DIGITAP_CRIF_READ_TIMEOUT:20}
+    signzy-bureau-read-timeout-seconds: ${NAVIX_VERIFICATION_SIGNZY_BUREAU_READ_TIMEOUT:12}
+    # Digitap Skip Tracing Lite (on-demand, Skip Tracer tab) fans out to several sources: 10–20s
+    # normally, >30s seen twice on day one. Never part of a borrower chain, so its own budget —
+    # under the 120s ALB idle timeout on its own.
+    skip-trace-read-timeout-seconds: ${NAVIX_VERIFICATION_SKIP_TRACE_READ_TIMEOUT:90}
+    fintrix-bureau-read-timeout-seconds: ${NAVIX_VERIFICATION_FINTRIX_BUREAU_READ_TIMEOUT:45}
+  storage:
+    # S3 bucket for documents/images (KYC, loan docs, payment & collections proofs).
+    bucket: ${NAVIX_S3_BUCKET:dhannow-local-documents}
+    # Presigned-URL validity in seconds (default 15 min).
+    presign-ttl-seconds: ${NAVIX_S3_PRESIGN_TTL:900}
+    # Optional KMS key (ARN/alias) for server-side puts; bucket default encryption
+    # otherwise applies. Leave blank to use the bucket default.
+    kms-key-id: ${NAVIX_S3_KMS_KEY_ID:}
+
+  # Auth tokens (HS256 JWT). secret is SHA-256'd into the HMAC key. Borrowers get a longer TTL
+  # (7-day "remember me"); staff keep the shorter one. Set a strong AUTH_SECRET in real environments.
+  # First admin's password, set once on boot (BootstrapAdminRunner); no hash is seeded in migrations.
+  bootstrap:
+    admin-email: ${NAVIX_BOOTSTRAP_ADMIN_EMAIL:}
+    admin-password: ${NAVIX_BOOTSTRAP_ADMIN_PASSWORD:}
+
+  auth:
+    secret: ${AUTH_SECRET:navix-local-dev-secret-change-me}
+    ttl-seconds: ${AUTH_TTL_SECONDS:86400}
+    borrower-ttl-seconds: ${BORROWER_AUTH_TTL_SECONDS:604800}
+
+  # Cloudflare Turnstile on the pre-auth forms (password logins + forgot-password).
+  # UNSET = the check is skipped entirely (local dev, ./mvnw test, e2e, the demo seed script).
+  captcha:
+    secret: ${NAVIX_CAPTCHA_SECRET:}
+    # Comma-separated origins a token may be minted on (Cloudflare echoes the hostname back).
+    # Stops anyone embedding our PUBLIC site key on their own page to farm tokens. Empty = not
+    # checked, logged as a warning at boot — success + action still are.
+    hostnames: ${NAVIX_CAPTCHA_HOSTNAMES:}
+
+  # App-level URLs. frontend-base-url builds the password-reset links carried in emails.
+  app:
+    frontend-base-url: ${NAVIX_APP_BASE_URL:http://localhost:3000}
+
+  # Daily payment-reminder sweep (PaymentReminderScheduler). Spring cron: sec min hour dom mon dow.
+  reminders:
+    cron: ${NAVIX_REMINDERS_CRON:0 0 9 * * *}
+  employment-retry:
+    # Re-runs EPFO/UAN checks a vendor outage parked (REVIEW + providerError), undecided applications
+    # only, five attempts with exponential spacing. Hourly at :30 so it never coincides with the 09:00
+    # reminder sweep. Turn it off without a deploy via the `employment-auto-retry` feature_flag row.
+    cron: ${NAVIX_EMPLOYMENT_RETRY_CRON:0 30 * * * *}
+  provider-health:
+    # Hourly sweep of provider_api_execution looking for a capability with >= 10 live calls and zero
+    # successes in 24h — the shape Aadhaar eSign had for four weeks without raising anything. Alerts
+    # ADMINs through the notification engine, rate-limited to one per capability per 6h.
+    cron: ${NAVIX_PROVIDER_HEALTH_CRON:0 15 * * * *}
+
+  # Refer-a-friend program. enabled gates the whole feature; reward-paise is the per-person reward
+  # (₹200 = 20000 paise). Read at boot — override per env via the SSM params
+  # /navix/<env>/navix/referral/{enabled,reward-paise} (a change needs a restart/redeploy).
+  referral:
+    enabled: ${NAVIX_REFERRAL_ENABLED:true}
+    reward-paise: ${NAVIX_REFERRAL_REWARD_PAISE:20000}
+
+  # Borrower OTP delivery via the UltronSMS gateway. The doc demo creds are placeholders
+  # ("username or password is invalid") — set real NAVIX_SMS_USER/PASSWORD or NAVIX_SMS_API_KEY.
+  sms:
+    base-url: ${NAVIX_SMS_BASE_URL:https://ultronsms.com/api/mt/}
+    user: ${NAVIX_SMS_USER:demo}
+    password: ${NAVIX_SMS_PASSWORD:demo123}
+    api-key: ${NAVIX_SMS_API_KEY:}
+    sender-id: ${NAVIX_SMS_SENDER_ID:DHANBT}
+    # Promo | Trans. OTP is transactional; the route/peid/dlt-template-id are India-DLT params.
+    channel: ${NAVIX_SMS_CHANNEL:Trans}
+    route: ${NAVIX_SMS_ROUTE:02}
+    # PE-ID is entity-level and constant across every template (NAVIX FINANCE PRIVATE LIMITED).
+    peid: ${NAVIX_SMS_PEID:1701178039634361131}
+    # Fallback / OTP DLT Template ID (used when no per-type id below is set for a notification).
+    dlt-template-id: ${NAVIX_SMS_DLT_TEMPLATE_ID:1777178551180955540}
+    # Per-NotificationType DLT Template IDs (keyed by the enum name). The DHANBOOST_*_V1 batch is
+    # Active on DLT and Approved in the UltronSMS panel (2026-08-02) — ids defaulted here, no env
+    # plumbing needed; override an individual one only if a template is re-registered.
+    # NOTE: CREDIT_REJECTED and REBORROW_REVIEW_REJECTED share the one APPLICATION_DECLINED id.
+    # NOTE: REBORROW_PREAPPROVED + REFERRAL_REWARD_CREDITED are registered PROMOTIONAL — they need a
+    # promotional route, so they fail on the transactional route above until that is split out.
+    dlt-template-ids:
+      KYC_APPROVED: ${NAVIX_SMS_DLT_KYC_APPROVED:1777178556860826081}
+      KYC_REJECTED: ${NAVIX_SMS_DLT_KYC_REJECTED:1777178556856596751}
+      KYC_REMINDER: ${NAVIX_SMS_DLT_KYC_REMINDER:1777178556869196458}
+      LOAN_DISBURSED: ${NAVIX_SMS_DLT_LOAN_DISBURSED:1777178556842056405}
+      REPAYMENT_VERIFIED: ${NAVIX_SMS_DLT_REPAYMENT_VERIFIED:1777178551212221383}
+      REPAYMENT_REJECTED: ${NAVIX_SMS_DLT_REPAYMENT_REJECTED:1777178551218012610}
+      PAYMENT_DUE_SOON: ${NAVIX_SMS_DLT_PAYMENT_DUE_SOON:1777178556822213797}
+      PAYMENT_OVERDUE: ${NAVIX_SMS_DLT_PAYMENT_OVERDUE:1777178556852586580}
+      LOAN_CLOSED: ${NAVIX_SMS_DLT_LOAN_CLOSED:1777178551234723180}
+      CREDIT_REJECTED: ${NAVIX_SMS_DLT_APPLICATION_DECLINED:1777178556864993650}
+      REBORROW_REVIEW_REJECTED: ${NAVIX_SMS_DLT_APPLICATION_DECLINED:1777178556864993650}
+      SETTLEMENT_APPROVED: ${NAVIX_SMS_DLT_SETTLEMENT_APPROVED:1777178556848308137}
+      REBORROW_REVIEW_APPROVED: ${NAVIX_SMS_DLT_REBORROW_APPROVED:1777178556873259005}
+      REBORROW_PREAPPROVED: ${NAVIX_SMS_DLT_REBORROW_PREAPPROVED:1777178551273887503}
+      REFERRAL_REWARD_CREDITED: ${NAVIX_SMS_DLT_REFERRAL_REWARD_CREDITED:1777178551284965972}
+    # DLT-registered OTP message ({otp} = code, {ttl} = minutes). MUST match a template
+    # registered for the sender or the gateway returns "Invalid template text".
+    otp-template: ${NAVIX_SMS_OTP_TEMPLATE:Your OTP for DhanBoost login is {otp}. It is valid for {ttl} minutes. Do not share this OTP with anyone. - DhanBoost}
+    enabled: ${NAVIX_SMS_ENABLED:true}
+    # DEV ONLY — returns the OTP in the request response when SMS can't reach a handset. MUST be false in prod.
+    dev-echo: ${NAVIX_SMS_DEV_ECHO:false}
+    otp-ttl-seconds: ${NAVIX_SMS_OTP_TTL:300}
+    otp-length: ${NAVIX_SMS_OTP_LENGTH:6}
+    # DEMO/TESTING — when true, a fixed mock-code always verifies and NO SMS is sent (no DLT needed).
+    # MUST be false in production. Set NAVIX_SMS_MOCK=true to use OTP 123456 for testing.
+    mock: ${NAVIX_SMS_MOCK:false}
+    mock-code: ${NAVIX_SMS_MOCK_CODE:123456}
+
+  # WhatsApp Business via SmartChat (docs/whatsapp/WHATSAPP_GUIDE.md). Template names/variable order
+  # live in NotificationTemplates.whatsapp(...); the approved wording lives in the SmartChat portal.
+  # Token: SSM SecureString /navix/<env>/navix/whatsapp/token. Blank token = every send FAILS (logged,
+  # never blocks the business action).
+  whatsapp:
+    base-url: ${NAVIX_WHATSAPP_BASE_URL:https://smartchatapi.live/portal/Api/}
+    token: ${NAVIX_WHATSAPP_TOKEN:}
+    enabled: ${NAVIX_WHATSAPP_ENABLED:true}
+    mock: ${NAVIX_WHATSAPP_MOCK:false}
+    otp-template: ${NAVIX_WHATSAPP_OTP_TEMPLATE:dhanboost_otp}
+
+  # Notification engine (in-app + SMS + email). Delivery is mock/log by default (mirrors the SMS-mock
+  # philosophy): in-app is fully persisted, SMS reuses the gateway (mock-aware), and email logs via
+  # LogEmailClient. Flip email to real SMTP with NAVIX_EMAIL_PROVIDER=smtp + spring.mail.* configured.
+  email:
+    provider: ${NAVIX_EMAIL_PROVIDER:log}      # log | smtp | ses | resend
+    enabled: ${NAVIX_EMAIL_ENABLED:true}
+    from: ${NAVIX_EMAIL_FROM:DhanBoost <no-reply@dhanboost.example>}
+    # SES only: tag sends with a SES configuration set so bounce/complaint events fire to SNS->SQS.
+    configuration-set: ${NAVIX_SES_CONFIG_SET:}
+    # Resend only: API key for the Resend HTTP provider (interim while SES is sandbox-blocked).
+    resend-api-key: ${RESEND_API_KEY:}
+  # Marketing "Contact us" form — where website enquiries are emailed (via the shared EmailClient).
+  contact:
+    recipient: ${NAVIX_CONTACT_RECIPIENT:support@dhannow.com}
+  # Grievance Redressal Officer — named on the Key Fact Statement the borrower eSigns, and mirrored
+  # by BRAND.grievanceOfficer in the frontend. Regulatory copy: change both together.
+  grievance:
+    officer-name: ${NAVIX_GRIEVANCE_NAME:Lalit Kumar}
+    officer-phone: ${NAVIX_GRIEVANCE_PHONE:8510028510}
+    officer-email: ${NAVIX_GRIEVANCE_EMAIL:grievance@dhanboost.com}
+  # SES bounce/complaint ingestion (SES config-set -> SNS -> SQS -> SesEventSqsListener). Off by
+  # default so the app boots without an SQS queue; flip on in AWS environments.
+  ses:
+    events:
+      enabled: ${NAVIX_SES_EVENTS_ENABLED:false}
+      queue: ${NAVIX_SES_EVENTS_QUEUE:navix-ses-events}
+  notifications:
+    async:
+      core-pool-size: ${NAVIX_NOTIF_CORE_POOL:2}
+      max-pool-size: ${NAVIX_NOTIF_MAX_POOL:8}
+      queue-capacity: ${NAVIX_NOTIF_QUEUE:500}
+
+# API documentation
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

@@ -1,6 +1,8 @@
 # DhanNow: fork navix_final + DhanNow loan engine + Flutter Android app
 
-## ▶ Step 1 (done, awaiting your approval): reskin the wireframe to the app_navix UI
+## ✔ Step 1 (approved 2026-11-01): reskin the wireframe to the app_navix UI
+
+Approved together with the component catalogue `docs/wireframes/ui-kit.html` (https://claude.ai/artifact/LWXE56nRw25JLy4SVxbGQ6), which is now the reference for every app widget.
 
 **Scope:** only the wireframe canvas (`docs/wireframes/*.dc.html`), published to https://claude.ai/artifact/9mpCW1pqqzADmTcoVXNCqJ. No backend, web or app code is touched until you approve the wireframe.
 
@@ -135,7 +137,7 @@ What the wireframe got wrong (only colours were taken) and is now carried over e
 **Accessibility exception, noted:** white on `#FF5B37` is about 3:1. It is kept for primary buttons only because app_navix uses it, with 16px semibold labels. Every other ember text uses `#C73A18`.
 
 **Flutter mapping:**
-- `ThemeExtension<DnTokens>` carries every token above.
+- `DnTokens` (static constants in `app/lib/core/theme/tokens.dart`) carries every token above. Not a `ThemeExtension`: the app is light-only in v1 (CC-58), so there is nothing to interpolate.
 - Widgets mirror the kit:
   - `DnPanel` (card + shadow + top edge);
   - `DnFigure` (Bebas amount + Inter label);
@@ -201,9 +203,11 @@ The wireframe is the app's spec, so it is fixed first and re-published to https:
    - The SSM import uses `/dhannow/${NAVIX_ENV}/`.
    - The local profile disables the SSM import entirely.
 4. Baseline green: `./mvnw verify -Pit` and `web` `npm run typecheck && npm run lint && npm test` pass **before any change** (snapshot the test counts).
-5. Add JaCoCo (fails under 80% line coverage on `navix-loan` and `navix-collections` engine packages) and ArchUnit (module dependency rules). Both are new; nothing else is added to tooling.
+5. Add JaCoCo (fails under 80% line coverage on `navix-loan` and `navix-collections` engine packages) and ArchUnit (module dependency rules). Both are new; nothing else is added to tooling. **Moved to the first step of Phase 1:** the gated engine packages (`LoanMath`, `PricingService`, then `CreditLevelService`) are created there, so a Phase 0 gate would have nothing to measure.
 
 **Acceptance:** fork builds and all existing navix tests pass unchanged.
+
+**Status (2026-11-01): done.** Fork point, merge resolution, scrub list and baseline counts are in `docs/UPSTREAM.md`. Backend `mvn verify` (1,802 unit) and `mvn verify -Pit` (60 integration) are green; web typecheck, lint and 907 vitest tests are green; `gitleaks` is clean, and `.github/workflows/secrets.yml` runs it on every push and PR. Three navix tests were date-dependent and failed on the 1st of the month; they are fixed and listed in UPSTREAM.md.
 
 ## Phase 1: Versioned config + DhanNow money math (weeks 1–2)
 
@@ -237,6 +241,14 @@ The wireframe is the app's spec, so it is fixed first and re-published to https:
 - Property tests with jqwik (test scope only): `pf + gst + interest + net == principal` for every allowed amount; all values are integer paise.
 - Snapshot-immutability test: changing the active pricing does not alter an existing offer or loan.
 
+**Status (2026-11-01): done.** `mvn verify` is green (1,848 unit) and `mvn verify -Pit` is green (63 integration, up from 60; V92–V96 applied to Testcontainers Postgres). Gates: JaCoCo report on every module plus an 80% line check on the engine classes in `navix-loan` (`LoanMath`, `PricingService`, `CreditLevelService`, the snapshot records); ArchUnit (`ArchitectureRulesTest`, test scope) with three rules: rate constants read only by `LoanMath`, `LoanMath` used only in `com.navix.loan`, no package cycles between modules. Migrations V92–V95 as listed. Tests: `LoanMathDhanNowTest`, `LoanMathDhanNowPropertiesTest` (jqwik), `PricingServiceTest` (CC-03), CC-01 in `LoanServiceTest` and the flow IT. Deviations:
+- Rows without a frozen version (pre-V92) keep the navix terms: `new LoanMath()` is `LoanMath.NAVIX_PRICING`.
+- A DB trigger freezes a version's terms once it leaves DRAFT; a partial unique index allows one ACTIVE version.
+- `play-integrity` and `push-fcm` are seeded OFF until Phase 8 builds them.
+- `LimitCalculator` is unchanged: in navix it only feeds reporting. The sanctionable limit is set from the credit level (Phase 2).
+- `prepay_rebate` and `late_blocks_upgrade_days` are stored but not read (no rebate in v1; on-time is `closed ≤ due_at`). The `penal-charges` flag is seeded; the frozen `penal_enabled` decides the charge.
+- The offer and KFS show an indicative due date (expected disbursal + 14, CC-01); the final date is set at disbursal.
+
 ## Phase 2: Credit ladder (week 2)
 
 - **V96 `credit_level`:** `customer_id PK`, `level smallint` (1–7), `max_paise`, `updated_at`.
@@ -254,6 +266,12 @@ The wireframe is the app's spec, so it is fixed first and re-published to https:
   - partial then full on time → up;
   - L7 stays at L7;
   - manual exception needs ADMIN plus a reason.
+
+**Status (2026-11-01): done** (see Phase 1). V96 (`credit_level`, `credit_level_history`), `CreditLevelService`, `GET /api/me/credit-level`, `POST /api/customers/{id}/credit-level` (manual exception). Tests: `CreditLevelServiceTest`, `RepaymentServiceTest.partialThenFullOnTimeRepaymentMovesUpOneLevel`, flow IT. Deviations:
+- The sanction itself is capped (a ladder amount ≤ the level max, `requireSanctionable`); `chooseAmount` and `acceptOffer` then accept only the frozen ladder amounts ≤ the sanctioned ceiling (CC-04).
+- `customer_limit_override` (V69) is not read on the DhanNow path. The manual exception is `CreditLevelService.manualException` (ADMIN + reason code, history row with the approver).
+- `paid_on` is a date, so on-time compares the start of the `paid_on` IST day with `due_at`.
+- "Extended loans don't raise the level" waits for the extension itself (Phase 6).
 
 ## Phase 3: Loan lifecycle and status machine (weeks 3–4)
 
@@ -684,6 +702,10 @@ The audit found about 120 places where staff screens, queries and exports encode
 - **Tests:** vitest for new components; Playwright e2e for borrower happy path + staff sanction → disburse → confirm → verify repayment, run in CI against docker-compose.
 
 ## Phase 11: Flutter app (`app/`, weeks 5–12, parallel from Phase 5)
+
+**Started early (2026-11-01), design-system layer only:** `app/` scaffold (`com.dhannow.app`, minSdk 24, R8 + resource shrinking), bundled Inter + Bebas Neue subset to Latin + ₹, `core/theme`, and the `Dn*` widget kit in `core/widgets` matching `docs/wireframes/ui-kit.html`, plus a dev-only kit gallery. It needs no API, so it does not wait for Phase 5. Widget tests cover the kit at 320/412dp × 1.0/1.3/2.0 text scale (CC-58). Journey screens still follow the build order below, once their APIs exist.
+
+**Journeys built against a demo server (2026-11-01, owner asked to see the whole app):** every board S–E is a screen now, under `lib/features/`, routed by `go_router` (`core/router.dart`). Data comes from `core/api/api.dart`, an in-memory demo server with one method per planned endpoint and a scenario picker (`/demo`, from Settings or a long press on the Welcome logo) to show every journey state. Its quotes mirror `LoanMath` (₹1,000 → ₹742). When each phase's endpoints land, the method bodies become `dio` calls (and riverpod comes in then if still needed); screens do not change. Contacts come from `core/brand.dart`.
 
 **Packages** (kept to these, each justified):
 

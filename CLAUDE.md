@@ -33,12 +33,14 @@ All money is integer paise. All numbers come from versioned config (`pricing_con
 | `docs/wireframes/` | The app wireframe (rows S–F) plus staff console screens for loan extension (row G): one `*.dc.html` per screen, layout in `canvas.json`. Live, reviewable copy: https://claude.ai/artifact/9mpCW1pqqzADmTcoVXNCqJ (private) |
 | `docs/brand/` | Logo |
 | `site/` | Public website for dhannow.com (static HTML). Pages are generated from `docs/product/Document (11).docx` by `site/build_pages.py` with `site/page_template.html`; `site/calc.js` is the public loan calculator (`node site/calc.js` runs its self-check) |
-| `backend/`, `web/`, `app/`, `infra/` | **Not created yet.** Phase 0 of the plan creates them |
+| `backend/`, `web/` | navix fork (Phase 0 done). What changed at the fork and the baseline counts: `docs/UPSTREAM.md` |
+| `app/` | Flutter app: theme and `Dn*` kit (`lib/core/`, matching `docs/wireframes/ui-kit.html`), every wireframe screen (`lib/features/`), demo server (`lib/core/api/`). `flutter test tool/screens_test.dart` renders every screen to PNG |
+| `infra/` | Not created yet (Phase 13) |
 
 ## Status
 
-1. **Now:** wireframe under user review (app_navix UI kit, cobalt-blue accent). No product code is written until the user approves it.
-2. **Next:** Phase 0 of `docs/PLAN.md`: fork navix `main` (`67d8f675`), merge the 11 `app_navix` UI commits on top, put `backend/` and `web/` (staff console only) in place, get all navix tests green, then follow the phases in order.
+1. **Done:** wireframe and UI kit approved (2026-11-01). Phase 0: navix forked, scrubbed for the public repo, all baseline tests green. Phases 1–2 done (2026-11-01; `mvn verify` 1,848 unit and `mvn verify -Pit` 63 integration green): versioned `pricing_config`/`product_config` frozen on each offer and loan, `LoanMath` over a `PricingSnapshot` (₹1,000 → ₹742, repay ₹1,000), app-wide IST `Clock`, credit ladder (`CreditLevelService`, `GET /api/me/credit-level`), JaCoCo + ArchUnit gates.
+2. **Next:** Phase 3 (loan lifecycle and status machine), then the phases in order. The app (`app/`) has every wireframe screen built against a demo server (`core/api/api.dart`); each screen switches to the real API as its phase lands.
 
 ## Decisions already made (do not re-ask)
 
