@@ -89,17 +89,28 @@ class ApplicationFlowIntegrationTest {
                 "{\"sanctionedAmountPaise\":100000,\"salaryCreditDay\":28,\"remarks\":\"verified\"}", "SANCTIONED");
         recordEsign(appId);
         act(appId, "accept-offer", "7", "BORROWER", "{\"amountPaise\":100000}", "DISBURSEMENT_PENDING");
-        // V48: the Disbursement Head releases directly and their transaction id IS the validation —
-        // there is no accountant hop behind them, so this one call lands the loan ACTIVE.
+        // PLAN Phase 4: the Disbursement Head sends the money and enters the UTR; the loan exists
+        // but waits for an Accountant to confirm the transfer.
         act(appId, "disbursement-decision", "6", "DISBURSEMENT_HEAD",
-                "{\"decision\":true,\"txnRef\":\"UTR-IT-001\"}", "ACTIVE");
-
-        MvcResult appView = mvc.perform(get("/api/applications/{id}", appId)
-                        .header("Authorization", bearer("1", "ADMIN")))
+                "{\"decision\":true,\"txnRef\":\"UTR-IT-001\"}", "DISBURSAL_CONFIRMATION_PENDING");
+        long loanId = loanIdOf(appId);
+        // The borrower sees "money on the way": their loan, the UTR, and a pending lifecycle.
+        mvc.perform(get("/api/loan/{id}", loanId).header("Authorization", bearer("7", "BORROWER")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.loanId", notNullValue()))
-                .andReturn();
-        long loanId = data(appView).get("loanId").asLong();
+                .andExpect(jsonPath("$.data.lifecycleStatus").value("DISBURSEMENT_PENDING"))
+                .andExpect(jsonPath("$.data.status").value("DISBURSING"))
+                .andExpect(jsonPath("$.data.disbursalTxnRef").value("UTR-IT-001"));
+        mvc.perform(get("/api/applications/{id}", appId).header("Authorization", bearer("7", "BORROWER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("DISBURSAL_CONFIRMATION_PENDING"))
+                .andExpect(jsonPath("$.data.loanId").value(loanId));
+        // The Accountant's queue.
+        mvc.perform(get("/api/applications").param("status", "DISBURSAL_CONFIRMATION_PENDING")
+                        .header("Authorization", bearer("3", "ACCOUNTANT")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.id==" + appId + ")]").exists());
+        confirm(appId, "3", "ACCOUNTANT", "ACTIVE");
+        assertThat(loanIdOf(appId)).isEqualTo(loanId);
 
         // DhanNow v1 (V92 seed): ₹1,000 → ₹742 in the bank, ₹1,000 repaid on day 14.
         mvc.perform(get("/api/loan/{id}", loanId).header("Authorization", bearer("1", "ADMIN")))
@@ -131,25 +142,160 @@ class ApplicationFlowIntegrationTest {
                 .andExpect(jsonPath("$.data[?(@.action=='ACTIVATE')]").exists());
     }
 
+    /**
+     * PLAN Phase 4: ADMIN still passes every role check but no longer bypasses separation of duties,
+     * so an ADMIN who sanctioned cannot release, and nobody who sanctioned or released can confirm.
+     */
     @Test
-    void adminWalksApplicationToActiveSolo() throws Exception {
+    void sod_adminNoLongerWalksAnApplicationToActiveSolo() throws Exception {
         long appId = createApplication(10L);
-        assertStatusEquals(appId, "DRAFT");
-
         act(appId, "submit-kyc", "10", "BORROWER", null, "KYC_PENDING");
         act(appId, "assign", "10", "ADMIN", "{\"executiveId\":10}", "CREDIT_EXEC_PENDING");
         act(appId, "sanction", "10", "ADMIN",
-                "{\"sanctionedAmountPaise\":100000,\"salaryCreditDay\":28}",
-                "SANCTIONED");
+                "{\"sanctionedAmountPaise\":100000,\"salaryCreditDay\":28}", "SANCTIONED");
         recordEsign(appId);
         act(appId, "accept-offer", "10", "BORROWER", "{\"amountPaise\":100000}", "DISBURSEMENT_PENDING");
-        act(appId, "disbursement-decision", "10", "ADMIN",
-                "{\"decision\":true,\"txnRef\":\"ADMIN-TXN-10\"}", "ACTIVE");
 
-        mvc.perform(get("/api/applications/{id}", appId).header("Authorization", bearer("1", "ADMIN")))
+        // sanctioner ≠ disburser
+        expectSod(post("/api/applications/{id}/disbursement-decision", appId), "10", "ADMIN",
+                "{\"decision\":true,\"txnRef\":\"ADMIN-TXN-10\"}");
+        assertStatusEquals(appId, "DISBURSEMENT_PENDING");
+        act(appId, "disbursement-decision", "6", "DISBURSEMENT_HEAD",
+                "{\"decision\":true,\"txnRef\":\"ADMIN-TXN-10\"}", "DISBURSAL_CONFIRMATION_PENDING");
+        // confirmer ≠ sanctioner, confirmer ≠ disburser (both as ADMIN, who passes the role check)
+        expectSod(post("/api/applications/{id}/disbursal/confirm", appId), "10", "ADMIN", "{}");
+        expectSod(post("/api/applications/{id}/disbursal/confirm", appId), "6", "ADMIN", "{}");
+        expectSod(post("/api/applications/{id}/disbursal/return", appId), "6", "ADMIN", "{\"notes\":\"x\"}");
+        assertStatusEquals(appId, "DISBURSAL_CONFIRMATION_PENDING");
+        // A third person confirms.
+        confirm(appId, "1", "ADMIN", "ACTIVE");
+    }
+
+    /** PLAN Phase 4: payment recorder ≠ verifier, ADMIN included; a different staff member verifies. */
+    @Test
+    void sod_paymentRecorderCannotVerify() throws Exception {
+        long loanId = loanIdOf(walkToActive(50L));
+        MvcResult recorded = mvc.perform(post("/api/loan/{id}/repayments/admin-record", loanId)
+                        .header("Authorization", bearer("1", "ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amountPaise\":100000,\"method\":\"UPI\",\"txnRef\":\"UTR-SOD-50\",\"paidOn\":\""
+                                + LocalDate.now(ZoneId.of("Asia/Kolkata")) + "\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.status").value("ACTIVE"))
-                .andExpect(jsonPath("$.data.loanId", notNullValue()));
+                .andExpect(jsonPath("$.data.status").value("PENDING_VERIFICATION"))
+                .andReturn();
+        long paymentId = data(recorded).get("id").asLong();
+
+        expectSod(post("/api/loan/{id}/repayments/{pid}/verify", loanId, paymentId), "1", "ADMIN", null);
+        mvc.perform(post("/api/loan/{id}/repayments/{pid}/verify", loanId, paymentId)
+                        .header("Authorization", bearer("3", "ACCOUNTANT")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("VERIFIED"));
+        assertThat(jdbc.queryForMap("select recorded_by, decided_by from payment where id = ?", paymentId))
+                .containsEntry("recorded_by", 1L).containsEntry("decided_by", 3L);
+    }
+
+    /** PLAN Phase 4: the collections officer who logged a payment cannot validate it, ADMIN included. */
+    @Test
+    void sod_collectionsPaymentRecorderCannotValidate() throws Exception {
+        long loanId = loanIdOf(walkToActive(51L));
+        MvcResult opened = mvc.perform(post("/api/collections/cases")
+                        .header("Authorization", bearer("1", "ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"loanId\":" + loanId + "}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String caseId = data(opened).get("id").asText();
+        MvcResult raised = mvc.perform(post("/api/collections/cases/{id}/payments", caseId)
+                        .header("Authorization", bearer("1", "ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kind\":\"PART_PAYMENT\",\"amountPaise\":40000,\"txnRef\":\"UTR-COL-51\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String paymentId = data(raised).get("id").asText();
+
+        expectSod(post("/api/collections/payments/{id}/validate", paymentId), "1", "ADMIN", "{\"accept\":true}");
+        mvc.perform(post("/api/collections/payments/{id}/validate", paymentId)
+                        .header("Authorization", bearer("3", "ACCOUNTANT"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"accept\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("VALIDATED"));
+    }
+
+    /**
+     * CC-01, PLAN Phase 4: day 0 is the confirmed date. The UTR went in three days before the
+     * Accountant confirmed (simulated by back-dating the pending loan), and the due date moves with
+     * the confirmation: today + 14 at 23:59:59 IST.
+     */
+    @Test
+    void cc01_dueDateIsFixedFromTheConfirmedDateNotTheUtrEntry() throws Exception {
+        long appId = walkToConfirmation(52L);
+        long loanId = loanIdOf(appId);
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+        jdbc.update("update loan set disbursed_on = ?, due_date = ? where id = ?",
+                today.minusDays(3), today.plusDays(11), loanId);
+        // Payments wait for the confirmation too.
+        mvc.perform(post("/api/loan/{id}/repayments", loanId)
+                        .header("Authorization", bearer("52", "BORROWER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amountPaise\":100000,\"method\":\"UPI\",\"txnRef\":\"UTR-EARLY\",\"proofUrl\":\"loan/repayment-proof/52/x.png\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("LOAN_NOT_ACTIVE"));
+
+        confirm(appId, "3", "ACCOUNTANT", "ACTIVE");
+
+        LocalDate due = today.plusDays(14);
+        assertThat(jdbc.queryForMap("select disbursed_on, due_date, due_at, tenure_days, lifecycle_status, status,"
+                        + " net_disbursed, total_repayable from loan where id = ?", loanId))
+                .containsEntry("disbursed_on", java.sql.Date.valueOf(today))
+                .containsEntry("due_date", java.sql.Date.valueOf(due))
+                .containsEntry("due_at", java.sql.Timestamp.from(
+                        due.atTime(23, 59, 59).atZone(ZoneId.of("Asia/Kolkata")).toInstant()))
+                .containsEntry("tenure_days", 14)
+                .containsEntry("lifecycle_status", "ACTIVE")
+                .containsEntry("status", "ACTIVE")
+                .containsEntry("net_disbursed", 74200L)
+                .containsEntry("total_repayable", 100000L);
+    }
+
+    /** A wrong UTR goes back to the Disbursement Head; the unconfirmed loan is dropped and re-minted. */
+    @Test
+    void accountantReturnsAWrongUtrToTheDisbursementHead() throws Exception {
+        long appId = walkToConfirmation(53L);
+        long firstLoan = loanIdOf(appId);
+        mvc.perform(post("/api/applications/{id}/disbursal/return", appId)
+                        .header("Authorization", bearer("3", "ACCOUNTANT"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"notes\":\"UTR not on the bank statement\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("DISBURSEMENT_PENDING"));
+        assertThat(jdbc.queryForObject("select count(*) from loan where id = ?", Long.class, firstLoan)).isZero();
+
+        act(appId, "disbursement-decision", "6", "DISBURSEMENT_HEAD",
+                "{\"decision\":true,\"txnRef\":\"UTR-53-FIXED\"}", "DISBURSAL_CONFIRMATION_PENDING");
+        confirm(appId, "3", "ACCOUNTANT", "ACTIVE");
+        assertThat(jdbc.queryForObject("select disbursal_txn_ref from loan where id = ?", String.class, loanIdOf(appId)))
+                .isEqualTo("UTR-53-FIXED");
+    }
+
+    /** CC-23: while the disbursal awaits confirmation, a new application is blocked. */
+    @Test
+    void cc23_applyAgainWhileAwaitingDisbursalConfirmationIsBlocked() throws Exception {
+        walkToConfirmation(54L);
+        mvc.perform(post("/api/applications")
+                        .header("Authorization", bearer("54", "BORROWER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"customerId\":54}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("ACTIVE_APPLICATION"));
+    }
+
+    /** V99: the new status is allowed by the database check. */
+    @Test
+    void v99_statusCheckAcceptsTheConfirmationState() {
+        assertThat(jdbc.queryForObject("select pg_get_constraintdef(oid) from pg_constraint"
+                + " where conname = 'loan_application_status_check'", String.class))
+                .contains("DISBURSAL_CONFIRMATION_PENDING");
     }
 
     /**
@@ -169,7 +315,8 @@ class ApplicationFlowIntegrationTest {
         recordEsign(appId);
         act(appId, "accept-offer", "8", "BORROWER", "{\"amountPaise\":100000}", "DISBURSEMENT_PENDING");
         act(appId, "disbursement-decision", "6", "DISBURSEMENT_HEAD",
-                "{\"decision\":true,\"txnRef\":\"UTR-8\"}", "ACTIVE");
+                "{\"decision\":true,\"txnRef\":\"UTR-8\"}", "DISBURSAL_CONFIRMATION_PENDING");
+        confirm(appId, "3", "ACCOUNTANT", "ACTIVE");
 
         MvcResult appView = mvc.perform(get("/api/applications/{id}", appId)
                         .header("Authorization", bearer("1", "ADMIN")))
@@ -321,6 +468,54 @@ class ApplicationFlowIntegrationTest {
         mvc.perform(request)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value(expectedStatus));
+    }
+
+    /** A first loan (₹1,000) walked to the Accountant's confirmation desk. */
+    private long walkToConfirmation(long customerId) throws Exception {
+        long appId = createApplication(customerId);
+        String c = String.valueOf(customerId);
+        act(appId, "submit-kyc", c, "BORROWER", null, "KYC_PENDING");
+        act(appId, "assign", "5", "CREDIT_HEAD", "{\"executiveId\":2}", "CREDIT_EXEC_PENDING");
+        act(appId, "sanction", "2", "CREDIT_EXECUTIVE",
+                "{\"sanctionedAmountPaise\":100000,\"salaryCreditDay\":28}", "SANCTIONED");
+        recordEsign(appId);
+        act(appId, "accept-offer", c, "BORROWER", "{\"amountPaise\":100000}", "DISBURSEMENT_PENDING");
+        act(appId, "disbursement-decision", "6", "DISBURSEMENT_HEAD",
+                "{\"decision\":true,\"txnRef\":\"UTR-" + c + "\"}", "DISBURSAL_CONFIRMATION_PENDING");
+        return appId;
+    }
+
+    private long walkToActive(long customerId) throws Exception {
+        long appId = walkToConfirmation(customerId);
+        confirm(appId, "3", "ACCOUNTANT", "ACTIVE");
+        return appId;
+    }
+
+    private void confirm(long appId, String actorId, String role, String expectedStatus) throws Exception {
+        mvc.perform(post("/api/applications/{id}/disbursal/confirm", appId)
+                        .header("Authorization", bearer(actorId, role)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value(expectedStatus));
+    }
+
+    private void expectSod(org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request,
+                           String actorId, String role, String body) throws Exception {
+        request = request.header("Authorization", bearer(actorId, role)).contentType(MediaType.APPLICATION_JSON);
+        if (body != null) {
+            request = request.content(body);
+        }
+        mvc.perform(request)
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("SOD_VIOLATION"));
+    }
+
+    private long loanIdOf(long appId) throws Exception {
+        MvcResult view = mvc.perform(get("/api/applications/{id}", appId)
+                        .header("Authorization", bearer("1", "ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.loanId", notNullValue()))
+                .andReturn();
+        return data(view).get("loanId").asLong();
     }
 
     private void assertStatusEquals(long appId, String expected) throws Exception {

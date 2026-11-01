@@ -87,4 +87,12 @@ public class Payment extends BaseAuditEntity {
 
     @Column(name = "decided_at")
     private Instant decidedAt;
+
+    /**
+     * The staff member who recorded this payment (V99), so the verifier can be held to someone else
+     * (PLAN Phase 4 SoD). Null when the borrower recorded it, or when it arrives already validated
+     * upstream (collections, NACH), and on rows before V99.
+     */
+    @Column(name = "recorded_by")
+    private Long recordedBy;
 }

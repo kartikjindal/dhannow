@@ -208,6 +208,58 @@ class RepaymentServiceTest {
                 .hasMessageContaining("settled");
     }
 
+    /** PLAN Phase 4: no repayment against a loan whose disbursal the Accountant has not confirmed. */
+    @Test
+    void paymentOnAnUnconfirmedLoanIsRefused() {
+        Loan pending = activeLoan();
+        pending.startPending();
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> repaymentService.recordPayment(1L, 100_000L, PaymentMethod.UPI, "T", "p", null))
+                .hasFieldOrPropertyWithValue("code", "LOAN_NOT_ACTIVE");
+    }
+
+    /** PLAN Phase 4 SoD: the recorder never verifies, ADMIN included; another staff member may. */
+    @Test
+    void sodPaymentRecorderCannotVerifyEvenAsAdmin() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        com.navix.common.security.ActorContext.set(
+                new com.navix.common.security.CurrentActor("10", "Admin", "ADMIN"));
+        try {
+            Payment p = repaymentService.recordPayment(1L, 500_000L, PaymentMethod.UPI, "TXN-SOD", null, DUE);
+            assertThat(p.getRecordedBy()).isEqualTo(10L);
+            when(paymentRepository.findById(99L)).thenReturn(Optional.of(p));
+
+            assertThatThrownBy(() -> repaymentService.verifyPayment(99L))
+                    .hasFieldOrPropertyWithValue("code", "SOD_VIOLATION");
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.PENDING_VERIFICATION);
+
+            com.navix.common.security.ActorContext.set(
+                    new com.navix.common.security.CurrentActor("40", "Accountant", "ACCOUNTANT"));
+            repaymentService.verifyPayment(99L);
+            assertThat(p.getStatus()).isEqualTo(PaymentStatus.VERIFIED);
+            assertThat(p.getDecidedBy()).isEqualTo(40L);
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
+    }
+
+    /** A borrower's own payment has no staff recorder: customer ids are not staff ids. */
+    @Test
+    void borrowerRecordedPaymentHasNoStaffRecorder() {
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(activeLoan()));
+        when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        com.navix.common.security.ActorContext.set(
+                new com.navix.common.security.CurrentActor("7", "Borrower", "BORROWER"));
+        try {
+            assertThat(repaymentService.recordPayment(1L, 500_000L, PaymentMethod.UPI, "TXN-B", "proof", DUE)
+                    .getRecordedBy()).isNull();
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
+    }
+
     @Test
     void verifyClosesLoanWhenFullyPaid() {
         Loan loan = activeLoan();

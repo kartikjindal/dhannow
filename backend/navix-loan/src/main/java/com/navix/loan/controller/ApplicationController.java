@@ -615,9 +615,21 @@ public class ApplicationController {
         return ApiResponse.ok(ApplicationView.of(flow.mandateOverride(id, req.notes())));
     }
 
-    // No accountant-validate endpoint: the Disbursement Head's transaction id IS the validation
-    // (V48). The Accountant's remaining money work is repayment verification and collections
-    // payments, both under /api/loan and /api/collections.
+    /**
+     * ACCOUNTANT (PLAN Phase 4): confirm the transfer the Disbursement Head recorded. The loan goes
+     * ACTIVE with day 0 = today (IST). Staff console path: {@code /api/staff/applications/{id}/disbursal/confirm}.
+     */
+    @PostMapping("/{id}/disbursal/confirm")
+    public ApiResponse<ApplicationView> confirmDisbursal(@PathVariable Long id,
+                                                         @RequestBody(required = false) DecisionRequest req) {
+        return ApiResponse.ok(ApplicationView.of(flow.confirmDisbursal(id, req != null ? req.notes() : null)));
+    }
+
+    /** ACCOUNTANT: the transfer can't be matched (wrong UTR, not credited) → back to the Disbursement Head. */
+    @PostMapping("/{id}/disbursal/return")
+    public ApiResponse<ApplicationView> returnDisbursal(@PathVariable Long id, @RequestBody DecisionRequest req) {
+        return ApiResponse.ok(ApplicationView.of(flow.returnDisbursal(id, req.notes())));
+    }
 
     @PostMapping("/{id}/retry-disbursement")
     public ApiResponse<ApplicationView> retry(@PathVariable Long id) {

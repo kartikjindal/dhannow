@@ -481,7 +481,7 @@ public class OfferService {
      */
     private static final java.util.Set<ApplicationStatus> MANDATE_SETUP_ALLOWED = java.util.EnumSet.of(
             ApplicationStatus.PRE_APPROVED, ApplicationStatus.SANCTIONED, ApplicationStatus.DISBURSEMENT_PENDING,
-            ApplicationStatus.DISBURSEMENT_FAILED, ApplicationStatus.DISBURSED, ApplicationStatus.ACTIVE,
+            ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING, ApplicationStatus.DISBURSEMENT_FAILED, ApplicationStatus.DISBURSED, ApplicationStatus.ACTIVE,
             ApplicationStatus.OVERDUE, ApplicationStatus.DEFAULTED, ApplicationStatus.WRITTEN_OFF,
             ApplicationStatus.CLOSED);
 

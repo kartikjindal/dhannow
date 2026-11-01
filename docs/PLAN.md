@@ -360,6 +360,52 @@ Deviations:
   - ADMIN no longer bypasses SoD (it still bypasses role checks).
 - **Tests:** an IT for every pair, rejected with 422 `SOD_VIOLATION`.
 
+**Status (2026-11-01): done.** `mvn verify` is green (1,871 unit) and `mvn verify -Pit` is green (75 integration, up from 69; V99 applied to Testcontainers Postgres). Migration:
+- **V99:** `DISBURSAL_CONFIRMATION_PENDING` added to `loan_application_status_check`; new `payment.recorded_by` (the staff member who recorded a payment; null for the borrower and for payments validated upstream).
+
+Code:
+- **Status machine.** `DISBURSEMENT_PENDING → DISBURSAL_CONFIRMATION_PENDING → DISBURSED → ACTIVE`, plus `DISBURSAL_CONFIRMATION_PENDING → DISBURSEMENT_PENDING` for a return. `DISBURSEMENT_PENDING → DISBURSED` is gone.
+- **UTR entry.** `disbursementDecision` (Disbursement Head) still requires the UTR. It now mints the loan `DISBURSEMENT_PENDING` (navix `status` DISBURSING) with the UTR on `loan.disbursal_txn_ref` and an indicative schedule, and parks the file. The action stays `VALIDATE_SUCCESS`, so the actor directory and decision history still name the Head as the disburser.
+- **Confirm.** `POST /api/applications/{id}/disbursal/confirm` (ACCOUNTANT) runs `finalizeDisbursal`. `LoanService.confirmDisbursal` sets day 0 = today in IST (the confirmed date), recomputes the due date, `due_at` (23:59:59 IST, from the frozen product snapshot) and tenure, then calls `moveTo(ACTIVE)`. The ladder, referral and DSA hooks run then, and the application moves DISBURSED → ACTIVE. The borrower's `LOAN_DISBURSED` notification still fires on `ACTIVATE`.
+- **Return.** `POST /api/applications/{id}/disbursal/return` (ACCOUNTANT, reason required) handles a wrong UTR or money not credited. The file goes back to DISBURSEMENT_PENDING, the unconfirmed loan row is deleted (`LoanService.discardPending`), and the event keeps the returned UTR. The Head re-enters the UTR and a new pending loan is minted.
+- **`SeparationOfDutiesGuard`.** Moved from `navix-iam` to `navix-common` (`com.navix.common.security`) so loan and collections can call it. It is now static, and there is one rule per checker step: `disburser`, `disbursalConfirmer`, `paymentVerifier`, `emiApprover`, `extensionApprover`, `extensionPaymentVerifier`. The last three are ready for Phase 6. The guard ignores roles, so ADMIN is bound by it, while ADMIN still passes every role check.
+- **Enforced today:**
+  - sanctioner ≠ disburser (at UTR entry);
+  - confirmer or returner ≠ sanctioner and ≠ disburser;
+  - payment recorder ≠ verifier (`RepaymentService.verifyPayment`, recorder from `payment.recorded_by`);
+  - collections payment raiser ≠ validator (`CollectionPaymentService.validate`).
+
+  Violations return 422 `SOD_VIOLATION`.
+- **Borrower view (additive).** `GET /api/applications/{id}` shows `DISBURSAL_CONFIRMATION_PENDING` with the `loanId`. `GET /api/loan/{id}` shows `lifecycleStatus` DISBURSEMENT_PENDING, `status` DISBURSING and the UTR. This is the app's "money sent, confirming" stage (Stage.disbursal, loan `Lifecycle.disbursementPending` + `disbursalUtr`). A repayment on an unconfirmed loan returns 422 `LOAN_NOT_ACTIVE`.
+- **New status in existing lists.** Added to the staff "reached sanction" set, the mandate-setup set and the DSA lead mapping (IN_PROGRESS). The Accountant's queue is `GET /api/applications?status=DISBURSAL_CONFIRMATION_PENDING`.
+
+Tests:
+- `SeparationOfDutiesGuardTest` (moved; every Phase 4 and Phase 6 rule pair).
+- `ApplicationFlowServiceTest`: UTR waits for the Accountant, the sanctioner cannot enter the UTR even as ADMIN, the confirmer differs from the sanctioner and the disburser, ACCOUNTANT-only, return, `cc23_applyAgainWhileAwaitingDisbursalConfirmationIsBlocked`.
+- `LoanServiceTest`: `cc01_confirmationOnALaterDayMovesDayZeroToTheConfirmedDate` (UTR on 1 Nov, confirmed 3 Nov at 00:30 IST → due 17 Nov 23:59:59 IST), discard only while pending.
+- `RepaymentServiceTest`: recorder ≠ verifier as ADMIN, borrower payments have no staff recorder, no payment while pending.
+- `CollectionPaymentServiceTest`: raiser ≠ validator as ADMIN.
+- `ApplicationFlowIntegrationTest`:
+  - happy path UTR → borrower sees pending + UTR → Accountant queue → confirm → ACTIVE;
+  - `sod_adminNoLongerWalksAnApplicationToActiveSolo` (sanctioner→disburser, sanctioner→confirmer, disburser→confirmer, disburser→return);
+  - `sod_paymentRecorderCannotVerify`;
+  - `sod_collectionsPaymentRecorderCannotValidate`;
+  - `cc01_dueDateIsFixedFromTheConfirmedDateNotTheUtrEntry`;
+  - the return path, `cc23_…` and the V99 check.
+
+Deviations:
+- **Path.** The backend endpoint is `/api/applications/{id}/disbursal/confirm`. The staff console reaches it as `/api/staff/applications/{id}/disbursal/confirm` through the existing BFF proxy, like every other staff application action.
+- **Confirmed date.** It is the server's IST date at confirmation. The Accountant does not type a date, which is borrower-favourable when confirmation is late (CC-01).
+- **Return path added.** Without it, a mistyped UTR would strand the file.
+- **ADMIN `admin-record`.** It no longer verifies in the same call. The payment now waits for an Accountant, because recorder ≠ verifier binds ADMIN too.
+- **No recorder on upstream-validated credits.** Collections and NACH credits (`LoanDirectory.creditCollectionPayment`) carry no recorder: their maker-checker runs upstream, and raiser ≠ validator is now enforced there.
+- **CC-23 error codes.** CC-23 keeps the navix codes `ACTIVE_APPLICATION` / `ACTIVE_LOAN` (the web routes on them) instead of `LOAN_IN_PROGRESS`.
+- **CC-01 partly done.** Schedule v1, the `SCHEDULE` document and the SMS/push of the final due date wait for Phase 5 (documents) and the notification work.
+- **No Accountant alert.** The Accountant is not notified when a file enters the confirmation queue; the retired `DISBURSEMENT_PENDING_ACCOUNTANT` type is not revived.
+- **Staff console.** It has no confirm/return buttons yet, and the segment "Awaiting disbursal confirmation" is not built (Phase 10b, R6). A pending loan reads as "active" in the customer segments, where DISBURSING was already counted.
+- **EMI and extension SoD.** These are rule definitions only; the code they guard is Phase 6.
+- **CC-21.** `@Version` is still not on `loan_application`.
+
 ## Phase 5: Documents (weeks 5–6)
 
 - **Renderers:** split `SanctionLetterPdfRenderer` into:

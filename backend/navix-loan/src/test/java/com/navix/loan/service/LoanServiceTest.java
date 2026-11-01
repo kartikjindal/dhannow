@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.navix.loan.domain.ConfigStatus;
+import com.navix.loan.domain.LoanLifecycle;
 import com.navix.loan.domain.LoanStatus;
 import com.navix.loan.entity.Loan;
 import com.navix.loan.entity.LoanApplication;
@@ -56,7 +57,9 @@ class LoanServiceTest {
         assertThat(loan.getDueDate()).isEqualTo(LocalDate.of(2026, 6, 30)); // salary-linked ≤ 40d
         assertThat(loan.getTotalRepayable()).isEqualTo(1_270_000L); // principal + 27d interest
         assertThat(loan.getOutstanding()).isEqualTo(1_270_000L);
-        assertThat(loan.getStatus()).isEqualTo(LoanStatus.ACTIVE);
+        // PLAN Phase 4: minted on the UTR, waiting for the Accountant.
+        assertThat(loan.getLifecycleStatus()).isEqualTo(LoanLifecycle.DISBURSEMENT_PENDING);
+        assertThat(loan.getStatus()).isEqualTo(LoanStatus.DISBURSING);
     }
 
     @Test
@@ -114,5 +117,62 @@ class LoanServiceTest {
         assertThat(loan.getGraceDays()).isZero();
         assertThat(loan.getPricingVersionId()).isEqualTo(1L);
         assertThat(loan.getProductVersionId()).isEqualTo(1L);
+    }
+
+    /**
+     * CC-01, PLAN Phase 4: the UTR goes in on 1 Nov, the Accountant confirms on 3 Nov (a weekend, an
+     * accountant delay). Day 0 is 3 Nov, so the loan is due 17 Nov 23:59:59 IST, and only now ACTIVE.
+     */
+    @Test
+    @DisplayName("CC-01: the due date is fixed from the confirmed date, and the loan goes ACTIVE then")
+    void cc01_confirmationOnALaterDayMovesDayZeroToTheConfirmedDate() {
+        PricingConfigRepository pricingRepo = mock(PricingConfigRepository.class);
+        ProductConfigRepository productRepo = mock(ProductConfigRepository.class);
+        when(pricingRepo.findById(1L)).thenReturn(Optional.of(
+                TestPricing.pricingRow(1L, 1, LoanMath.DHANNOW_SEED_PRICING, ConfigStatus.ACTIVE)));
+        when(productRepo.findById(1L)).thenReturn(Optional.of(TestPricing.seedProductRow(1L, ConfigStatus.ACTIVE)));
+        PricingService pricing = new PricingService(pricingRepo, productRepo);
+        LoanApplication app = new LoanApplication();
+        app.setCustomerId(7L);
+        app.setAmountRequested(100_000L);
+        app.setPricingVersionId(1L);
+        app.setProductVersionId(1L);
+        when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        Clock utrDay = Clock.fixed(Instant.parse("2026-11-01T06:00:00Z"), ZoneId.of("Asia/Kolkata"));
+        Loan loan = new LoanService(loanRepository, pricing, utrDay).disburse(app, null, "UTR-DN-2");
+        assertThat(loan.getLifecycleStatus()).isEqualTo(LoanLifecycle.DISBURSEMENT_PENDING);
+        assertThat(loan.getDueDate()).isEqualTo(LocalDate.of(2026, 11, 15)); // indicative only
+        loan.setId(5L);
+        when(loanRepository.findById(5L)).thenReturn(Optional.of(loan));
+
+        // 00:30 IST on 3 Nov is still 2 Nov in UTC: day 0 is the IST date.
+        Clock confirmDay = Clock.fixed(Instant.parse("2026-11-02T19:00:00Z"), ZoneId.of("Asia/Kolkata"));
+        Loan active = new LoanService(loanRepository, pricing, confirmDay).confirmDisbursal(5L, app, null);
+
+        assertThat(active.getLifecycleStatus()).isEqualTo(LoanLifecycle.ACTIVE);
+        assertThat(active.getStatus()).isEqualTo(LoanStatus.ACTIVE);
+        assertThat(active.getDisbursedOn()).isEqualTo(LocalDate.of(2026, 11, 3));
+        assertThat(active.getDueDate()).isEqualTo(LocalDate.of(2026, 11, 17));
+        assertThat(active.getDueAt()).isEqualTo(Instant.parse("2026-11-17T18:29:59Z"));
+        assertThat(active.getTenureDays()).isEqualTo(14);
+        assertThat(active.getNetDisbursed()).isEqualTo(74_200L);
+        assertThat(active.getTotalRepayable()).isEqualTo(100_000L);
+        assertThat(active.getDisbursalTxnRef()).isEqualTo("UTR-DN-2");
+    }
+
+    @Test
+    void onlyAnUnconfirmedLoanCanBeDiscarded() {
+        Loan live = new Loan();
+        live.setId(6L);
+        when(loanRepository.findById(6L)).thenReturn(Optional.of(live));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> loanService.discardPending(6L))
+                .hasFieldOrPropertyWithValue("code", "ILLEGAL_TRANSITION");
+
+        Loan pending = new Loan();
+        pending.startPending();
+        when(loanRepository.findById(7L)).thenReturn(Optional.of(pending));
+        loanService.discardPending(7L);
+        org.mockito.Mockito.verify(loanRepository).delete(pending);
     }
 }

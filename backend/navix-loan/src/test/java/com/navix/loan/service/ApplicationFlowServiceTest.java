@@ -260,10 +260,16 @@ class ApplicationFlowServiceTest {
         assertThat(app.getStatus()).isEqualTo(ApplicationStatus.DISBURSEMENT_PENDING);
         assertThat(app.getAmountRequested()).isEqualTo(1_500_000L);
 
-        // The Disbursement Head makes the transfer and releases it directly — no accountant hop
-        // behind them since V47 (decision 42).
-        actor("disb1", "DISBURSEMENT_HEAD");
+        // PLAN Phase 4: the Disbursement Head sends the money and enters the UTR; an Accountant
+        // confirms it, and only then is the loan ACTIVE.
+        actor("66", "DISBURSEMENT_HEAD");
         flow.disbursementDecision(1L, true, "UTR123", "UTR ok");
+        assertThat(app.getStatus()).isEqualTo(ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING);
+        assertThat(app.getLoanId()).isEqualTo(99L);
+
+        when(loanService.confirmDisbursal(99L, app, null)).thenReturn(loan);
+        actor("77", "ACCOUNTANT");
+        flow.confirmDisbursal(1L, "credited");
         assertThat(app.getStatus()).isEqualTo(ApplicationStatus.ACTIVE);
         assertThat(app.getLoanId()).isEqualTo(99L);
     }
@@ -287,9 +293,15 @@ class ApplicationFlowServiceTest {
         flow.acceptOffer(1L, 100_000L);
         verify(pricing).requireAllowedAmount(app, 100_000L);
 
-        actor("disb1", "DISBURSEMENT_HEAD");
+        actor("66", "DISBURSEMENT_HEAD");
         flow.disbursementDecision(1L, true, "UTR123", null);
         verify(loanService).disburse(app, null, "UTR123");
+        // The ladder starts on the confirmed disbursal, not on the UTR entry.
+        verify(creditLevels, never()).onLoanDisbursed(any(), any());
+
+        when(loanService.confirmDisbursal(99L, app, null)).thenReturn(loan);
+        actor("77", "ACCOUNTANT");
+        flow.confirmDisbursal(1L, null);
         verify(creditLevels).onLoanDisbursed(7L, 99L);
     }
 
@@ -582,19 +594,109 @@ class ApplicationFlowServiceTest {
         assertThat(app.getMarkedPendingAt()).isNotNull();
     }
 
+    /** PLAN Phase 4: the UTR mints the loan pending and waits for the Accountant; no hooks run yet. */
     @Test
-    void disbursementWithTxnRefSkipsAccountantAndActivates() {
+    void disbursementWithTxnRefWaitsForTheAccountant() {
         LoanApplication app = appAt(ApplicationStatus.DISBURSEMENT_PENDING);
         Loan loan = new Loan();
         loan.setId(99L);
         when(loanService.disburse(any(), any(), any())).thenReturn(loan);
 
-        actor("disb1", "DISBURSEMENT_HEAD");
-        flow.disbursementDecision(1L, true, "UTR999", "released");
+        actor("66", "DISBURSEMENT_HEAD");
+        flow.disbursementDecision(1L, true, " UTR999 ", "released");
 
-        // Skips ACCOUNTANT_PENDING entirely: DISBURSEMENT_PENDING → DISBURSED → ACTIVE.
-        assertThat(app.getStatus()).isEqualTo(ApplicationStatus.ACTIVE);
+        assertThat(app.getStatus()).isEqualTo(ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING);
         assertThat(app.getLoanId()).isEqualTo(99L);
+        verify(loanService).disburse(app, null, "UTR999");
+        verify(loanService, never()).confirmDisbursal(any(), any(), any());
+        verify(referralService, never()).onLoanDisbursed(any(), any());
+        assertThat(events).extracting(ApplicationEvent::getAction).containsExactly("VALIDATE_SUCCESS");
+    }
+
+    /** The disbursal chain, one actor per step: the sanctioner cannot release, ADMIN included. */
+    @Test
+    void sodSanctionerCannotEnterTheUtrEvenAsAdmin() {
+        LoanApplication app = appAt(ApplicationStatus.DISBURSEMENT_PENDING);
+        app.setSanctionedBy(10L);
+        actor("10", "ADMIN");
+
+        assertThatThrownBy(() -> flow.disbursementDecision(1L, true, "UTR1", null))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "SOD_VIOLATION");
+        assertThat(app.getStatus()).isEqualTo(ApplicationStatus.DISBURSEMENT_PENDING);
+        verify(loanService, never()).disburse(any(), any(), any());
+    }
+
+    /** The confirmer is neither the sanctioner nor the disburser; ADMIN passes the role check, not SoD. */
+    @Test
+    void sodConfirmerDiffersFromSanctionerAndDisburser() {
+        LoanApplication app = appAt(ApplicationStatus.DISBURSEMENT_PENDING);
+        app.setSanctionedBy(55L);
+        Loan loan = new Loan();
+        loan.setId(99L);
+        when(loanService.disburse(any(), any(), any())).thenReturn(loan);
+        actor("66", "DISBURSEMENT_HEAD");
+        flow.disbursementDecision(1L, true, "UTR1", null);
+
+        for (String id : List.of("55", "66")) {
+            actor(id, "ADMIN");
+            assertThatThrownBy(() -> flow.confirmDisbursal(1L, null))
+                    .hasFieldOrPropertyWithValue("code", "SOD_VIOLATION");
+            assertThatThrownBy(() -> flow.returnDisbursal(1L, "wrong UTR"))
+                    .hasFieldOrPropertyWithValue("code", "SOD_VIOLATION");
+        }
+        assertThat(app.getStatus()).isEqualTo(ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING);
+        verify(loanService, never()).confirmDisbursal(any(), any(), any());
+    }
+
+    @Test
+    void onlyAnAccountantConfirmsAndOnlyAPendingDisbursal() {
+        appAt(ApplicationStatus.DISBURSEMENT_PENDING);
+        actor("66", "DISBURSEMENT_HEAD");
+        assertThatThrownBy(() -> flow.confirmDisbursal(1L, null))
+                .hasFieldOrPropertyWithValue("code", "FORBIDDEN_ROLE");
+        actor("77", "ACCOUNTANT");
+        assertThatThrownBy(() -> flow.confirmDisbursal(1L, null))
+                .hasFieldOrPropertyWithValue("code", "NOT_APPLICABLE");
+    }
+
+    /** A wrong UTR goes back to the Head with a reason; the unconfirmed loan is dropped. */
+    @Test
+    void returnDisbursalSendsTheFileBackAndDropsThePendingLoan() {
+        LoanApplication app = appAt(ApplicationStatus.DISBURSEMENT_PENDING);
+        Loan loan = new Loan();
+        loan.setId(99L);
+        loan.setDisbursalTxnRef("UTR-TYPO");
+        when(loanService.disburse(any(), any(), any())).thenReturn(loan);
+        when(loanService.getLoan(99L)).thenReturn(loan);
+        actor("66", "DISBURSEMENT_HEAD");
+        flow.disbursementDecision(1L, true, "UTR-TYPO", null);
+
+        actor("77", "ACCOUNTANT");
+        assertThatThrownBy(() -> flow.returnDisbursal(1L, " "))
+                .hasFieldOrPropertyWithValue("code", "NOTE_REQUIRED");
+        flow.returnDisbursal(1L, "not on the bank statement");
+
+        assertThat(app.getStatus()).isEqualTo(ApplicationStatus.DISBURSEMENT_PENDING);
+        assertThat(app.getLoanId()).isNull();
+        verify(loanService).discardPending(99L);
+        assertThat(events.get(events.size() - 1).getNotes()).contains("UTR-TYPO").contains("not on the bank statement");
+    }
+
+    /** CC-23: a disbursal awaiting confirmation is a live file; a second application is blocked. */
+    @Test
+    void cc23_applyAgainWhileAwaitingDisbursalConfirmationIsBlocked() {
+        actor("7", "BORROWER");
+        LoanApplication waiting = new LoanApplication();
+        waiting.setId(10L);
+        waiting.setCustomerId(7L);
+        waiting.setStatus(ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING);
+        when(applicationRepository.findByCustomerId(7L)).thenReturn(List.of(waiting));
+
+        assertThatThrownBy(() -> flow.createDraft(7L))
+                .hasFieldOrPropertyWithValue("code", "ACTIVE_APPLICATION");
+        assertThatThrownBy(() -> flow.reborrow())
+                .hasFieldOrPropertyWithValue("code", "ACTIVE_APPLICATION");
     }
 
     /** A disbursement reject with no reason gives staff no record of why — refused, same as {@code

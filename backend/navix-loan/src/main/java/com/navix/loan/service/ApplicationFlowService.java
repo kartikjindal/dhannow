@@ -5,6 +5,7 @@ import com.navix.common.featureflag.FeatureFlagService;
 import com.navix.common.exception.ResourceNotFoundException;
 import com.navix.common.notification.event.ApplicationTransitionedEvent;
 import com.navix.common.security.ActorContext;
+import com.navix.common.security.SeparationOfDutiesGuard;
 import com.navix.common.security.CurrentActor;
 import com.navix.common.staff.StaffDirectory;
 import com.navix.common.staff.StaffSummary;
@@ -56,10 +57,12 @@ import org.springframework.transaction.annotation.Transactional;
  * {@link ApplicationEvent} trail. Credit Head and assigned Credit Executive share final decision
  * authority in the single {@code CREDIT_EXEC_PENDING} stage. The service auto-routes the
  * system transitions (exec-approved→head-pending, head-approved→disbursement-pending, disbursed→
- * active). At DISBURSED→ACTIVE it mints the 30-day loan via {@link LoanService#disburse}.
+ * active). The Disbursement Head's UTR mints the loan DISBURSEMENT_PENDING ({@link LoanService#disburse});
+ * the Accountant's confirmation activates it (PLAN Phase 4).
  *
  * <p>Identity is the demo {@link CurrentActor} (role from the {@code X-Demo-Actor-Role} header);
- * at go-live it becomes the JWT principal. ADMIN may act in any role (oversight).
+ * at go-live it becomes the JWT principal. ADMIN may act in any role (oversight), but not twice on
+ * the same file: separation of duties binds ADMIN too ({@link SeparationOfDutiesGuard}).
  */
 @Service
 @RequiredArgsConstructor
@@ -911,18 +914,19 @@ public class ApplicationFlowService {
     // ---- disbursement (W3) ---------------------------------------------------------
 
     /**
-     * The Disbursement Head releases the money. Since V47 there is <b>no accountant hop</b>
-     * (decision 42): the Head makes the transfer and records its id, so an accept without a
-     * {@code txnRef} is an error rather than a hand-off — the transfer either happened, in which
-     * case it has a reference, or it didn't, in which case there is nothing to accept yet.
+     * The Disbursement Head releases the money. An accept needs the transfer's UTR ({@code txnRef}):
+     * the transfer either happened, in which case it has a reference, or it didn't. DhanNow (PLAN
+     * Phase 4) brings the accountant check back <em>after</em> the transfer: the accept mints the loan
+     * DISBURSEMENT_PENDING with the UTR and parks the file at DISBURSAL_CONFIRMATION_PENDING for
+     * {@link #confirmDisbursal}. The Head must not be the sanctioner (SoD, ADMIN included).
      *
-     * <p>A reject now goes through {@link #rejectWithBlock} — same as a credit reject: {@code notes}
+     * <p>A reject goes through {@link #rejectWithBlock} — same as a credit reject: {@code notes}
      * is required, and it writes a rejection-register row + the {@value #MANUAL_REJECT_BLOCK_DAYS}-day
-     * cooling-off block. This closes an old asymmetry: a disbursement reject used to leave no register
-     * row and no cooling-off, so a rejected-at-disbursement borrower could reborrow straight back in.
+     * cooling-off block.
      *
      * @throws BusinessException {@code TXN_REF_REQUIRED} when accepting without a transaction id,
-     *     {@code NOTE_REQUIRED} when rejecting without a reason
+     *     {@code NOTE_REQUIRED} when rejecting without a reason, {@code SOD_VIOLATION} when the
+     *     sanctioner releases
      */
     @Transactional
     public LoanApplication disbursementDecision(Long appId, boolean accept, String txnRef, String notes) {
@@ -930,33 +934,91 @@ public class ApplicationFlowService {
         LoanApplication app = require(appId);
         if (!accept) {
             return rejectWithBlock(app, "DISB_REJECT", notes);
-        } else if (txnRef != null && !txnRef.isBlank()) {
-            finalizeDisbursal(app, txnRef, notes);
-        } else {
+        }
+        if (txnRef == null || txnRef.isBlank()) {
             throw new BusinessException("TXN_REF_REQUIRED",
                     "Enter the transaction id of the transfer to release this loan");
         }
+        SeparationOfDutiesGuard.disburser(actorIdOrNull(), app.getSanctionedBy());
+        // VALIDATE_SUCCESS stays the Head's release action: the actor directory and the decision
+        // history read the disburser off it.
+        transition(app, ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING, "VALIDATE_SUCCESS",
+                "UTR " + txnRef.trim() + (notes == null || notes.isBlank() ? "" : " — " + notes));
+        app.setLoanId(loanService.disburse(app, null, txnRef.trim()).getId());
         return applicationRepository.save(app);
     }
 
     /**
-     * Mint the loan and activate the application (DISBURSED → ACTIVE), recording the disbursal
-     * transaction id supplied by the Disbursement Head.
+     * The Accountant confirms the transfer the Disbursement Head recorded (PLAN Phase 4) and the
+     * finalize step runs: day 0 is today in IST, the confirmed date (CC-01), and the loan goes
+     * DISBURSEMENT_PENDING → ACTIVE. The confirmer must be neither the sanctioner nor the disburser.
      */
-    private void finalizeDisbursal(LoanApplication app, String txnRef, String notes) {
-        transition(app, ApplicationStatus.DISBURSED, "VALIDATE_SUCCESS", notes);
-        // Day 0 is today on the app clock (IST), resolved inside LoanService.
-        Loan loan = loanService.disburse(app, null, txnRef);
-        app.setLoanId(loan.getId());
+    @Transactional
+    public LoanApplication confirmDisbursal(Long appId, String notes) {
+        requireRole("ACCOUNTANT");
+        LoanApplication app = require(appId);
+        requireConfirmationPending(app);
+        SeparationOfDutiesGuard.disbursalConfirmer(actorIdOrNull(), app.getSanctionedBy(), disburserOf(app));
+        finalizeDisbursal(app, notes);
+        return applicationRepository.save(app);
+    }
+
+    /**
+     * The Accountant cannot match the transfer (wrong UTR, money not credited): the file goes back to
+     * the Disbursement Head and the unconfirmed loan is dropped. A reason is required; the event keeps
+     * the returned UTR. Same SoD as {@link #confirmDisbursal}.
+     */
+    @Transactional
+    public LoanApplication returnDisbursal(Long appId, String notes) {
+        requireRole("ACCOUNTANT");
+        if (notes == null || notes.isBlank()) {
+            throw new BusinessException("NOTE_REQUIRED", "Say why the transfer could not be confirmed");
+        }
+        LoanApplication app = require(appId);
+        requireConfirmationPending(app);
+        SeparationOfDutiesGuard.disbursalConfirmer(actorIdOrNull(), app.getSanctionedBy(), disburserOf(app));
+        Long loanId = app.getLoanId();
+        String utr = loanService.getLoan(loanId).getDisbursalTxnRef();
+        transition(app, ApplicationStatus.DISBURSEMENT_PENDING, "DISBURSAL_RETURN",
+                "UTR " + utr + " — " + notes.trim());
+        app.setLoanId(null);
+        loanService.discardPending(loanId);
+        return applicationRepository.save(app);
+    }
+
+    private static void requireConfirmationPending(LoanApplication app) {
+        if (app.getStatus() != ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING || app.getLoanId() == null) {
+            throw new BusinessException("NOT_APPLICABLE", "This disbursal is not waiting for confirmation");
+        }
+    }
+
+    /** The Disbursement Head who entered the UTR now on file: the latest move into confirmation. */
+    private Long disburserOf(LoanApplication app) {
+        String id = actorOf(app.getId(), ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING);
+        try {
+            return id == null ? null : Long.valueOf(id);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Activate the loan the Head minted and the application (DISBURSED → ACTIVE), with day 0 = the
+     * confirmed date, and run the first-disbursal hooks (ladder, referral, DSA).
+     */
+    private void finalizeDisbursal(LoanApplication app, String notes) {
+        transition(app, ApplicationStatus.DISBURSED, "DISBURSAL_CONFIRM", notes);
+        Loan loan = loanService.confirmDisbursal(app.getLoanId(), app, null);
         creditLevels.onLoanDisbursed(app.getCustomerId(), loan.getId());
         // Refer-a-friend reward: if this borrower was referred and this is their first disbursal, grant
-        // both parties their ₹reward (creates the pending payouts) — atomic with the loan mint.
+        // both parties their ₹reward (creates the pending payouts) — atomic with the activation.
         referralService.onLoanDisbursed(app.getCustomerId(), loan.getId());
         // DSA commission: if this borrower's PAN matches a DSA lead entered before this
         // application and this is their first loan, accrue the 3.5% commission — atomic with the
-        // loan mint. Never throws (see DsaCommissionService.onLoanDisbursed javadoc).
+        // activation. Never throws (see DsaCommissionService.onLoanDisbursed javadoc).
         dsaCommissionService.onLoanDisbursed(app, loan);
-        transition(app, ApplicationStatus.ACTIVE, "ACTIVATE", "loanId=" + loan.getId());
+        transition(app, ApplicationStatus.ACTIVE, "ACTIVATE",
+                "loanId=" + loan.getId() + " dueDate=" + loan.getDueDate());
     }
 
     /**

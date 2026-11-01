@@ -185,6 +185,19 @@ class CollectionPaymentServiceTest {
                 .hasMessageContaining("why you are rejecting");
     }
 
+    /** PLAN Phase 4 SoD: the officer who recorded a payment never validates it, ADMIN included. */
+    @Test
+    void sodRecorderCannotValidateTheirOwnPaymentEvenAsAdmin() {
+        ActorContext.set(new CurrentActor("9", "Root", "ADMIN"));
+        when(paymentRepository.findById(paymentId))
+                .thenReturn(Optional.of(pending(CollectionPaymentStatus.PENDING_ACCOUNTANT)));
+
+        assertThatThrownBy(() -> service.validate(paymentId, true, null))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("SOD_VIOLATION");
+        verify(loanDirectory, never()).creditCollectionPayment(any(), anyLongValue(), any(), any(), any());
+    }
+
     /** A settlement payment cannot jump the Collection Head. */
     @Test
     void theAccountantCannotValidateBeforeTheHeadHasApproved() {

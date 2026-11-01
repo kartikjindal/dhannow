@@ -2,6 +2,7 @@ package com.navix.loan.service;
 
 import com.navix.common.collections.SettlementDirectory;
 import com.navix.common.security.ActorContext;
+import com.navix.common.security.SeparationOfDutiesGuard;
 import com.navix.common.storage.DocumentStoragePort;
 import com.navix.common.exception.BusinessException;
 import com.navix.common.exception.ResourceNotFoundException;
@@ -76,8 +77,23 @@ public class RepaymentService {
     @Transactional
     public Payment recordPayment(Long loanId, long amountPaise, PaymentMethod method,
                                  String txnRef, String proofUrl, LocalDate paidOn) {
+        boolean staff = !"BORROWER".equals(ActorContext.get().role());
+        return recordPayment(loanId, amountPaise, method, txnRef, proofUrl, paidOn, staff ? staffIdOrNull() : null);
+    }
+
+    /**
+     * As above, with the recorder named. {@code recordedBy} null = no staff maker to separate from: the
+     * borrower, or a payment already validated upstream ({@code LoanDirectoryAdapter.creditCollectionPayment}).
+     */
+    @Transactional
+    Payment recordPayment(Long loanId, long amountPaise, PaymentMethod method,
+                          String txnRef, String proofUrl, LocalDate paidOn, Long recordedBy) {
         Loan loan = requireLoan(loanId);
         requireOwnLoanIfBorrower(loan);
+        if (loan.getLifecycleStatus() == LoanLifecycle.DISBURSEMENT_PENDING) {
+            throw new BusinessException("LOAN_NOT_ACTIVE",
+                    "This loan starts once we confirm the money reached your account.");
+        }
         if ("BORROWER".equals(ActorContext.get().role()) && (proofUrl == null || proofUrl.isBlank())) {
             throw new BusinessException("PAYMENT_PROOF_REQUIRED",
                     "Attach a screenshot of your payment before submitting.");
@@ -108,6 +124,7 @@ public class RepaymentService {
         payment.setProofUrl(proofUrl);
         payment.setPaidOn(effectivePaidOn);
         payment.setPartial(amountPaise < remaining);
+        payment.setRecordedBy(recordedBy);
         Payment saved = paymentRepository.save(payment);
         // The loan is managed in this transaction, so the change is flushed with it.
         loan.setRepaymentStatus(RepaymentStatus.PAID_PENDING_VERIFICATION);
@@ -159,6 +176,10 @@ public class RepaymentService {
         Payment payment = paymentRepository.findById(paymentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Payment", String.valueOf(paymentId)));
         if (payment.getStatus() != PaymentStatus.VERIFIED) {
+            // PLAN Phase 4: whoever recorded a payment never verifies it, ADMIN included.
+            if (payment.getRecordedBy() != null) {
+                SeparationOfDutiesGuard.paymentVerifier(staffIdOrNull(), payment.getRecordedBy());
+            }
             payment.setStatus(PaymentStatus.VERIFIED);
             stampDecider(payment);
             paymentRepository.save(payment);
@@ -178,13 +199,17 @@ public class RepaymentService {
      * the row overwrites it. Which way the decision went stays on {@code status}.
      */
     private void stampDecider(Payment payment) {
-        try {
-            payment.setDecidedBy(Long.valueOf(ActorContext.get().id()));
-        } catch (RuntimeException e) {
-            // No resolvable staff id (system/scheduler path) — leave it null rather than guess.
-            payment.setDecidedBy(null);
-        }
+        // No resolvable staff id (system/scheduler path) — left null rather than guessed.
+        payment.setDecidedBy(staffIdOrNull());
         payment.setDecidedAt(Instant.now());
+    }
+
+    private static Long staffIdOrNull() {
+        try {
+            return Long.valueOf(ActorContext.get().id());
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /** The fixed rejection-reason picklist — kept here (not a DB enum/check) to match how

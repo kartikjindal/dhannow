@@ -11,8 +11,9 @@ import java.util.Set;
  *
  * <pre>
  *  DRAFT → KYC_PENDING → CREDIT_EXEC_PENDING → SANCTIONED → DISBURSEMENT_PENDING →
- *  DISBURSED → ACTIVE → {CLOSED | OVERDUE → DEFAULTED → WRITTEN_OFF}
- *  branches: KYC_REJECTED, REJECTED, CANCELLED, DISBURSEMENT_FAILED → (retry) DISBURSEMENT_PENDING
+ *  DISBURSAL_CONFIRMATION_PENDING → DISBURSED → ACTIVE → {CLOSED | OVERDUE → DEFAULTED → WRITTEN_OFF}
+ *  branches: KYC_REJECTED, REJECTED, CANCELLED, DISBURSEMENT_FAILED → (retry) DISBURSEMENT_PENDING,
+ *            DISBURSAL_CONFIRMATION_PENDING → (accountant return) DISBURSEMENT_PENDING
  * </pre>
  *
  * <p>The credit maker-checker (CREDIT_EXEC_APPROVED → CREDIT_HEAD_PENDING → CREDIT_HEAD_APPROVED)
@@ -52,6 +53,11 @@ public enum ApplicationStatus {
      */
     SANCTIONED,
     DISBURSEMENT_PENDING,
+    /**
+     * DhanNow (PLAN Phase 4): the Disbursement Head sent the money and entered its UTR; an Accountant
+     * confirms the transfer, and only then does the loan go ACTIVE with day 0 = the confirmed date.
+     */
+    DISBURSAL_CONFIRMATION_PENDING,
     /** @deprecated Retired with the accountant disbursement hop (V48); historical rows only. */
     @Deprecated
     ACCOUNTANT_PENDING,
@@ -94,11 +100,11 @@ public enum ApplicationStatus {
         TRANSITIONS.put(CREDIT_HEAD_APPROVED, EnumSet.of(DISBURSEMENT_PENDING));
         // The borrower accepts the offer (Phase 3: amount → eSign → disbursal account) → disbursement.
         TRANSITIONS.put(SANCTIONED, EnumSet.of(DISBURSEMENT_PENDING, REJECTED, CANCELLED));
-        // The Disbursement Head releases DIRECTLY, always with a transaction id (V47/V48,
-        // decision 42): DISBURSEMENT_PENDING → DISBURSED → ACTIVE. The transaction id IS the
-        // validation — there is no second desk behind the Head, so nothing reaches
-        // ACCOUNTANT_PENDING any more and a retry returns to the Head who owns the release.
-        TRANSITIONS.put(DISBURSEMENT_PENDING, EnumSet.of(DISBURSED, REJECTED));
+        // DhanNow (PLAN Phase 4): the Disbursement Head sends the money and enters its UTR, then an
+        // Accountant confirms it (→ DISBURSED → ACTIVE) or returns it to the Head (wrong UTR, not
+        // credited). ACCOUNTANT_PENDING stays retired: this is a new stop, after the transfer.
+        TRANSITIONS.put(DISBURSEMENT_PENDING, EnumSet.of(DISBURSAL_CONFIRMATION_PENDING, REJECTED));
+        TRANSITIONS.put(DISBURSAL_CONFIRMATION_PENDING, EnumSet.of(DISBURSED, DISBURSEMENT_PENDING));
         TRANSITIONS.put(ACCOUNTANT_PENDING, EnumSet.noneOf(ApplicationStatus.class));
         TRANSITIONS.put(DISBURSEMENT_FAILED, EnumSet.of(DISBURSEMENT_PENDING, CANCELLED));
         TRANSITIONS.put(DISBURSED, EnumSet.of(ACTIVE));

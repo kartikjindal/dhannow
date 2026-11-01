@@ -36,8 +36,8 @@ public class RepaymentController {
      * payments go through the maker-checker {@code CollectionPaymentService} path instead.
      *
      * <p>The Accountant is excluded too. The Accountant is the checker who verifies a recorded
-     * payment, and a payment row does not store who recorded it, so an Accountant who could also
-     * record would make and check the same payment alone — a loan closed on an invented
+     * payment (and since V99 the verifier must differ from the recorder), so an Accountant who could
+     * also record would make and check the same payment alone — a loan closed on an invented
      * transaction reference with no second person involved. No screen records as an Accountant;
      * the payments they verify come from the borrower, from ADMIN, or from collections.
      */
@@ -52,24 +52,19 @@ public class RepaymentController {
     }
 
     /**
-     * ADMIN-only: record a payment that already happened, on the date it happened, and verify it in
-     * the same call.
+     * ADMIN-only: record a payment that already happened, on the date it happened (backdating allowed,
+     * no screenshot needed).
      *
-     * <p>Deliberately not open to the ACCOUNTANT. This path collapses the record→verify maker-checker
-     * into one actor, which only ADMIN (who bypasses role checks anyway, and whose corrections are
-     * already an accepted oversight power) may do. An Accountant cannot record at all (see
-     * {@link #record}), so verification always follows someone else's entry.
-     *
-     * <p>The closure that follows — and the borrower's LOAN_CLOSED notification — is the ordinary
-     * verify path; nothing here is special-cased.
+     * <p>It used to verify in the same call. PLAN Phase 4 ended that: ADMIN no longer bypasses
+     * separation of duties, so the payment waits PENDING_VERIFICATION for an Accountant like any other
+     * (the payment stores its recorder, V99, and the verifier must differ).
      */
     @PostMapping("/admin-record")
     public ApiResponse<PaymentView> adminRecord(@PathVariable Long loanId,
                                                 @Valid @RequestBody AdminRepaymentRequest request) {
         requireRole("ADMIN");
-        var payment = repaymentService.recordPayment(loanId, request.amountPaise(), request.method(),
-                request.txnRef(), request.proofUrl(), request.paidOn());
-        return ApiResponse.ok(repaymentService.view(repaymentService.verifyPayment(payment.getId())));
+        return ApiResponse.ok(repaymentService.view(repaymentService.recordPayment(loanId, request.amountPaise(),
+                request.method(), request.txnRef(), request.proofUrl(), request.paidOn())));
     }
 
     /** List repayments recorded against the loan. Owner-or-staff: a borrower sees only their own. */

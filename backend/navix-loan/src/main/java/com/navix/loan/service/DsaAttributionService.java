@@ -136,7 +136,8 @@ public class DsaAttributionService {
             case DRAFT, KYC_PENDING -> DsaLeadStatus.APPLIED;
             case KYC_APPROVED, PRE_APPROVED, REVIEW_PENDING, CREDIT_EXEC_PENDING,
                     CREDIT_EXEC_APPROVED, CREDIT_HEAD_PENDING, CREDIT_HEAD_APPROVED,
-                    SANCTIONED, DISBURSEMENT_PENDING, ACCOUNTANT_PENDING, DISBURSEMENT_FAILED ->
+                    SANCTIONED, DISBURSEMENT_PENDING, DISBURSAL_CONFIRMATION_PENDING, ACCOUNTANT_PENDING,
+                    DISBURSEMENT_FAILED ->
                     DsaLeadStatus.IN_PROGRESS;
             // DEFAULTED/WRITTEN_OFF: the money was disbursed (unlike a REJECTED/CANCELLED file that
             // never drew down) — the loan simply never got repaid, so it stays DISBURSED to the DSA

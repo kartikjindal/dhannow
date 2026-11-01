@@ -10,6 +10,7 @@ import com.navix.collections.entity.SettlementStatus;
 import com.navix.collections.repository.CollectionCaseRepository;
 import com.navix.collections.repository.CollectionPaymentRepository;
 import com.navix.collections.repository.SettlementRepository;
+import com.navix.common.security.SeparationOfDutiesGuard;
 import com.navix.common.exception.BusinessException;
 import com.navix.common.exception.ResourceNotFoundException;
 import com.navix.common.loan.LoanDirectory;
@@ -185,7 +186,10 @@ public class CollectionPaymentService {
             throw new BusinessException("REMARKS_REQUIRED",
                     "Say why you are rejecting this payment — the collections officer needs to act on it");
         }
-        p.setValidatedBy(actorStaffId());
+        long validator = actorStaffId();
+        // PLAN Phase 4: the officer who recorded the payment never validates it, ADMIN included.
+        SeparationOfDutiesGuard.paymentVerifier(validator, p.getRaisedBy());
+        p.setValidatedBy(validator);
         p.setValidatedAt(Instant.now());
         p.setRemarks(blankToNull(remarks));
         if (accept) {

@@ -123,8 +123,9 @@ public class Loan extends BaseAuditEntity {
     private Instant dueAt;
 
     /**
-     * DhanNow lifecycle (V97). Written only through {@link #moveTo}, which keeps {@link #status} in
-     * step. A loan row is minted at disbursal, so it starts ACTIVE.
+     * DhanNow lifecycle (V97). Written only through {@link #moveTo} (and {@link #startPending} on a new
+     * row), which keep {@link #status} in step. {@code LoanService.disburse} mints the row
+     * DISBURSEMENT_PENDING (PLAN Phase 4); a bare {@code new Loan()} defaults to ACTIVE.
      */
     @Enumerated(EnumType.STRING)
     @Column(name = "lifecycle_status", nullable = false, length = 32)
@@ -153,6 +154,12 @@ public class Loan extends BaseAuditEntity {
         lifecycleStatus = next;
         status = next.legacyStatus();
         return true;
+    }
+
+    /** A new loan waits for the Accountant to confirm the transfer (PLAN Phase 4). */
+    public void startPending() {
+        lifecycleStatus = LoanLifecycle.DISBURSEMENT_PENDING;
+        status = LoanLifecycle.DISBURSEMENT_PENDING.legacyStatus();
     }
 
     /**

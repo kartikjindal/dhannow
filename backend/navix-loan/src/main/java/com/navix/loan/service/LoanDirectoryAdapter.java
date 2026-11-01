@@ -246,8 +246,10 @@ public class LoanDirectoryAdapter implements LoanDirectory {
                                         String proofRef, LocalDate paidOn) {
         // BANK_TRANSFER is the honest default: collections captures a reference and a proof, not the
         // rail. The method is display metadata here — nothing in the math branches on it.
+        // No recorder: the maker-checker ran upstream (officer ≠ Accountant, or the NACH debit), so the
+        // validating Accountant verifying here is not checking their own entry.
         var payment = repaymentService.recordPayment(
-                loanId, amountPaise, PaymentMethod.BANK_TRANSFER, txnRef, proofRef, paidOn);
+                loanId, amountPaise, PaymentMethod.BANK_TRANSFER, txnRef, proofRef, paidOn, null);
         repaymentService.verifyPayment(payment.getId());
         return payment.getId();
     }
