@@ -16,7 +16,7 @@ import org.springframework.web.client.RestClient;
 /**
  * Signzy Email Verification V2 — {@code POST /api/v3/email/verificationV2} on the PRODUCTION account.
  * Runs on {@link VerificationClientConfig#SIGNZY_PROD_CLIENT} (same account as PAN / reverse-geocode /
- * penny-drop). This is DhanBoost's PRIMARY email check; Digitap ({@code /cv/email_verification/v1}) is
+ * penny-drop). This is DhanNow's PRIMARY email check; Digitap ({@code /cv/email_verification/v1}) is
  * the fallback the router uses only if this call fails.
  *
  * <p>Request carries just the {@code emailId}. The response wraps everything in {@code result}: a

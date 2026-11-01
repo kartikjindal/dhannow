@@ -24,7 +24,7 @@ class EmailSenderTest {
 
     private static final RenderedMessage MSG =
             new RenderedMessage(NotificationChannel.EMAIL, "Subject", "Body", null);
-    private static final EmailHtmlRenderer RENDERER = new EmailHtmlRenderer();
+    private static final EmailHtmlRenderer RENDERER = new EmailHtmlRenderer(new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"));
 
     private final EmailSuppressionService allowAll = noSuppression();
 

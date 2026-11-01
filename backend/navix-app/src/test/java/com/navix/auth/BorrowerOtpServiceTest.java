@@ -26,6 +26,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @ExtendWith(MockitoExtension.class)
 class BorrowerOtpServiceTest {
 
+    private static final com.navix.common.brand.BrandProperties BRAND =
+            new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com");
+
     private static final String MOBILE = "9819000001";
 
     @Mock
@@ -51,7 +54,7 @@ class BorrowerOtpServiceTest {
                 "peid",                            // peid
                 "dltTemplateId",                   // dltTemplateId
                 java.util.Map.of(),                // dltTemplateIds
-                "Your DhanBoost code is {otp}. Valid {ttl} min.", // otpTemplate
+                "Your {brand} code is {otp}. Valid {ttl} min.", // otpTemplate
                 null,                               // bureauConsentOtpTemplate
                 true,                              // enabled
                 devEcho,                           // devEcho
@@ -64,7 +67,7 @@ class BorrowerOtpServiceTest {
 
     @Test
     void mockMode_usesFixedCode_andNeverCallsSms() {
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(false, true), new AttemptLimiter());
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(false, true), new AttemptLimiter(), BRAND);
         var result = service.request("9812345678", OtpVerifierPort.LOGIN);
 
         assertThat(result.sent()).isTrue();        // mock "delivery"
@@ -78,7 +81,7 @@ class BorrowerOtpServiceTest {
     @Test
     void request_sendsSms_andEchoesSixDigitCode_whenDevEchoOn() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter());
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
 
         OtpVerifierPort.OtpRequestResult req = service.request(MOBILE, OtpVerifierPort.LOGIN);
 
@@ -93,7 +96,7 @@ class BorrowerOtpServiceTest {
     @Test
     void request_doesNotEchoCode_whenDevEchoOff() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(false), new AttemptLimiter());
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(false), new AttemptLimiter(), BRAND);
 
         OtpVerifierPort.OtpRequestResult req = service.request(MOBILE, OtpVerifierPort.LOGIN);
 
@@ -104,7 +107,7 @@ class BorrowerOtpServiceTest {
     @Test
     void verify_isSingleUse_andRejectsWrongCode() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter());
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
 
         String code = service.request(MOBILE, OtpVerifierPort.LOGIN).devCode();
 
@@ -118,7 +121,7 @@ class BorrowerOtpServiceTest {
         when(smsClient.send(anyString(), anyString(), any()))
                 .thenThrow(new SmsException("SMS gateway: error:Invalid template text"));
         when(whatsApp.sendOtp(anyString(), anyString())).thenThrow(new RuntimeException("template not approved"));
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter());
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
 
         OtpVerifierPort.OtpRequestResult req = service.request(MOBILE, OtpVerifierPort.LOGIN);
 
@@ -131,7 +134,7 @@ class BorrowerOtpServiceTest {
     void request_countsWhatsAppAsDelivered_whenSmsFails() {
         when(smsClient.send(anyString(), anyString(), any())).thenThrow(new SmsException("SMS gateway: DLT"));
         when(whatsApp.sendOtp(anyString(), anyString())).thenReturn("wamid.1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter());
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
 
         OtpVerifierPort.OtpRequestResult req = service.request(MOBILE, OtpVerifierPort.LOGIN);
 
@@ -142,7 +145,7 @@ class BorrowerOtpServiceTest {
     @Test
     void verify_locksOutAfterFiveWrongAttempts() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter());
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
 
         String code = service.request(MOBILE, OtpVerifierPort.LOGIN).devCode();
 
@@ -156,7 +159,7 @@ class BorrowerOtpServiceTest {
     @Test
     void loginAndBureauConsentOtps_forSameMobile_doNotCollide() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter());
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
 
         String loginCode = service.request(MOBILE, OtpVerifierPort.LOGIN).devCode();
         String bureauCode = service.request(MOBILE, OtpVerifierPort.BUREAU_CONSENT).devCode();
@@ -174,7 +177,7 @@ class BorrowerOtpServiceTest {
     @Test
     void loginAndBureauConsentOtps_haveSeparateSendBudgets() {
         when(smsClient.send(anyString(), anyString(), any())).thenReturn("JOB-1");
-        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter());
+        BorrowerOtpService service = new BorrowerOtpService(smsClient, whatsApp, props(true), new AttemptLimiter(), BRAND);
 
         // Exhaust the LOGIN send budget (MAX_SENDS = 5) for this mobile.
         for (int i = 0; i < 5; i++) {

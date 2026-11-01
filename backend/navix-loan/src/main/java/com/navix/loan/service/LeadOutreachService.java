@@ -40,11 +40,12 @@ public class LeadOutreachService {
 
     /** The DSA cannot supply SMS text — a fixed, DLT-registered template only. */
     private static final String SMS_TEMPLATE =
-            "DhanBoost: You were referred for a salary-linked advance. Apply at dhanboost.com to check your offer.";
+            "{brand}: You were referred for a short-term personal loan. Visit {website} to check your offer.";
 
     private final SmsGateway smsGateway;
     private final MailPort mailPort;
     private final LeadOutreachRepository outreachRepository;
+    private final com.navix.common.brand.BrandProperties brand;
 
     @Transactional
     public OutreachResultView send(Lead lead, Long dsaStaffId, OutreachRequest req) {
@@ -63,9 +64,11 @@ public class LeadOutreachService {
     }
 
     private OutreachResultView sendSms(Lead lead, Long dsaStaffId) {
-        LeadOutreach row = newRow(lead, dsaStaffId, "SMS", lead.getMobile(), null, SMS_TEMPLATE);
+        String text = SMS_TEMPLATE.replace("{brand}", String.valueOf(brand.name()))
+                .replace("{website}", String.valueOf(brand.website()));
+        LeadOutreach row = newRow(lead, dsaStaffId, "SMS", lead.getMobile(), null, text);
         try {
-            String ref = smsGateway.send("91" + lead.getMobile(), SMS_TEMPLATE, "DSA_LEAD_INVITE");
+            String ref = smsGateway.send("91" + lead.getMobile(), text, "DSA_LEAD_INVITE");
             row.setStatus("SENT");
             row.setProviderRef(ref);
         } catch (Exception e) {
@@ -79,7 +82,7 @@ public class LeadOutreachService {
     }
 
     private OutreachResultView sendEmail(Lead lead, Long dsaStaffId, OutreachRequest req) {
-        DsaEmailTemplates.Rendered email = DsaEmailTemplates.render(req.template(), lead.getName());
+        DsaEmailTemplates.Rendered email = DsaEmailTemplates.render(req.template(), lead.getName(), brand);
         if (lead.getEmail() == null || lead.getEmail().isBlank()) {
             String typed = req.email() == null ? "" : req.email().trim();
             if (typed.isEmpty()) {

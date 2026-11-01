@@ -20,7 +20,7 @@ import org.springframework.web.client.RestClient;
 /**
  * Signzy Liveness Secure — a two-step async passive-liveness (+ optional face-match) flow:
  * {@code POST /api/v3/liveness-secure/createUrl} mints a token + hosted video URL, and
- * {@code POST /api/v3/liveness-secure/getData} fetches the result by that token. DhanBoost's SELFIE step
+ * {@code POST /api/v3/liveness-secure/getData} fetches the result by that token. DhanNow's SELFIE step
  * passes the presigned DigiLocker Aadhaar photo as {@code matchImage} for the 1:1 face-match. Runs on the
  * PRODUCTION account ({@link VerificationClientConfig#SIGNZY_PROD_CLIENT}), where liveness is provisioned.
  */

@@ -1,7 +1,7 @@
-# DhanBoost — Backend
+# DhanNow — Backend
 
-Spring Boot (3.4.1) Maven multi-module backend for **DhanBoost**, a salary-linked
-single-repayment lending platform.
+Spring Boot (3.4.1) Maven multi-module backend for **DhanNow**, a short-term personal
+loan platform (forked from navix; see `docs/UPSTREAM.md`).
 
 - **Java:** 21
 - **Build:** Maven (multi-module aggregator), Maven Wrapper included (`./mvnw`)

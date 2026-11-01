@@ -79,6 +79,18 @@ public class ExtensionDirectoryAdapter implements ExtensionDirectory {
         });
     }
 
+    @Override
+    @Transactional
+    public boolean cancelOffer(Long loanId, String reason, Instant at) {
+        return extensions.findFirstByLoanIdAndStatusIn(loanId, java.util.EnumSet.of(ExtensionStatus.OFFERED,
+                ExtensionStatus.APPROVED, ExtensionStatus.ACCEPTED)).map(e -> {
+            e.moveTo(ExtensionStatus.CANCELLED);
+            e.setCancelReason(reason);
+            e.setCancelledAt(at);
+            return true;
+        }).orElse(false);
+    }
+
     private LoanExtension require(UUID id) {
         return extensions.findById(id)
                 .orElseThrow(() -> new com.navix.common.exception.ResourceNotFoundException("LoanExtension", String.valueOf(id)));

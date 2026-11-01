@@ -36,6 +36,16 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
     private final StaffSessionRegistry staffSessionRegistry;
 
+    /** Roles that may only read: any request but GET/HEAD/OPTIONS outside {@code /api/auth/} is refused (403). */
+    static final java.util.Set<String> READ_ONLY_ROLES = java.util.Set.of("COMPLIANCE");
+
+    static boolean readOnlyRefused(String role, HttpServletRequest request) {
+        String method = request.getMethod();
+        String path = request.getRequestURI();
+        return READ_ONLY_ROLES.contains(role) && !"GET".equals(method) && !"HEAD".equals(method)
+                && !"OPTIONS".equals(method) && (path == null || !path.startsWith("/api/auth/"));
+    }
+
     public JwtAuthFilter(JwtService jwtService, StaffSessionRegistry staffSessionRegistry) {
         this.jwtService = jwtService;
         this.staffSessionRegistry = staffSessionRegistry;
@@ -82,6 +92,15 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                                 new SimpleGrantedAuthority(
                                         "ROLE_" + String.valueOf(principal.audience()).toUpperCase(Locale.ROOT))));
                 SecurityContextHolder.getContext().setAuthentication(authentication);
+                if (readOnlyRefused(principal.role(), request)) {
+                    // PLAN Phase 7: COMPLIANCE reads the whole console and changes nothing. One gate here, so a
+                    // new write endpoint can never forget it. Signing out (/api/auth/**) is still allowed.
+                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"success\":false,\"error\":{\"code\":\"READ_ONLY_ROLE\","
+                            + "\"message\":\"Your role can view but not change anything.\"}}");
+                    return;
+                }
             }
             filterChain.doFilter(request, response);
         } finally {

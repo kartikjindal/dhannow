@@ -55,6 +55,7 @@ public class DsaService {
     private final LoanRepository loanRepository;
     private final DsaAttributionService attributionService;
     private final LeadOutreachService outreachService;
+    private final com.navix.common.brand.BrandProperties brand;
 
     @Transactional
     public DsaLeadView createLead(CreateDsaLeadRequest req) {
@@ -175,7 +176,7 @@ public class DsaService {
     @Transactional(readOnly = true)
     public List<com.navix.loan.dto.DsaDtos.EmailTemplateView> emailTemplates(Long id) {
         Lead lead = requireOwnLead(id, requireDsaId());
-        return DsaEmailTemplates.renderAll(lead.getName()).stream()
+        return DsaEmailTemplates.renderAll(lead.getName(), brand).stream()
                 .map(t -> new com.navix.loan.dto.DsaDtos.EmailTemplateView(t.key(), t.name(), t.subject(), t.html()))
                 .toList();
     }

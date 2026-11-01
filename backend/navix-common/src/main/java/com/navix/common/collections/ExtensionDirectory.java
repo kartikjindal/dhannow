@@ -50,4 +50,12 @@ public interface ExtensionDirectory {
 
     /** Cancel any open extension on a loan that closed (EXT-06, CC-69). */
     void cancelOpen(Long loanId, String reason, Instant at);
+
+    /**
+     * EXT-27: a dispute cancels an extension still on offer (OFFERED, APPROVED or ACCEPTED). One with a payment on
+     * file (PAYMENT_PENDING) is left for the Accountant, and an ACTIVE one is never touched.
+     *
+     * @return true when an offer was cancelled
+     */
+    boolean cancelOffer(Long loanId, String reason, Instant at);
 }

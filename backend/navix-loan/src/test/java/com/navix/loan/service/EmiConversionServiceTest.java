@@ -58,7 +58,7 @@ class EmiConversionServiceTest {
     private final EmiConversionService service = new EmiConversionService(emis, loans, payments, debits, pricing,
             mock(RepaymentService.class), mock(RepaymentScheduleService.class), extensionLedger, extensions, settlements,
             mock(LoanDirectory.class), flags, mock(OtpVerifierPort.class), mock(IdempotencyService.class),
-            mock(JdbcTemplate.class), new ObjectMapper(), CLOCK);
+            mock(JdbcTemplate.class), new ObjectMapper(), CLOCK, mock(ComplaintService.class));
 
     @AfterEach
     void clear() {

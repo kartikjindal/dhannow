@@ -54,7 +54,8 @@ class LoanDirectoryAdapterTest {
     @BeforeEach
     void setUp() {
         adapter = new LoanDirectoryAdapter(loanRepository, applicationRepository, profileRepository,
-                repaymentService, org.mockito.Mockito.mock(LoanExtensionLedger.class), java.time.Clock.system(IST));
+                repaymentService, org.mockito.Mockito.mock(LoanExtensionLedger.class), java.time.Clock.system(IST),
+                org.mockito.Mockito.mock(PaymentAllocator.class));
     }
 
     private Loan loan(long id, LoanStatus status) {

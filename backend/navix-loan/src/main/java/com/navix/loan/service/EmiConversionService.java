@@ -100,6 +100,7 @@ public class EmiConversionService {
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     private final Clock clock;
+    private final ComplaintService complaints;
 
     @Value("${navix.emi.interest-mode:NONE}")
     private InterestMode interestMode = InterestMode.NONE;
@@ -246,6 +247,27 @@ public class EmiConversionService {
         return EmiView.of(emis.saveAndFlush(e));
     }
 
+    /**
+     * EXT-27 for EMI: a dispute cancels an open (REQUESTED or APPROVED) offer and an approved one's loan goes back
+     * to the overdue state its dates give. The caller holds the loan lock. An ACTIVE conversion is never touched.
+     *
+     * @return true when an offer was cancelled
+     */
+    @Transactional
+    public boolean cancelForDispute(Long loanId) {
+        return emis.findFirstByLoanIdAndStatusIn(loanId, EmiStatus.OPEN).map(e -> {
+            boolean approved = e.getStatus() == EmiStatus.APPROVED;
+            e.moveTo(EmiStatus.CANCELLED);
+            e.setCancelledAt(clock.instant());
+            e.setCancelReason("DISPUTED");
+            emis.saveAndFlush(e);
+            if (approved) {
+                backToOverdue(loanId);
+            }
+            return true;
+        }).orElse(false);
+    }
+
     // ---- borrower -----------------------------------------------------------------------
 
     /** The latest offer the borrower was shown (ADMIN-approved), or null. */
@@ -307,6 +329,11 @@ public class EmiConversionService {
         e.setDeclinedAt(clock.instant());
         e.setDeclinedReason(reason);
         backToOverdue(loanId);
+        if ("DID_NOT_ASK".equals(reason)) {
+            // CC-71, as for an extension: "I didn't ask" opens a complaint ticket.
+            complaints.openSystem(requireLoan(loanId).getCustomerId(), loanId,
+                    "Borrower said they did not ask for the EMI offer on this loan (EMI " + e.getId() + ").");
+        }
         return borrowerView(emis.saveAndFlush(e));
     }
 

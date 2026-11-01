@@ -44,6 +44,7 @@ public class EmailOtpService implements EmailOtpPort {
     private final EmailSuppressionService suppression;
     private final AttemptLimiter limiter;
     private final EmailHtmlRenderer htmlRenderer;
+    private final com.navix.common.brand.BrandProperties brand;
     private final Map<String, Otp> store = new ConcurrentHashMap<>();
 
     private record Otp(String code, Instant expiresAt, int attempts) {
@@ -51,12 +52,13 @@ public class EmailOtpService implements EmailOtpPort {
 
     public EmailOtpService(EmailClient emailClient, EmailProperties emailProperties,
                            EmailSuppressionService suppression, AttemptLimiter limiter,
-                           EmailHtmlRenderer htmlRenderer) {
+                           EmailHtmlRenderer htmlRenderer, com.navix.common.brand.BrandProperties brand) {
         this.emailClient = emailClient;
         this.emailProperties = emailProperties;
         this.suppression = suppression;
         this.limiter = limiter;
         this.htmlRenderer = htmlRenderer;
+        this.brand = brand;
     }
 
     private static String key(String purpose, String email) {
@@ -81,12 +83,13 @@ public class EmailOtpService implements EmailOtpPort {
             // A bounced/complained address must not be re-mailed — mirrors EmailSender's SUPPRESSED skip.
             log.info("EMAIL OTP suppressed to={} — not sent", Masking.maskEmail(address));
         } else if (Boolean.TRUE.equals(emailProperties.enabled())) {
-            String subject = code + " is your DhanBoost verification code";
+            String name = brand.name();
+            String subject = code + " is your " + name + " verification code";
             int minutes = TTL_SECONDS / 60;
-            String body = "Your DhanBoost email verification code is " + code + ". It is valid for "
-                    + minutes + " minutes. Do not share it with anyone.\n\n— DhanBoost";
+            String body = "Your " + name + " email verification code is " + code + ". It is valid for "
+                    + minutes + " minutes. Do not share it with anyone.\n\n— " + name;
             String html = htmlRenderer.renderOtp("Verify your email address",
-                    "Use this code to verify your email address on DhanBoost:", code, minutes);
+                    "Use this code to verify your email address on " + name + ":", code, minutes);
             if ("log".equalsIgnoreCase(emailProperties.provider())) {
                 // Dev/demo convenience, mirrors PasswordResetService's reset-link log line — no real
                 // mail goes out with the log provider, so surface the code for local testing.

@@ -43,7 +43,7 @@ class EmailOtpServiceTest {
 
     private EmailOtpService service() {
         return new EmailOtpService(emailClient, enabledLogProperties(), suppression, new AttemptLimiter(),
-                new com.navix.notification.email.EmailHtmlRenderer());
+                new com.navix.notification.email.EmailHtmlRenderer(new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com")), new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"));
     }
 
     /** Every code sent so far, in order — for the tests that mint more than one. */

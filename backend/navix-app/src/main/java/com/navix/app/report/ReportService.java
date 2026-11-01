@@ -93,7 +93,7 @@ public class ReportService {
                     "Applications, sanctions, disbursals, collections, income and expenses for the period, plus today's live loan book.", "Event date"),
             new ReportDef("monthly-performance", OVERVIEW, "Month-by-month business performance",
                     "Each month's loans disbursed, fee and GST earned, money collected, loans closed and expenses.", "Month"),
-            new ReportDef("platform-guide", OVERVIEW, "How DhanBoost works (shareable explainer)",
+            new ReportDef("platform-guide", OVERVIEW, "How the platform works (shareable explainer)",
                     "Plain-language guide to the loan product, application stages, staff roles and controls, with live counts.", null),
 
             new ReportDef("customers", CUSTOMERS, "Customer master list",
@@ -1288,7 +1288,7 @@ public class ReportService {
         return totalled(cols, rows, List.of(new Fact("Cohorts", (long) rows.size(), ColumnType.NUMBER),
                 new Fact("Loans", sum(rows, 1), ColumnType.NUMBER)), List.of(
                 "Rates are over loans whose due date (plus the one grace day on older loans) has passed, or which already closed.",
-                "First-payment default: not repaid by the due date (or its grace day on older loans) — every DhanBoost loan is a single payment.",
+                "First-payment default: not repaid by the due date (or its grace day on older loans) — every loan is a single payment.",
                 "Ever 30+ / 90+ DPD follows the RBI vintage-delinquency idea: did the loan ever fall that far behind."));
     }
 

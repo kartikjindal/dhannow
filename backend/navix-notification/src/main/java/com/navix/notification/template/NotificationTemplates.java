@@ -20,7 +20,9 @@ import org.springframework.stereotype.Component;
  * as {@code —}. Available model keys: {@code name}, {@code role}, {@code applicationId}, {@code loanId},
  * {@code customerName}, {@code amount}, {@code netDisbursed}, {@code totalRepayable},
  * {@code outstanding}, {@code dueDate}, {@code settlementAmount}, {@code inviteLink},
- * {@code retryLine}, {@code stepLabel}, {@code stepLink}.
+ * {@code retryLine}, {@code stepLabel}, {@code stepLink}, and on every template the brand tokens
+ * {@code brand}, {@code brandWebsite}, {@code supportPhone}, {@code supportEmail}, {@code grievanceName},
+ * {@code grievancePhone}, {@code grievanceEmail} ({@code navix.brand.*} / {@code navix.grievance.*}).
  *
  * <p>WHATSAPP entries are not wording: the approved text lives with Meta (SmartChat portal), so a
  * {@code whatsapp(type, templateName, keys...)} entry names the template and the model keys that fill
@@ -37,76 +39,76 @@ public class NotificationTemplates {
         // ---------------- KYC ----------------
         inApp(NotificationType.KYC_SUBMITTED, "New KYC to review",
                 "A borrower submitted KYC for application #{applicationId}. Review it in your queue.");
-        email(NotificationType.KYC_SUBMITTED, "New DhanBoost KYC to review — application #{applicationId}",
+        email(NotificationType.KYC_SUBMITTED, "New {brand} KYC to review — application #{applicationId}",
                 "Hi {name},\n\n{customerName} has submitted KYC for application #{applicationId}. It's "
-                        + "waiting in the credit queue.\n\n— DhanBoost");
+                        + "waiting in the credit queue.\n\n— {brand}");
 
         inApp(NotificationType.KYC_APPROVED, "KYC approved — instant loan ready",
                 "Your KYC is verified. You're eligible for an instant loan up to ₹10,00,000 — log in to "
                         + "choose your amount.");
         sms(NotificationType.KYC_APPROVED,
-                "Dear {name}, your KYC for DhanBoost application {applicationId} is verified. "
-                        + "Check status at https://dhanboost.com/login. - DhanBoost");
-        email(NotificationType.KYC_APPROVED, "Your DhanBoost KYC is approved — instant loan up to ₹10,00,000",
+                "Dear {name}, your KYC for {brand} application {applicationId} is verified. "
+                        + "Check status at {brandWebsite}. - {brand}");
+        email(NotificationType.KYC_APPROVED, "Your {brand} KYC is approved — instant loan up to ₹10,00,000",
                 "Hi {name},\n\nGood news — your KYC for application #{applicationId} is verified. You're "
                         + "now eligible for an instant loan of up to ₹10,00,000. Log in to choose your "
-                        + "amount and get funded.\n\n— DhanBoost");
+                        + "amount and get funded.\n\n— {brand}");
 
         inApp(NotificationType.KYC_REJECTED, "KYC could not be verified",
                 "We couldn't verify your KYC. Please review your details and resubmit.");
         sms(NotificationType.KYC_REJECTED,
-                "Dear {name}, your KYC for DhanBoost application {applicationId} could not be verified. "
-                        + "Re-submit documents at https://dhanboost.com/login. - DhanBoost");
-        email(NotificationType.KYC_REJECTED, "About your DhanBoost KYC",
+                "Dear {name}, your KYC for {brand} application {applicationId} could not be verified. "
+                        + "Re-submit documents at {brandWebsite}. - {brand}");
+        email(NotificationType.KYC_REJECTED, "About your {brand} KYC",
                 "Hi {name},\n\nWe weren't able to verify your KYC for application #{applicationId} this "
-                        + "time. Please log in to review your details and resubmit.\n\n— DhanBoost");
+                        + "time. Please log in to review your details and resubmit.\n\n— {brand}");
 
         // No sms(...) registered on purpose - see NotificationType.BUREAU_QUESTION_PENDING.
         inApp(NotificationType.BUREAU_QUESTION_PENDING, "One quick question to finish your check",
                 "The credit bureau asked us a security question that only you can answer. "
                         + "It takes about 20 seconds.");
-        email(NotificationType.BUREAU_QUESTION_PENDING, "One quick question to finish your DhanBoost check",
+        email(NotificationType.BUREAU_QUESTION_PENDING, "One quick question to finish your {brand} check",
                 "Hi {name},\n\nTo finish the credit check on your application #{applicationId}, the "
                         + "credit bureau needs you to answer one security question about your own "
                         + "borrowing history. Only you can answer it, and it takes about 20 seconds:"
                         + "\n{questionLink}\n\nIf none of the options look familiar, you can say so on "
-                        + "that page and our team will take it from there.\n\n- DhanBoost");
+                        + "that page and our team will take it from there.\n\n- {brand}");
         // No sms(...) registered on purpose - see NotificationType.VERIFICATION_STEP_LINK.
         inApp(NotificationType.VERIFICATION_STEP_LINK, "Finish your {stepLabel} step",
                 "Our credit team sent you a link to finish your {stepLabel} step — it takes a minute.");
-        email(NotificationType.VERIFICATION_STEP_LINK, "Finish your DhanBoost {stepLabel} step",
+        email(NotificationType.VERIFICATION_STEP_LINK, "Finish your {brand} {stepLabel} step",
                 "Hi {name},\n\nOur credit team reviewed application #{applicationId} and needs you to "
                         + "redo one step before we can move forward: {stepLabel}. Log in here to pick up "
-                        + "right where you left off:\n{stepLink}\n\n- DhanBoost");
+                        + "right where you left off:\n{stepLink}\n\n- {brand}");
 
         inApp(NotificationType.KYC_REMINDER, "Finish your verification",
                 "You still have pending verification steps: {pendingSteps}. Log in to complete them.");
         sms(NotificationType.KYC_REMINDER,
-                "Dear {name}, verification steps on your DhanBoost application {applicationId} are "
-                        + "pending. Complete them at https://dhanboost.com/login. - DhanBoost");
-        email(NotificationType.KYC_REMINDER, "Complete your DhanBoost verification",
+                "Dear {name}, verification steps on your {brand} application {applicationId} are "
+                        + "pending. Complete them at {brandWebsite}. - {brand}");
+        email(NotificationType.KYC_REMINDER, "Complete your {brand} verification",
                 "Hi {name},\n\nA few verification steps are still pending on your application "
                         + "#{applicationId}: {pendingSteps}.\n\nPlease log in to complete them so we can "
-                        + "proceed.\n\n— DhanBoost");
+                        + "proceed.\n\n— {brand}");
 
         inApp(NotificationType.WAITLIST_RECEIVED, "We have your details",
                 "Your application is under review. We'll get back to you soon.");
-        email(NotificationType.WAITLIST_RECEIVED, "We've received your DhanBoost application",
+        email(NotificationType.WAITLIST_RECEIVED, "We've received your {brand} application",
                 "Hi {name},\n\nThanks — we have your details and your application is under review. "
-                        + "We'll get back to you soon.\n\n— DhanBoost");
+                        + "We'll get back to you soon.\n\n— {brand}");
 
         inApp(NotificationType.KYC_REOPENED_RESCORE, "Good news — your application is back in review",
                 "Your application #{applicationId} is back in review. Log in to finish submitting your KYC.");
-        email(NotificationType.KYC_REOPENED_RESCORE, "Your DhanBoost application is back in review",
+        email(NotificationType.KYC_REOPENED_RESCORE, "Your {brand} application is back in review",
                 "Hi {name},\n\nGood news — we've re-checked your credit profile and your application "
                         + "#{applicationId} is back in review. Please log in and complete your KYC "
-                        + "submission to continue.\n\n— DhanBoost");
+                        + "submission to continue.\n\n— {brand}");
 
         inApp(NotificationType.REBORROW_PREAPPROVED, "You're pre-approved",
                 "Welcome back! You're pre-approved — choose your amount to continue.");
         sms(NotificationType.REBORROW_PREAPPROVED,
-                "Welcome back to DhanBoost. You can apply for another loan now. Log in at "
-                        + "https://dhanboost.com/login to choose your amount. - DhanBoost");
+                "Welcome back to {brand}. You can apply for another loan now. Log in at "
+                        + "{brandWebsite} to choose your amount. - {brand}");
 
         inApp(NotificationType.REBORROW_REVIEW_PENDING, "Reborrow under review",
                 "Reborrow application #{applicationId} needs review.");
@@ -114,14 +116,14 @@ public class NotificationTemplates {
         inApp(NotificationType.REBORROW_REVIEW_APPROVED, "Reborrow approved",
                 "Your repeat application is approved — choose your amount.");
         sms(NotificationType.REBORROW_REVIEW_APPROVED,
-                "Dear {name}, your DhanBoost application {applicationId} is approved. Complete the "
-                        + "remaining steps at https://dhanboost.com/login. - DhanBoost");
+                "Dear {name}, your {brand} application {applicationId} is approved. Complete the "
+                        + "remaining steps at {brandWebsite}. - {brand}");
 
         inApp(NotificationType.REBORROW_REVIEW_REJECTED, "Reborrow declined",
                 "We're unable to approve your repeat application at this time.");
         sms(NotificationType.REBORROW_REVIEW_REJECTED,
-                "Dear {name}, your DhanBoost loan application {applicationId} could not be approved at "
-                        + "this time. Details at https://dhanboost.com/login. - DhanBoost");
+                "Dear {name}, your {brand} loan application {applicationId} could not be approved at "
+                        + "this time. Details at {brandWebsite}. - {brand}");
 
         // ---------------- CREDIT ----------------
         inApp(NotificationType.LOAN_APPLIED, "New application to review",
@@ -135,9 +137,9 @@ public class NotificationTemplates {
 
         inApp(NotificationType.CREDIT_APPROVED, "Credit approved",
                 "Application #{applicationId} is approved by credit and moving to disbursement.");
-        email(NotificationType.CREDIT_APPROVED, "Your DhanBoost loan is approved",
+        email(NotificationType.CREDIT_APPROVED, "Your {brand} loan is approved",
                 "Hi {name},\n\nLoan application #{applicationId} for {customerName} has been approved by "
-                        + "the credit team and is ready for the next step (disbursement).\n\n— DhanBoost");
+                        + "the credit team and is ready for the next step (disbursement).\n\n— {brand}");
 
         // {retryLine} names the date the cooling-off block lifts, so a declined borrower is not
         // left guessing when "at this time" ends and retrying into a wall. Empty when no block was set.
@@ -147,49 +149,49 @@ public class NotificationTemplates {
         // template char-for-char, so adding a variable here means re-registering it. The borrower
         // gets the date by email and in-app.
         sms(NotificationType.CREDIT_REJECTED,
-                "Dear {name}, your DhanBoost loan application {applicationId} could not be approved at "
-                        + "this time. Details at https://dhanboost.com/login. - DhanBoost");
+                "Dear {name}, your {brand} loan application {applicationId} could not be approved at "
+                        + "this time. Details at {brandWebsite}. - {brand}");
         // "After assessing" rather than "After review": this same copy is now sent for engine
         // rejections (self-employed, sub-550 bureau), which no human reviewed. Deliberately gives
         // no reason — decision 31: the borrower is never told which rule fired.
-        email(NotificationType.CREDIT_REJECTED, "About your DhanBoost loan application",
+        email(NotificationType.CREDIT_REJECTED, "About your {brand} loan application",
                 "Hi {name},\n\nAfter assessing loan application #{applicationId}, we're unable to "
-                        + "approve it at this time.{retryLine}\n\n— DhanBoost");
+                        + "approve it at this time.{retryLine}\n\n— {brand}");
 
         inApp(NotificationType.LOAN_SANCTIONED, "Your loan is sanctioned",
                 "Application #{applicationId} is sanctioned — finish the remaining steps to receive it.");
         sms(NotificationType.LOAN_SANCTIONED,
-                "Dear {name}, your DhanBoost loan application {applicationId} is sanctioned. Complete the "
-                        + "remaining steps at https://dhanboost.com/login. - DhanBoost");
-        email(NotificationType.LOAN_SANCTIONED, "Your DhanBoost loan is sanctioned",
+                "Dear {name}, your {brand} loan application {applicationId} is sanctioned. Complete the "
+                        + "remaining steps at {brandWebsite}. - {brand}");
+        email(NotificationType.LOAN_SANCTIONED, "Your {brand} loan is sanctioned",
                 "Hi {name},\n\nGood news — loan application #{applicationId} has been sanctioned by our "
                         + "credit team. Sign in to review your offer and complete the remaining steps."
-                        + "\n\n— DhanBoost");
+                        + "\n\n— {brand}");
 
         inApp(NotificationType.SANCTIONED_AMOUNT_REVISED, "Sanctioned amount revised",
                 "Your approved loan amount for application #{applicationId} has been revised to {amount} "
                         + "(previously {previousAmount}).");
-        email(NotificationType.SANCTIONED_AMOUNT_REVISED, "Your DhanBoost sanctioned amount has been revised",
+        email(NotificationType.SANCTIONED_AMOUNT_REVISED, "Your {brand} sanctioned amount has been revised",
                 "Hi {name},\n\nThe approved (sanctioned) amount on your loan application #{applicationId} "
                         + "has been revised to {amount} (previously {previousAmount}). Log in to review "
-                        + "your offer.\n\n— DhanBoost");
+                        + "your offer.\n\n— {brand}");
 
         inApp(NotificationType.LOAN_LIMIT_REVISED, "Your borrowing limit has increased",
-                "Good news — you can now borrow up to {limit}. Open DhanBoost to take an advance.");
-        email(NotificationType.LOAN_LIMIT_REVISED, "Your DhanBoost borrowing limit is now {limit}",
+                "Good news — you can now borrow up to {limit}. Open {brand} to take an advance.");
+        email(NotificationType.LOAN_LIMIT_REVISED, "Your {brand} borrowing limit is now {limit}",
                 "Hi {name},\n\nGood news — your borrowing limit has been increased to "
                         + "{limit}. You can take an advance up to this amount, subject to the usual "
                         + "checks; your fee, interest and salary-linked repayment date are unchanged."
-                        + "\n\nLog in to borrow.\n\n— DhanBoost");
+                        + "\n\nLog in to borrow.\n\n— {brand}");
 
         // ---------------- DISBURSEMENT ----------------
         inApp(NotificationType.LOAN_APPLIED_FAST_TRACK, "Fast-track disbursal",
                 "Pre-approved application #{applicationId} is ready for disbursement (fast-track).");
         // Audience spans borrower + Disbursement Head + Admin, across three different triggers
         // (fast-track reborrow, offer acceptance, retry-after-failure) — kept neutral on purpose.
-        email(NotificationType.LOAN_APPLIED_FAST_TRACK, "DhanBoost — application #{applicationId} is ready for disbursement",
+        email(NotificationType.LOAN_APPLIED_FAST_TRACK, "{brand} — application #{applicationId} is ready for disbursement",
                 "Hi {name},\n\nApplication #{applicationId} for {customerName} is ready for "
-                        + "disbursement.\n\n— DhanBoost");
+                        + "disbursement.\n\n— {brand}");
 
         inApp(NotificationType.DISBURSEMENT_PENDING_ACCOUNTANT, "Transfer to validate",
                 "Application #{applicationId} is awaiting your transfer validation.");
@@ -199,51 +201,51 @@ public class NotificationTemplates {
 
         inApp(NotificationType.DISBURSEMENT_REJECTED, "Disbursal declined",
                 "Application #{applicationId} was declined at disbursement.");
-        email(NotificationType.DISBURSEMENT_REJECTED, "About your DhanBoost loan",
+        email(NotificationType.DISBURSEMENT_REJECTED, "About your {brand} loan",
                 "Hi {name},\n\nUnfortunately your loan application #{applicationId} was declined at the "
-                        + "disbursement stage.\n\n— DhanBoost");
+                        + "disbursement stage.\n\n— {brand}");
 
         inApp(NotificationType.MANDATE_SETUP_INVITE, "Set up auto-repayment",
-                "Set up auto-repayment for your DhanBoost loan so your instalment is collected "
+                "Set up auto-repayment for your {brand} loan so your instalment is collected "
                         + "automatically. It takes a minute: {link}");
         // Rs. not the rupee glyph, and the URL must be portal-whitelisted (CLAUDE.md section 14).
         // GO-LIVE: this wording needs DLT approval before it can send at all.
         sms(NotificationType.MANDATE_SETUP_INVITE,
-                "Dear {name}, set up auto-repayment for your DhanBoost loan so we can collect your "
-                        + "instalment automatically. Complete it here: {link} - DhanBoost");
-        email(NotificationType.MANDATE_SETUP_INVITE, "Set up auto-repayment for your DhanBoost loan",
-                "Hi {name},\n\nYou can now set up auto-repayment (eMandate) for your DhanBoost loan. "
+                "Dear {name}, set up auto-repayment for your {brand} loan so we can collect your "
+                        + "instalment automatically. Complete it here: {link} - {brand}");
+        email(NotificationType.MANDATE_SETUP_INVITE, "Set up auto-repayment for your {brand} loan",
+                "Hi {name},\n\nYou can now set up auto-repayment (eMandate) for your {brand} loan. "
                         + "Once it is in place your instalment is collected from your bank account "
                         + "automatically on the due date, so you do not have to remember to pay.\n\n"
                         + "Set it up here: {link}\n\nYou authorise it with your bank, and you can cancel "
-                        + "it with your bank at any time.\n\n— DhanBoost");
+                        + "it with your bank at any time.\n\n— {brand}");
 
         inApp(NotificationType.MANDATE_CANCELLED, "Auto-repayment cancelled",
                 "Your auto-repayment mandate on {bankName} account ending {accountLast4} has been cancelled. "
                         + "{why} Any amount due must now be paid manually from the Repay page.");
-        email(NotificationType.MANDATE_CANCELLED, "Your DhanBoost auto-repayment has been cancelled",
+        email(NotificationType.MANDATE_CANCELLED, "Your {brand} auto-repayment has been cancelled",
                 "Hi {name},\n\nYour auto-repayment mandate (eMandate) on your {bankName} account ending "
                         + "{accountLast4} has been cancelled. {why}\n\nNothing more will be collected "
                         + "automatically under this mandate. If you have a loan with an amount due, please "
                         + "repay it from the Repay page in the app before the due date.\n\nIf you did not "
-                        + "expect this, contact our support team.\n\n— DhanBoost");
+                        + "expect this, contact our support team.\n\n— {brand}");
 
         inApp(NotificationType.LOAN_DISBURSED, "Money on the way",
                 "Your loan is disbursed: {netDisbursed} credited. Repay {totalRepayable} by {dueDate}.");
         sms(NotificationType.LOAN_DISBURSED,
-                "Dear {name}, DhanBoost has credited {netDisbursed} to your bank a/c. Repay "
-                        + "{totalRepayable} by {dueDate} at https://dhanboost.com/login. - DhanBoost");
-        email(NotificationType.LOAN_DISBURSED, "Your DhanBoost loan has been disbursed",
+                "Dear {name}, {brand} has credited {netDisbursed} to your bank a/c. Repay "
+                        + "{totalRepayable} by {dueDate} at {brandWebsite}. - {brand}");
+        email(NotificationType.LOAN_DISBURSED, "Your {brand} loan has been disbursed",
                 "Hi {name},\n\n{netDisbursed} has been disbursed to your bank account for application "
                         + "#{applicationId}. Your total repayable is {totalRepayable}, due on {dueDate}. "
-                        + "You can pay early to save on interest.\n\n— DhanBoost");
+                        + "You can pay early to save on interest.\n\n— {brand}");
 
         inApp(NotificationType.SANCTION_LETTER_SIGNED, "Sanction letter signed",
                 "Your signed sanction letter for application #{applicationId} is ready — a copy is "
                         + "attached to the email we just sent you.");
-        email(NotificationType.SANCTION_LETTER_SIGNED, "Your signed DhanBoost sanction letter",
+        email(NotificationType.SANCTION_LETTER_SIGNED, "Your signed {brand} sanction letter",
                 "Hi {name},\n\nThanks for e-signing your sanction letter for application #{applicationId}. "
-                        + "A copy is attached to this email for your records.\n\n— DhanBoost");
+                        + "A copy is attached to this email for your records.\n\n— {brand}");
 
         // ---------------- REPAYMENT ----------------
         inApp(NotificationType.REPAYMENT_RECORDED, "Payment recorded",
@@ -252,8 +254,8 @@ public class NotificationTemplates {
         inApp(NotificationType.REPAYMENT_VERIFIED, "Payment confirmed",
                 "Your payment of {amount} is confirmed. Outstanding: {outstanding}.");
         sms(NotificationType.REPAYMENT_VERIFIED,
-                "Your payment of {amount} to DhanBoost is confirmed. Outstanding balance is "
-                        + "{outstanding}. View details at https://dhanboost.com/login. - DhanBoost");
+                "Your payment of {amount} to {brand} is confirmed. Outstanding balance is "
+                        + "{outstanding}. View details at {brandWebsite}. - {brand}");
 
         // {reason} is the human-readable rejection reason (WRONG_REFERENCE etc., mapped by the
         // listener) — the SMS body below stays char-for-char DLT-locked and does NOT carry it.
@@ -261,45 +263,45 @@ public class NotificationTemplates {
                 "Your payment of {amount} for loan #{loanId} couldn't be verified: {reason}. Please "
                         + "check the reference and record it again.");
         sms(NotificationType.REPAYMENT_REJECTED,
-                "Your payment of {amount} could not be verified by DhanBoost. Log in at "
-                        + "https://dhanboost.com/login to check and record it again. - DhanBoost");
-        email(NotificationType.REPAYMENT_REJECTED, "Your DhanBoost payment could not be verified",
+                "Your payment of {amount} could not be verified by {brand}. Log in at "
+                        + "{brandWebsite} to check and record it again. - {brand}");
+        email(NotificationType.REPAYMENT_REJECTED, "Your {brand} payment could not be verified",
                 "Hi {name},\n\nYour payment of {amount} for loan #{loanId} (application #{applicationId}) "
                         + "could not be verified: {reason}.\n\nPlease check the reference and record it "
-                        + "again — or reach out if you think this is a mistake.\n\n— DhanBoost");
+                        + "again — or reach out if you think this is a mistake.\n\n— {brand}");
 
         inApp(NotificationType.PAYMENT_DUE_SOON, "Payment due soon",
                 "Your payment of {amount} is due in {daysToDue} day(s) (by {dueDate}). Pay by your due "
                         + "date to avoid a late penalty. Prepay anytime to save on interest.");
         sms(NotificationType.PAYMENT_DUE_SOON,
-                "Dear {name}, repayment of {amount} on your DhanBoost loan {loanId} is due on {dueDate}. "
-                        + "Pay at https://dhanboost.com/login. - DhanBoost");
-        email(NotificationType.PAYMENT_DUE_SOON, "Your DhanBoost payment is due soon",
+                "Dear {name}, repayment of {amount} on your {brand} loan {loanId} is due on {dueDate}. "
+                        + "Pay at {brandWebsite}. - {brand}");
+        email(NotificationType.PAYMENT_DUE_SOON, "Your {brand} payment is due soon",
                 "Hi {name},\n\nYour payment of {amount} on application #{applicationId} is due in "
                         + "{daysToDue} day(s), by {dueDate}. Pay by your due date to avoid a late penalty "
                         + "— or prepay anytime to save on interest (you only pay interest up to the day "
-                        + "you repay).\n\n— DhanBoost");
+                        + "you repay).\n\n— {brand}");
 
         inApp(NotificationType.PAYMENT_OVERDUE, "Payment overdue",
                 "Your payment of {amount} is overdue by {daysOverdue} day(s). Please pay now — a late "
                         + "penalty of 2%/day is accruing and your credit score may be impacted.");
         sms(NotificationType.PAYMENT_OVERDUE,
-                "Dear {name}, repayment of {amount} on your DhanBoost loan {loanId} is overdue by "
-                        + "{daysOverdue} day(s). Pay at https://dhanboost.com/login. - DhanBoost");
-        email(NotificationType.PAYMENT_OVERDUE, "Your DhanBoost payment is overdue",
+                "Dear {name}, repayment of {amount} on your {brand} loan {loanId} is overdue by "
+                        + "{daysOverdue} day(s). Pay at {brandWebsite}. - {brand}");
+        email(NotificationType.PAYMENT_OVERDUE, "Your {brand} payment is overdue",
                 "Hi {name},\n\nYour payment of {amount} on application #{applicationId} is overdue by "
                         + "{daysOverdue} day(s). Please pay as soon as possible — a late penalty of 2% "
                         + "per day is accruing and continued non-payment will impact your credit score."
-                        + "\n\n— DhanBoost");
+                        + "\n\n— {brand}");
 
         inApp(NotificationType.LOAN_CLOSED, "Loan closed",
                 "Your loan is fully repaid and closed. Thank you!");
         sms(NotificationType.LOAN_CLOSED,
-                "Your loan with DhanBoost is fully repaid and closed. Thank you. Visit "
-                        + "https://dhanboost.com/login to borrow again. - DhanBoost");
-        email(NotificationType.LOAN_CLOSED, "Your DhanBoost loan is closed",
+                "Your loan with {brand} is fully repaid and closed. Thank you. Visit "
+                        + "{brandWebsite} to borrow again. - {brand}");
+        email(NotificationType.LOAN_CLOSED, "Your {brand} loan is closed",
                 "Hi {name},\n\nYour loan on application #{applicationId} is fully repaid and now closed. "
-                        + "Thank you for choosing DhanBoost.\n\n— DhanBoost");
+                        + "Thank you for choosing {brand}.\n\n— {brand}");
 
         // ---------------- COLLECTIONS ----------------
         inApp(NotificationType.COLLECTION_CASE_OPENED, "New collections case",
@@ -311,8 +313,8 @@ public class NotificationTemplates {
         inApp(NotificationType.SETTLEMENT_APPROVED, "Settlement approved",
                 "A full & final settlement of {settlementAmount} is approved on your loan. Pay it to close.");
         sms(NotificationType.SETTLEMENT_APPROVED,
-                "Dear {name}, a full and final settlement of {settlementAmount} is approved on DhanBoost "
-                        + "loan {loanId}. Pay at https://dhanboost.com/login. - DhanBoost");
+                "Dear {name}, a full and final settlement of {settlementAmount} is approved on {brand} "
+                        + "loan {loanId}. Pay at {brandWebsite}. - {brand}");
 
         inApp(NotificationType.SETTLEMENT_REJECTED, "Settlement rejected",
                 "Your proposed settlement of {settlementAmount} on loan #{loanId} was not approved.");
@@ -356,6 +358,26 @@ public class NotificationTemplates {
         inApp(NotificationType.EXTENSION_DECLINED, "Extension declined",
                 "The borrower declined the extension on loan #{loanId} ({reason}).");
 
+        // ---------------- COMPLAINTS (Phase 7) ----------------
+        inApp(NotificationType.COMPLAINT_RECEIVED, "We have your complaint",
+                "Your complaint {ticketNo} is logged. We will reply by {resolveBy}.");
+        email(NotificationType.COMPLAINT_RECEIVED, "Your complaint {ticketNo}",
+                "Hi {name},\n\nWe have logged your complaint as {ticketNo}. We will acknowledge it within 2 working "
+                        + "days and reply by {resolveBy}.\n\nIf you are not happy with our reply, write to our "
+                        + "grievance officer, {grievanceName}, at {grievanceEmail} or call {grievancePhone}."
+                        + "\n\n— {brand}");
+        inApp(NotificationType.COMPLAINT_RESOLVED, "Complaint resolved",
+                "Your complaint {ticketNo} is resolved: {resolution}");
+        email(NotificationType.COMPLAINT_RESOLVED, "Your complaint {ticketNo} is resolved",
+                "Hi {name},\n\nYour complaint {ticketNo} is resolved.\n\n{resolution}\n\nIf you are not happy with "
+                        + "this, write to our grievance officer, {grievanceName}, at {grievanceEmail} or call "
+                        + "{grievancePhone}.\n\n— {brand}");
+        inApp(NotificationType.COMPLAINT_SLA_BREACHED, "Complaint {ticketNo} is late",
+                "Complaint {ticketNo} missed its {milestone} deadline ({dueAt}).");
+        email(NotificationType.COMPLAINT_SLA_BREACHED, "Complaint {ticketNo} missed its {milestone} deadline",
+                "Complaint {ticketNo} missed its {milestone} deadline ({dueAt}). Open it in the complaints queue."
+                        + "\n\n— {brand}");
+
         // ---------------- SYSTEM ----------------
         inApp(NotificationType.APPLICATION_CANCELLED, "Application cancelled",
                 "Your loan application #{applicationId} has been cancelled.");
@@ -363,21 +385,21 @@ public class NotificationTemplates {
         inApp(NotificationType.PROVIDER_BALANCE_EXHAUSTED, "{provider} balance exhausted",
                 "{provider}'s prepaid balance is exhausted — every call to it fails until the account "
                         + "is topped up ({endpoint}).");
-        email(NotificationType.PROVIDER_BALANCE_EXHAUSTED, "DhanBoost: {provider} balance exhausted",
+        email(NotificationType.PROVIDER_BALANCE_EXHAUSTED, "{brand}: {provider} balance exhausted",
                 "{provider}'s prepaid account is at zero balance.\n\nEvery verification call routed to "
                         + "{provider} is failing and will keep failing until the account is topped up. "
-                        + "The endpoint that reported it: {endpoint}\n\n— DhanBoost");
+                        + "The endpoint that reported it: {endpoint}\n\n— {brand}");
 
         inApp(NotificationType.PROVIDER_CAPABILITY_DOWN, "{provider} {operation} is failing",
                 "{calls} calls to {provider} {operation} in the last 24 hours, none of them successful. "
                         + "Check the provider dashboard.");
         email(NotificationType.PROVIDER_CAPABILITY_DOWN,
-                "DhanBoost: {provider} {operation} has not succeeded in 24 hours",
+                "{brand}: {provider} {operation} has not succeeded in 24 hours",
                 "{provider} {operation} recorded {calls} live calls since {since} and not one of them "
                         + "succeeded.\n\nThis is the shape of a misconfiguration or a provider-side "
                         + "outage rather than a borrower problem. Open the provider dashboard "
                         + "(Admin → API dashboard) and read the newest row's response payload.\n\n"
-                        + "— DhanBoost");
+                        + "— {brand}");
 
         inApp(NotificationType.MANDATE_BANK_UNSUPPORTED, "eMandate needs manual setup",
                 "{bankName} cannot register an eMandate online for application {applicationId}. The borrower "
@@ -391,23 +413,23 @@ public class NotificationTemplates {
         inApp(NotificationType.REFERRAL_REWARD_CREDITED, "Referral reward credited",
                 "Your referral reward of {amount} has been credited (ref {txnRef}). Thanks for spreading the word!");
         sms(NotificationType.REFERRAL_REWARD_CREDITED,
-                "Your DhanBoost referral reward of {amount} is credited with reference {txnRef}. Log in "
-                        + "at https://dhanboost.com/login to view it. - DhanBoost");
+                "Your {brand} referral reward of {amount} is credited with reference {txnRef}. Log in "
+                        + "at {brandWebsite} to view it. - {brand}");
 
         // ---------------- STAFF / IAM ----------------
-        email(NotificationType.STAFF_INVITED, "You're invited to DhanBoost",
-                "Hi {name},\n\nYou've been invited to DhanBoost as {role}. Accept your invite and set your "
-                        + "password here:\n{inviteLink}\n\n— DhanBoost");
-        email(NotificationType.STAFF_CREATED, "Your DhanBoost account is ready",
-                "Hi {name},\n\nYour DhanBoost staff account has been created with the role {role}. You can "
-                        + "now sign in.\n\n— DhanBoost");
+        email(NotificationType.STAFF_INVITED, "You're invited to {brand}",
+                "Hi {name},\n\nYou've been invited to {brand} as {role}. Accept your invite and set your "
+                        + "password here:\n{inviteLink}\n\n— {brand}");
+        email(NotificationType.STAFF_CREATED, "Your {brand} account is ready",
+                "Hi {name},\n\nYour {brand} staff account has been created with the role {role}. You can "
+                        + "now sign in.\n\n— {brand}");
         inApp(NotificationType.STAFF_ROLE_CHANGED, "Your role changed",
                 "Your role is now {role}.");
-        email(NotificationType.STAFF_ROLE_CHANGED, "Your DhanBoost role has changed",
-                "Hi {name},\n\nYour DhanBoost role has been updated to {role}.\n\n— DhanBoost");
-        email(NotificationType.STAFF_DISABLED, "Your DhanBoost access has been disabled",
-                "Hi {name},\n\nYour DhanBoost staff access has been disabled. If you believe this is in "
-                        + "error, contact your administrator.\n\n— DhanBoost");
+        email(NotificationType.STAFF_ROLE_CHANGED, "Your {brand} role has changed",
+                "Hi {name},\n\nYour {brand} role has been updated to {role}.\n\n— {brand}");
+        email(NotificationType.STAFF_DISABLED, "Your {brand} access has been disabled",
+                "Hi {name},\n\nYour {brand} staff access has been disabled. If you believe this is in "
+                        + "error, contact your administrator.\n\n— {brand}");
 
         // ---------------- WHATSAPP (SmartChat; template name + ordered {{n}} keys) ----------------
         whatsapp(NotificationType.KYC_APPROVED, "db_kyc_approved", "name", "applicationId");

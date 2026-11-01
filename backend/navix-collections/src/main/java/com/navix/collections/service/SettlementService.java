@@ -159,7 +159,17 @@ public class SettlementService {
         // The settlement caps what is owed from now on; if the borrower has already paid that much the
         // loan closes here, in the approval's own transaction, attributed to the approving Head.
         if (loanId != null) {
+            Long before = loanDirectory.findLoan(loanId).map(LoanSummary::outstandingPaise).orElse(null);
             loanDirectory.recomputeOutstanding(loanId);
+            Long after = loanDirectory.findLoan(loanId).map(LoanSummary::outstandingPaise).orElse(null);
+            // PLAN Phase 7: a settlement caps what is owed, so it is a balance_adjustment like every money change.
+            java.util.Map<String, Object> was = new java.util.HashMap<>();
+            was.put("outstandingPaise", before);
+            java.util.Map<String, Object> now = new java.util.HashMap<>();
+            now.put("outstandingPaise", after);
+            now.put("settlementId", saved.getId().toString());
+            now.put("settledAmountPaise", saved.getSettlementAmount());
+            loanDirectory.recordAdjustment(loanId, "SETTLEMENT", was, now, approver, "SETTLEMENT_APPROVED", null);
         }
         publishSettlement(saved, loanId, true);
         return toView(saved);

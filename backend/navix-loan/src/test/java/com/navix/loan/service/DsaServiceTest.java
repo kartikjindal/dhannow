@@ -49,7 +49,7 @@ class DsaServiceTest {
 
     private DsaService service() {
         return new DsaService(leadRepository, customerProfileRepository, rejectionRepository,
-                commissionRepository, loanRepository, attributionService, outreachService);
+                commissionRepository, loanRepository, attributionService, outreachService, new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"));
     }
 
     @AfterEach

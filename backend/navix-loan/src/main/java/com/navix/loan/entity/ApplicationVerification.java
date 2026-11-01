@@ -39,7 +39,7 @@ public class ApplicationVerification extends BaseAuditEntity {
     @Column(name = "status", nullable = false, length = 20)
     private String status;
 
-    /** FINTRIX, DIGILOCKER, EXPERIAN, CRIF, DhanBoost (internal). */
+    /** FINTRIX, DIGILOCKER, EXPERIAN, CRIF, INTERNAL (our own checks; older rows carry the navix brand name). */
     @Column(name = "provider", length = 40)
     private String provider;
 

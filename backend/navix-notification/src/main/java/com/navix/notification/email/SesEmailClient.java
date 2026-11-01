@@ -59,7 +59,7 @@ public class SesEmailClient implements EmailClient {
     }
 
     private EmailResult sendSimple(EmailMessage message) {
-        String subject = message.subject() == null ? "DhanBoost" : message.subject();
+        String subject = message.subject() == null ? "(no subject)" : message.subject();
         String body = message.body() == null ? "" : message.body();
         Body.Builder bodyBuilder = Body.builder().text(utf8(body));
         if (message.html() != null && !message.html().isBlank()) {
@@ -90,7 +90,7 @@ public class SesEmailClient implements EmailClient {
         MimeMessage mime = new MimeMessage(session);
         mime.setFrom(new InternetAddress(props.from()));
         mime.setRecipients(RecipientType.TO, InternetAddress.parse(message.to()));
-        mime.setSubject(message.subject() == null ? "DhanBoost" : message.subject(), "UTF-8");
+        mime.setSubject(message.subject() == null ? "(no subject)" : message.subject(), "UTF-8");
 
         MimeMultipart mixed = new MimeMultipart("mixed");
 

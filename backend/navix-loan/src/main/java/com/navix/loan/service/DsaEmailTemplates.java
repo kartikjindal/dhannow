@@ -1,5 +1,6 @@
 package com.navix.loan.service;
 
+import com.navix.common.brand.BrandProperties;
 import com.navix.common.exception.BusinessException;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
@@ -14,9 +15,10 @@ import java.util.Map;
  */
 final class DsaEmailTemplates {
 
-    static final String SITE = "https://dhanboost.com";
-    static final String APPLY_URL = SITE + "/signup/otp";
-    static final String LOGO_URL = SITE + "/dhanboost-mark.png";
+    /** The public site ({@code navix.brand.website}); the logo is the site's own. */
+    static String site(BrandProperties brand) {
+        return "https://" + brand.website();
+    }
 
     record Template(String key, String name, String subject, String headline, String intro, String text,
                     String contentHtml) {
@@ -31,14 +33,14 @@ final class DsaEmailTemplates {
         add(new Template("INTRO", "Introduction",
                 "{{NAME}}, get a salary advance before payday",
                 "Money before payday,<br>repaid on payday.",
-                "Short on cash before your salary lands? DhanBoost gives salaried professionals a quick advance of up to <strong>25% of their monthly salary</strong>, repaid in one go on salary day.",
-                "Short on cash before your salary lands? DhanBoost gives salaried professionals an advance of up to 25% of their monthly salary, repaid in one go on salary day.",
+                "Short on cash before your salary lands? {{BRAND}} gives salaried professionals a quick advance of up to <strong>25% of their monthly salary</strong>, repaid in one go on salary day.",
+                "Short on cash before your salary lands? {{BRAND}} gives salaried professionals an advance of up to 25% of their monthly salary, repaid in one go on salary day.",
                 features(
                         "&#9889;", "Fully digital", "Apply from your phone in minutes &mdash; no branch visits.",
                         "&#128197;", "Salary-day repayment", "One repayment, due on your salary day.",
                         "&#128176;", "Pay early, save", "Interest is charged only for the days you keep the money.")));
         add(new Template("FOLLOW_UP", "Gentle follow-up",
-                "{{NAME}}, your DhanBoost advance is a few taps away",
+                "{{NAME}}, your {{BRAND}} advance is a few taps away",
                 "Still thinking it over?",
                 "We saved you a spot. Checking your offer takes a few minutes and does not commit you to anything &mdash; you only borrow once you accept the terms.",
                 "We saved you a spot. Checking your offer takes a few minutes and does not commit you to anything - you only borrow once you accept the terms.",
@@ -47,10 +49,10 @@ final class DsaEmailTemplates {
                         "Have your latest salary slip ready",
                         "Use the mobile number linked to your Aadhaar")));
         add(new Template("HOW_IT_WORKS", "How it works",
-                "How DhanBoost works, in 3 simple steps",
+                "How {{BRAND}} works, in 3 simple steps",
                 "Three steps to your advance.",
-                "Here is exactly what happens when you apply with DhanBoost &mdash; transparent from the first screen to repayment.",
-                "Here is exactly what happens when you apply with DhanBoost - transparent from the first screen to repayment.",
+                "Here is exactly what happens when you apply with {{BRAND}} &mdash; transparent from the first screen to repayment.",
+                "Here is exactly what happens when you apply with {{BRAND}} - transparent from the first screen to repayment.",
                 steps(
                         "Check your offer", "Sign in with your mobile number, share your salary details and complete paperless KYC.",
                         "Choose and sign", "Pick an amount within your limit, review the Key Fact Statement and e-sign.",
@@ -64,31 +66,34 @@ final class DsaEmailTemplates {
         TEMPLATES.put(t.key(), t);
     }
 
-    static List<Rendered> renderAll(String leadName) {
-        return TEMPLATES.keySet().stream().map(k -> render(k, leadName)).toList();
+    static List<Rendered> renderAll(String leadName, BrandProperties brand) {
+        return TEMPLATES.keySet().stream().map(k -> render(k, leadName, brand)).toList();
     }
 
-    static Rendered render(String key, String leadName) {
+    static Rendered render(String key, String leadName, BrandProperties brand) {
         Template t = key == null ? null : TEMPLATES.get(key.trim().toUpperCase());
         if (t == null) {
             throw new BusinessException("INVALID_TEMPLATE", "Pick one of the email templates");
         }
         String first = firstName(leadName);
-        String subject = first != null ? t.subject().replace("{{NAME}}", first)
-                : capitalize(t.subject().replace("{{NAME}}, ", ""));
+        String name = String.valueOf(brand.name());
+        String site = site(brand);
+        String subject = (first != null ? t.subject().replace("{{NAME}}", first)
+                : capitalize(t.subject().replace("{{NAME}}, ", ""))).replace("{{BRAND}}", name);
         String greeting = first == null ? "Hi there," : "Hi " + escape(first) + ",";
         String html = SHELL
                 .replace("{{SUBJECT}}", escape(subject))
-                .replace("{{LOGO}}", LOGO_URL)
-                .replace("{{SITE}}", SITE)
-                .replace("{{APPLY}}", APPLY_URL)
+                .replace("{{LOGO}}", site + "/logo.jpeg")
+                .replace("{{SITE}}", site)
+                .replace("{{APPLY}}", site)
                 .replace("{{HEADLINE}}", t.headline())
                 .replace("{{GREETING}}", greeting)
                 .replace("{{INTRO}}", t.intro())
                 .replace("{{CONTENT}}", t.contentHtml())
-                .replace("{{YEAR}}", String.valueOf(LocalDate.now().getYear()));
-        String text = (first == null ? "Hi there," : "Hi " + first + ",") + "\n\n" + t.text()
-                + "\n\nCheck your offer: " + APPLY_URL + "\n\n- Team DhanBoost";
+                .replace("{{YEAR}}", String.valueOf(LocalDate.now().getYear()))
+                .replace("{{BRAND}}", escape(name));
+        String text = ((first == null ? "Hi there," : "Hi " + first + ",") + "\n\n" + t.text()
+                + "\n\nCheck your offer: " + site + "\n\n- Team " + name).replace("{{BRAND}}", name);
         return new Rendered(t.key(), t.name(), subject, html, text);
     }
 
@@ -176,8 +181,8 @@ final class DsaEmailTemplates {
                   <tr>
                     <td class="pad" style="padding:20px 36px;background-color:#ffffff;">
                       <a href="{{SITE}}" style="text-decoration:none;">
-                        <img src="{{LOGO}}" width="40" height="40" alt="DhanBoost" style="vertical-align:middle;border:0;">
-                        <span style="vertical-align:middle;margin-left:8px;font-family:'Bricolage Grotesque',Georgia,serif;font-size:22px;font-weight:700;color:#0C2540;">DhanBoost<span style="color:#E9B53A;">.</span></span>
+                        <img src="{{LOGO}}" width="40" height="40" alt="{{BRAND}}" style="vertical-align:middle;border:0;">
+                        <span style="vertical-align:middle;margin-left:8px;font-family:'Bricolage Grotesque',Georgia,serif;font-size:22px;font-weight:700;color:#0C2540;">{{BRAND}}<span style="color:#E9B53A;">.</span></span>
                       </a>
                     </td>
                   </tr>
@@ -198,14 +203,14 @@ final class DsaEmailTemplates {
                   </tr>
                   <tr>
                     <td class="pad" align="center" style="padding:26px 36px 34px;">
-                      <a href="{{APPLY}}" style="display:inline-block;padding:14px 34px;border-radius:999px;background-color:#0C2540;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">Apply on DhanBoost</a>
+                      <a href="{{APPLY}}" style="display:inline-block;padding:14px 34px;border-radius:999px;background-color:#0C2540;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;">Apply on {{BRAND}}</a>
                       <p style="margin:12px 0 0;font-size:12px;color:#8493a3;">Checking your offer takes about 5 minutes.</p>
                     </td>
                   </tr>
                   <tr>
                     <td class="pad" style="padding:22px 36px 28px;background-color:#FDFBF6;border-top:1px solid #F1E6C8;">
-                      <p style="margin:0 0 8px;font-size:12px;line-height:1.6;color:#5b6b7c;">You are receiving this because a DhanBoost partner shared your details with us at your request. Loans are subject to eligibility and credit assessment; fees and interest are shown upfront in the Key Fact Statement before you sign.</p>
-                      <p style="margin:0;font-size:11px;line-height:1.5;color:#a8b4c1;">&copy; {{YEAR}} DhanBoost &middot; NAVIX Finance Private Limited &middot; <a href="{{SITE}}" style="color:#5b6b7c;">dhanboost.com</a></p>
+                      <p style="margin:0 0 8px;font-size:12px;line-height:1.6;color:#5b6b7c;">You are receiving this because a {{BRAND}} partner shared your details with us at your request. Loans are subject to eligibility and credit assessment; fees and interest are shown upfront in the Key Fact Statement before you sign.</p>
+                      <p style="margin:0;font-size:11px;line-height:1.5;color:#a8b4c1;">&copy; {{YEAR}} {{BRAND}} &middot; NAVIX Finance Private Limited &middot; <a href="{{SITE}}" style="color:#5b6b7c;">dhanboost.com</a></p>
                     </td>
                   </tr>
                 </table>

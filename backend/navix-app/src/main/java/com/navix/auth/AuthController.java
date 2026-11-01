@@ -5,6 +5,8 @@ import com.navix.auth.AuthDtos.AuthResponse;
 import com.navix.auth.AuthDtos.BorrowerLoginRequest;
 import com.navix.auth.AuthDtos.BorrowerPasswordLoginRequest;
 import com.navix.auth.AuthDtos.ForgotPasswordRequest;
+import com.navix.auth.AuthDtos.MfaEnrolRequest;
+import com.navix.auth.AuthDtos.MfaEnrolResponse;
 import com.navix.auth.AuthDtos.MessageResponse;
 import com.navix.auth.AuthDtos.OtpRequestRequest;
 import com.navix.auth.AuthDtos.OtpRequestResponse;
@@ -64,6 +66,7 @@ public class AuthController {
     private final AttemptLimiter limiter;
     private final CaptchaVerifier captcha;
     private final com.navix.config.StaffSessionRegistry staffSessionRegistry;
+    private final StaffMfaService mfa;
     /**
      * Same TTL {@link JwtService} issues staff tokens with — used to decide whether a stored
      * {@code active_session_id} could still back a live token (see {@link #staffLogin}).
@@ -127,29 +130,18 @@ public class AuthController {
 
     @PostMapping("/staff/login")
     public ApiResponse<AuthResponse> staffLogin(@Valid @RequestBody StaffLoginRequest req) {
-        // Ahead of the limiter on purpose: a bot that cannot answer the challenge must not be able
-        // to spend a real staffer's three attempts and hold them out of the console.
-        captcha.verify(req.captchaToken(), ACTION_STAFF_LOGIN);
-        String maskedEmail = Masking.maskEmail(req.email() == null ? null : req.email().trim());
-        String limitKey = "staff:" + req.email().trim().toLowerCase(Locale.ROOT);
-        // Before the lookup AND before BCrypt — otherwise the endpoint is an unbounded password oracle.
-        limiter.hit(limitKey, MAX_LOGIN_ATTEMPTS, LOGIN_WINDOW, LOGIN_COOLOFF, TOO_MANY_LOGINS);
-        StaffUser staff = staffRepository.findByEmail(req.email().trim()).orElse(null);
-        if (staff == null) {
-            log.warn("staff login failed reason=INVALID_CREDENTIALS email={}", maskedEmail);
-            throw new BusinessException("INVALID_CREDENTIALS", "Invalid email or password");
+        StaffUser staff = authenticateStaff(req.email(), req.password(), req.captchaToken());
+        String maskedEmail = Masking.maskEmail(req.email().trim());
+        // PLAN Phase 7: the TOTP step. A missing or wrong code still counts against the three attempts (the
+        // limiter is only cleared below), so the code cannot be guessed by someone who has the password.
+        try {
+            mfa.checkAtLogin(staff.getId(), staff.getRole().name(), req.totpCode());
+        } catch (BusinessException e) {
+            log.warn("staff login failed reason={} staffId={} email={}", e.getCode(), staff.getId(), maskedEmail);
+            throw e;
         }
-        if (staff.getStatus() != StaffStatus.ACTIVE) {
-            log.warn("staff login failed reason=INACTIVE_STAFF staffId={} email={}", staff.getId(), maskedEmail);
-            throw new BusinessException("INACTIVE_STAFF", "This staff account is not active");
-        }
-        if (staff.getPasswordHash() == null
-                || !passwordEncoder.matches(req.password(), staff.getPasswordHash())) {
-            log.warn("staff login failed reason=INVALID_CREDENTIALS staffId={} email={}", staff.getId(), maskedEmail);
-            throw new BusinessException("INVALID_CREDENTIALS", "Invalid email or password");
-        }
-        // Right password: the three strikes are three WRONG ones, so wipe the slate.
-        limiter.clear(limitKey);
+        // Right password (and code): the three strikes are three WRONG ones, so wipe the slate.
+        limiter.clear(staffLimitKey(req.email()));
 
         // One live console session per staffer, ALL roles including ADMIN. A second sign-in while a
         // session is live is refused with a code the UI can distinguish (SESSION_CONFLICT), so the
@@ -181,6 +173,61 @@ public class AuthController {
                 JwtService.AUDIENCE_STAFF, sessionId);
         log.info("staff login ok staffId={} role={} forced={}", id, staff.getRole(), force);
         return ApiResponse.ok(new AuthResponse(token, id, staff.getName(), staff.getRole().name(), null));
+    }
+
+    /**
+     * PLAN Phase 7: start setting up the authenticator app (password re-checked, same limiter as sign-in). The
+     * secret is shown once; a staff member already enrolled must ask an ADMIN to reset it.
+     */
+    @PostMapping("/staff/mfa/enrol")
+    public ApiResponse<MfaEnrolResponse> staffMfaEnrol(@Valid @RequestBody MfaEnrolRequest req) {
+        StaffUser staff = authenticateStaff(req.email(), req.password(), req.captchaToken());
+        StaffMfaService.Enrolment e = mfa.enrol(staff.getId(), staff.getEmail());
+        limiter.clear(staffLimitKey(req.email()));
+        log.info("staff mfa enrolment started staffId={}", staff.getId());
+        return ApiResponse.ok(new MfaEnrolResponse(e.secret(), e.otpauthUri()));
+    }
+
+    /** The first code from the app confirms the enrolment; the next sign-in needs a code. */
+    @PostMapping("/staff/mfa/confirm")
+    public ApiResponse<MessageResponse> staffMfaConfirm(@Valid @RequestBody MfaEnrolRequest req) {
+        StaffUser staff = authenticateStaff(req.email(), req.password(), req.captchaToken());
+        mfa.confirm(staff.getId(), req.code());
+        limiter.clear(staffLimitKey(req.email()));
+        log.info("staff mfa enrolment confirmed staffId={}", staff.getId());
+        return ApiResponse.ok(new MessageResponse("Two-step sign-in is on."));
+    }
+
+    /**
+     * Captcha, limiter, lookup, status and password: everything a staff sign-in checks before MFA. The limiter is
+     * hit here and cleared by the caller only once the whole step succeeded.
+     */
+    private StaffUser authenticateStaff(String email, String password, String captchaToken) {
+        // Ahead of the limiter on purpose: a bot that cannot answer the challenge must not be able
+        // to spend a real staffer's three attempts and hold them out of the console.
+        captcha.verify(captchaToken, ACTION_STAFF_LOGIN);
+        String maskedEmail = Masking.maskEmail(email == null ? null : email.trim());
+        // Before the lookup AND before BCrypt — otherwise the endpoint is an unbounded password oracle.
+        limiter.hit(staffLimitKey(email), MAX_LOGIN_ATTEMPTS, LOGIN_WINDOW, LOGIN_COOLOFF, TOO_MANY_LOGINS);
+        StaffUser staff = staffRepository.findByEmail(email.trim()).orElse(null);
+        if (staff == null) {
+            log.warn("staff login failed reason=INVALID_CREDENTIALS email={}", maskedEmail);
+            throw new BusinessException("INVALID_CREDENTIALS", "Invalid email or password");
+        }
+        if (staff.getStatus() != StaffStatus.ACTIVE) {
+            log.warn("staff login failed reason=INACTIVE_STAFF staffId={} email={}", staff.getId(), maskedEmail);
+            throw new BusinessException("INACTIVE_STAFF", "This staff account is not active");
+        }
+        if (staff.getPasswordHash() == null
+                || !passwordEncoder.matches(password, staff.getPasswordHash())) {
+            log.warn("staff login failed reason=INVALID_CREDENTIALS staffId={} email={}", staff.getId(), maskedEmail);
+            throw new BusinessException("INVALID_CREDENTIALS", "Invalid email or password");
+        }
+        return staff;
+    }
+
+    private static String staffLimitKey(String email) {
+        return "staff:" + email.trim().toLowerCase(Locale.ROOT);
     }
 
     /**

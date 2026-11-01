@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
  * identity FALLBACK (see {@code RoutingVerificationPort}), and the sole provider for email + address
  * (Signzy lacks both). Capabilities Digitap does not offer throw {@link CapabilityNotSupportedException}:
  * <ul>
- *   <li>{@link #pennyDrop} — bank verification is not in the Digitap package handed to DhanBoost.</li>
+ *   <li>{@link #pennyDrop} — bank verification is not in the Digitap package handed to DhanNow.</li>
  *   <li>all {@code digilocker*} — Digitap has no DigiLocker consent/OAuth e-Aadhaar flow.</li>
  * </ul>
  */

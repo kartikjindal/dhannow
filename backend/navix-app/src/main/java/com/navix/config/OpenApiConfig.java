@@ -15,11 +15,11 @@ import org.springframework.context.annotation.Configuration;
 public class OpenApiConfig {
 
     @Bean
-    public OpenAPI navixOpenAPI() {
+    public OpenAPI navixOpenAPI(com.navix.common.brand.BrandProperties brand) {
         return new OpenAPI()
                 .info(new Info()
-                        .title("DhanBoost API")
-                        .description("Salary-linked single-repayment lending platform API.")
+                        .title(brand.name() + " API")
+                        .description("Short-term personal loan platform API.")
                         .version("0.0.1-SNAPSHOT"));
     }
 }

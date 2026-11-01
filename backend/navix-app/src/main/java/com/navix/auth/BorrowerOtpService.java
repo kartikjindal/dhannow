@@ -42,6 +42,7 @@ public class BorrowerOtpService implements OtpVerifierPort {
     private final WhatsAppGateway whatsApp;
     private final SmsProperties props;
     private final AttemptLimiter limiter;
+    private final com.navix.common.brand.BrandProperties brand;
     private final Map<String, Otp> store = new ConcurrentHashMap<>();
 
     private record Otp(String code, Instant expiresAt, int attempts) {
@@ -128,16 +129,20 @@ public class BorrowerOtpService implements OtpVerifierPort {
         return matched[0];
     }
 
-    /** Build the SMS body from the (DLT-registered) template: {@code {otp}} → code, {@code {ttl}} → minutes. */
+    /**
+     * Build the SMS body from the (DLT-registered) template: {@code {otp}} → code, {@code {ttl}} → minutes,
+     * {@code {brand}} → {@code navix.brand.name}.
+     */
     private String buildMessage(String code, String purpose) {
         String template = OtpVerifierPort.BUREAU_CONSENT.equals(purpose)
                         && props.bureauConsentOtpTemplate() != null && !props.bureauConsentOtpTemplate().isBlank()
                 ? props.bureauConsentOtpTemplate()
                 : props.otpTemplate() != null && !props.otpTemplate().isBlank()
                         ? props.otpTemplate()
-                        : "Your OTP for DhanBoost login is {otp}. It is valid for {ttl} minutes. "
-                                + "Do not share this OTP with anyone. - DhanBoost";
+                        : "Your OTP for {brand} login is {otp}. It is valid for {ttl} minutes. "
+                                + "Do not share this OTP with anyone. - {brand}";
         return template
+                .replace("{brand}", String.valueOf(brand.name()))
                 .replace("{otp}", code)
                 .replace("{ttl}", String.valueOf(props.otpTtlSeconds() / 60));
     }

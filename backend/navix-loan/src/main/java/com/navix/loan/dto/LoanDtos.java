@@ -213,7 +213,7 @@ public final class LoanDtos {
 
     /**
      * One row in the accountant's company-wide transactions ledger. Synthesized (not stored):
-     * a DISBURSAL (OUTGOING, money leaving DhanBoost, from {@code loan.net_disbursed}) or a REPAYMENT
+     * a DISBURSAL (OUTGOING, money leaving DhanNow, from {@code loan.net_disbursed}) or a REPAYMENT
      * (INCOMING, from a {@code payment}). PAN is returned in full (staff-only ledger).
      */
     public record TransactionView(

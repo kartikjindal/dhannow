@@ -99,9 +99,20 @@ public class PaymentAllocator {
     @Transactional
     public void adjustment(Long loanId, Long customerId, String kind, Map<String, Object> before,
                            Map<String, Object> after, Long approverId, String reasonCode, Instant at) {
+        adjustment(loanId, customerId, kind, before, after, approverId, reasonCode, null, at);
+    }
+
+    /**
+     * As above with a free-text {@code note}. {@code reasonCode} is a {@code balance_adjustment_reason} code (V106);
+     * the row is append-only.
+     */
+    @Transactional
+    public void adjustment(Long loanId, Long customerId, String kind, Map<String, Object> before,
+                           Map<String, Object> after, Long approverId, String reasonCode, String note, Instant at) {
         jdbc.update("insert into balance_adjustment (loan_id, customer_id, kind, before, after, approver_id, reason_code,"
-                        + " at) values (?, ?, ?, cast(? as jsonb), cast(? as jsonb), ?, ?, ?)",
-                loanId, customerId, kind, toJson(before), toJson(after), approverId, reasonCode, Timestamp.from(at));
+                        + " note, at) values (?, ?, ?, cast(? as jsonb), cast(? as jsonb), ?, ?, ?, ?)",
+                loanId, customerId, kind, toJson(before), toJson(after), approverId, reasonCode, note,
+                Timestamp.from(at));
     }
 
     private String toJson(Map<String, Object> map) {

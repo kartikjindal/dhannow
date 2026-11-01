@@ -62,6 +62,8 @@ class ApplicationFlowIntegrationTest {
     private org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Autowired
     private com.navix.loan.repository.CustomerProfileRepository profileRepository;
+    @Autowired
+    private com.navix.loan.service.ComplaintService complaints;
 
     /** The onboarding completeness gate is exercised by unit tests; here it is PASS so the
      *  lifecycle test reaches KYC_PENDING without seeding every external verification. */
@@ -1303,6 +1305,211 @@ class ApplicationFlowIntegrationTest {
     void unauthenticatedRequestIsRejected() throws Exception {
         mvc.perform(get("/api/applications/{id}", 1).contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isUnauthorized());
+    }
+
+    // ---- PLAN Phase 7: complaints, disputes, roles ------------------------------------
+
+    private static final String SUPPORT_A = "30";
+    private static final String SUPPORT_B = "31";
+    private static final String COMPLIANCE = "32";
+
+    private JsonNode fileComplaint(long customerId, String key, String body) throws Exception {
+        return data(mvc.perform(post("/api/complaints").header("Authorization", bearer(String.valueOf(customerId), "BORROWER"))
+                        .header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk()).andReturn());
+    }
+
+    /**
+     * A borrower files a ticket (DN-GRV-xxxxx, SLA dates, the grievance officer from config), a replay with the same
+     * key returns it, another borrower cannot read it, COMPLIANCE reads the queue but cannot act, SUPPORT acknowledges,
+     * reviews and resolves it (a note is required), and the borrower reads the resolution. The SLA sweep flags a
+     * missed milestone once.
+     */
+    @Test
+    void complaint_fileAcknowledgeReviewResolveAndTheSlaSweep() throws Exception {
+        long loanId = loanIdOf(walkToActive(200L));
+        String body = "{\"category\":\"CHARGES\",\"body\":\"I was charged twice\",\"loanId\":" + loanId + "}";
+        JsonNode filed = fileComplaint(200L, "grv-200-a", body);
+        long id = filed.get("id").asLong();
+        assertThat(filed.get("ticketNo").asText()).matches("DN-GRV-\\d{5}");
+        assertThat(filed.get("status").asText()).isEqualTo("OPEN");
+        assertThat(filed.get("ackDueAt").asText()).isNotBlank();
+        assertThat(filed.has("grievanceOfficer")).isTrue();
+        assertThat(fileComplaint(200L, "grv-200-a", body).get("id").asLong()).isEqualTo(id);
+        expectCode(post("/api/complaints").header("Authorization", bearer("200", "BORROWER"))
+                .contentType(MediaType.APPLICATION_JSON).content(body), "IDEMPOTENCY_KEY_REQUIRED");
+        // Another customer: not their ticket, and not their loan.
+        expectCode(get("/api/complaints/{id}", id).header("Authorization", bearer("201", "BORROWER")), "FORBIDDEN_OWNER");
+        expectCode(post("/api/complaints").header("Authorization", bearer("201", "BORROWER")).header("Idempotency-Key", "k201")
+                .contentType(MediaType.APPLICATION_JSON).content(body), "FORBIDDEN_OWNER");
+        // A borrower cannot read the staff queue.
+        mvc.perform(get("/api/staff/complaints").header("Authorization", bearer("200", "BORROWER")))
+                .andExpect(status().isForbidden());
+
+        // COMPLIANCE reads, never writes (403 at the filter).
+        mvc.perform(get("/api/staff/complaints?status=OPEN").header("Authorization", bearer(COMPLIANCE, "COMPLIANCE")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data[?(@.id==" + id + ")].ticketNo").exists());
+        mvc.perform(post("/api/staff/complaints/{id}/acknowledge", id).header("Authorization", bearer(COMPLIANCE, "COMPLIANCE"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.error.code").value("READ_ONLY_ROLE"));
+        // A collections officer is not on the grievance desk.
+        expectCode(post("/api/staff/complaints/{id}/acknowledge", id).header("Authorization", bearer(HEAD_A, "COLLECTION_HEAD"))
+                .contentType(MediaType.APPLICATION_JSON).content("{}"), "FORBIDDEN_ROLE");
+
+        String s = bearer(SUPPORT_A, "SUPPORT");
+        assertThat(extensionCall(post("/api/staff/complaints/{id}/acknowledge", id), s, "{\"note\":\"Looking into it\"}")
+                .get("status").asText()).isEqualTo("ACKNOWLEDGED");
+        assertThat(extensionCall(post("/api/staff/complaints/{id}/status", id), s, "{\"status\":\"IN_REVIEW\"}")
+                .get("status").asText()).isEqualTo("IN_REVIEW");
+        expectCode(post("/api/staff/complaints/{id}/resolve", id).header("Authorization", s)
+                .contentType(MediaType.APPLICATION_JSON).content("{}"), "NOTE_REQUIRED");
+        mvc.perform(post("/api/staff/complaints/{id}/status", id).header("Authorization", s)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"OPEN\"}"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("STALE_STATE"));
+        assertThat(extensionCall(post("/api/staff/complaints/{id}/resolve", id), s,
+                "{\"note\":\"The second charge is refunded.\"}").get("status").asText()).isEqualTo("RESOLVED");
+        JsonNode mine = data(mvc.perform(get("/api/complaints/{id}", id).header("Authorization", bearer("200", "BORROWER")))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(mine.get("resolutionNote").asText()).isEqualTo("The second charge is refunded.");
+        JsonNode staffView = extensionCall(get("/api/staff/complaints/{id}", id), bearer(COMPLIANCE, "COMPLIANCE"), null);
+        assertThat(staffView.get("events")).extracting(e -> e.get("action").asText())
+                .containsExactly("FILED", "ACKNOWLEDGED", "IN_REVIEW", "RESOLVED");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update(
+                "update complaint_event set note = 'x' where complaint_id = ?", id)).hasMessageContaining("append-only");
+
+        // SLA: a second ticket whose acknowledgement deadline has passed is flagged once.
+        long late = fileComplaint(200L, "grv-200-b", "{\"category\":\"OTHER\",\"body\":\"No reply yet\"}").get("id").asLong();
+        jdbc.update("update complaint set ack_due_at = now() - interval '1 hour' where id = ?", late);
+        assertThat(complaints.flagBreaches()).isGreaterThanOrEqualTo(1);
+        assertThat(complaints.flagBreaches()).isZero();
+        mvc.perform(get("/api/staff/complaints?breached=true").header("Authorization", s))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data[?(@.id==" + late + ")].breached[0]").value("ACK"));
+    }
+
+    /**
+     * EXT-27 end to end: an approved extension offer is open on an overdue loan; the borrower files a LOAN_DISPUTE
+     * complaint on it → the loan is DISPUTED and the offer cancelled; no new offer can be made; the staff who
+     * raises a second dispute cannot release it (maker-checker); another SUPPORT member releases it and offers work
+     * again. Every hold change is a loan_hold_event row.
+     */
+    @Test
+    void dispute_aLoanDisputeComplaintHoldsTheLoanAndCancelsTheOpenOfferThenRelease() throws Exception {
+        long loanId = overdueLoan(202L, 3)[1];
+        JsonNode offered = extensionCall(post("/api/collections/loans/{id}/extensions", loanId),
+                bearer(HEAD_A, "COLLECTION_HEAD"), "{\"callNote\":\"Borrower asked for 14 days\"}");
+        String extId = offered.get("id").asText();
+        extensionCall(post("/api/collections/extensions/{id}/approve", extId), bearer(HEAD_B, "COLLECTION_HEAD"), null);
+
+        JsonNode ticket = fileComplaint(202L, "grv-202", "{\"category\":\"LOAN_DISPUTE\",\"body\":\"I already repaid this"
+                + " loan\",\"loanId\":" + loanId + "}");
+        assertThat(jdbc.queryForObject("select hold_status from loan where id = ?", String.class, loanId)).isEqualTo("DISPUTED");
+        assertThat(jdbc.queryForMap("select status, cancel_reason from loan_extension where id = ?::uuid", extId))
+                .containsEntry("status", "CANCELLED").containsEntry("cancel_reason", "DISPUTED");
+        assertThat(jdbc.queryForObject("select complaint_id from loan_hold_event where loan_id = ?", Long.class, loanId))
+                .isEqualTo(ticket.get("id").asLong());
+        expectCode(post("/api/collections/loans/{id}/extensions", loanId).header("Authorization", bearer(HEAD_A, "COLLECTION_HEAD"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"callNote\":\"again\"}"), "ON_HOLD");
+        mvc.perform(post("/api/loans/{id}/dispute", loanId).header("Authorization", bearer(SUPPORT_A, "SUPPORT"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"again\"}"))
+                .andExpect(status().isConflict());
+        expectCode(post("/api/loans/{id}/dispute/release", loanId).header("Authorization", bearer("202", "BORROWER"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"x\"}"), "FORBIDDEN_ROLE");
+
+        // The system raised this one, so any SUPPORT member may release it.
+        assertThat(extensionCall(post("/api/loans/{id}/dispute/release", loanId), bearer(SUPPORT_A, "SUPPORT"),
+                "{\"note\":\"Payment checked: not repaid\"}").get("holdStatus").asText()).isEqualTo("NONE");
+
+        // A staff-raised dispute: the raiser cannot lift it.
+        extensionCall(post("/api/loans/{id}/dispute", loanId), bearer(SUPPORT_A, "SUPPORT"), "{\"reason\":\"Borrower called\"}");
+        expectSod(post("/api/loans/{id}/dispute/release", loanId), SUPPORT_A, "SUPPORT", "{\"note\":\"done\"}");
+        extensionCall(post("/api/loans/{id}/dispute/release", loanId), bearer(SUPPORT_B, "SUPPORT"), "{\"note\":\"Resolved\"}");
+        assertThat(jdbc.queryForObject("select hold_status from loan where id = ?", String.class, loanId)).isEqualTo("NONE");
+        JsonNode holds = extensionCall(get("/api/loans/{id}/holds", loanId), bearer(COMPLIANCE, "COMPLIANCE"), null);
+        assertThat(holds).extracting(h -> h.get("toHold").asText()).containsExactly("DISPUTED", "NONE", "DISPUTED", "NONE");
+        // Offers work again.
+        extensionCall(post("/api/collections/loans/{id}/extensions", loanId), bearer(HEAD_A, "COLLECTION_HEAD"),
+                "{\"callNote\":\"After the dispute\"}");
+    }
+
+    /** CC-64: the acknowledgement deadline skips the holidays an ADMIN keeps in the calendar. */
+    @Test
+    void cc64_theSlaSkipsHolidaysFromTheAdminCalendar() throws Exception {
+        LocalDate today = LocalDate.now(IST);
+        String admin = bearer(ADMIN_A, "ADMIN");
+        expectCode(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/admin/holidays/{d}",
+                today.plusDays(1)).header("Authorization", bearer(SUPPORT_A, "SUPPORT"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"x\"}"), "FORBIDDEN_ROLE");
+        try {
+            for (int d = 1; d <= 12; d++) {
+                extensionCall(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(
+                        "/api/admin/holidays/{d}", today.plusDays(d)), admin, "{\"name\":\"Test holiday " + d + "\"}");
+            }
+            JsonNode filed = fileComplaint(208L, "grv-208", "{\"category\":\"OTHER\",\"body\":\"Holiday test\"}");
+            LocalDate ackDay = java.time.Instant.parse(filed.get("ackDueAt").asText()).atZone(IST).toLocalDate();
+            LocalDate resolveDay = java.time.Instant.parse(filed.get("resolveDueAt").asText()).atZone(IST).toLocalDate();
+            assertThat(ackDay).isAfter(today.plusDays(12));
+            assertThat(resolveDay).isEqualTo(today.plusDays(15)); // calendar days: holidays do not move it
+        } finally {
+            for (int d = 1; d <= 12; d++) {
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(
+                        "/api/admin/holidays/{d}", today.plusDays(d)).header("Authorization", admin));
+            }
+        }
+    }
+
+    /** CC-71: a borrower who says "I didn't ask" on an extension offer gets a complaint ticket. */
+    @Test
+    void cc71_didNotAskOnAnExtensionOpensAComplaint() throws Exception {
+        long loanId = overdueLoan(204L, 3)[1];
+        JsonNode offered = extensionCall(post("/api/collections/loans/{id}/extensions", loanId),
+                bearer(HEAD_A, "COLLECTION_HEAD"), "{\"callNote\":\"Call note\"}");
+        String extId = offered.get("id").asText();
+        JsonNode approved = extensionCall(post("/api/collections/extensions/{id}/approve", extId),
+                bearer(HEAD_B, "COLLECTION_HEAD"), null);
+        extensionCall(post("/api/loans/{l}/extensions/{e}/decline", loanId, extId), bearer("204", "BORROWER"),
+                "{\"reason\":\"DID_NOT_ASK\",\"version\":" + approved.get("version").asLong() + "}");
+        JsonNode mine = data(mvc.perform(get("/api/complaints").header("Authorization", bearer("204", "BORROWER")))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(mine).hasSize(1);
+        assertThat(mine.get(0).get("category").asText()).isEqualTo("EXTENSION_NOT_REQUESTED");
+        assertThat(mine.get(0).get("loanId").asLong()).isEqualTo(loanId);
+    }
+
+    /**
+     * Roles: SUPPORT never moves money or a due date (422 FORBIDDEN_ROLE), COMPLIANCE never writes (403), FINANCE may
+     * act on refunds. balance_adjustment takes only listed reason codes and is append-only (V106).
+     */
+    @Test
+    void roles_supportIsMoneyBlockedComplianceIsReadOnlyAndAdjustmentsAreAudited() throws Exception {
+        long loanId = loanIdOf(walkToActive(206L));
+        String support = bearer(SUPPORT_A, "SUPPORT");
+        expectCode(post("/api/loan/{id}/repayments/admin-record", loanId).header("Authorization", support)
+                .contentType(MediaType.APPLICATION_JSON).content(repayment(100000, "UTR206", LocalDate.now(IST))), "FORBIDDEN_ROLE");
+        expectCode(post("/api/loan/{id}/repayments/{p}/reverse", loanId, 1L).header("Authorization", support)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"x\"}"), "FORBIDDEN_ROLE");
+        expectCode(post("/api/refund-cases/{id}/cancel", 1L).header("Authorization", support)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"x\"}"), "FORBIDDEN_ROLE");
+        expectCode(post("/api/collections/loans/{id}/extensions", loanId).header("Authorization", support)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"callNote\":\"x\"}"), "FORBIDDEN_ROLE");
+        mvc.perform(post("/api/loan/{id}/repayments/admin-record", loanId).header("Authorization", bearer(COMPLIANCE, "COMPLIANCE"))
+                        .contentType(MediaType.APPLICATION_JSON).content(repayment(100000, "UTR206", LocalDate.now(IST))))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/refund-cases").header("Authorization", bearer(COMPLIANCE, "COMPLIANCE")))
+                .andExpect(status().isOk());
+
+        // FINANCE acts on a refund case, and the decision is a balance_adjustment row.
+        long paid = submit("/api/loan/{id}/repayments/admin-record", loanId, bearer(ADMIN_A, "ADMIN"), "k-206-1",
+                repayment(100500, "UTR-OVER-206", LocalDate.now(IST)));
+        verifyPayment(loanId, paid);
+        long caseId = jdbc.queryForObject("select id from refund_case where payment_id = ?", Long.class, paid);
+        extensionCall(post("/api/refund-cases/{id}/refunded", caseId), bearer("33", "FINANCE"), "{\"utr\":\"RFND206\"}");
+        assertThat(jdbc.queryForMap("select kind, reason_code, approver_id from balance_adjustment where loan_id = ?", loanId))
+                .containsEntry("kind", "REFUND").containsEntry("reason_code", "REFUND_PAID").containsEntry("approver_id", 33L);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update("insert into balance_adjustment (loan_id,"
+                + " customer_id, kind, before, after, reason_code) values (?, 206, 'REFUND', '{}', '{}', 'MADE_UP')", loanId))
+                .hasMessageContaining("balance_adjustment_reason_fk");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update(
+                "delete from balance_adjustment where loan_id = ?", loanId)).hasMessageContaining("append-only");
     }
 
     // ---- helpers -------------------------------------------------------------------

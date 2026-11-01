@@ -16,7 +16,7 @@ import org.springframework.web.client.RestClient;
 
 /**
  * Digitap Face Liveness v4 — {@code POST /fmfl/v4/face-liveness} (<b>svc</b> host, unlike Face Match
- * which lives on the api host). The PRIMARY check for DhanBoost's SELFIE step: one captured selfie in,
+ * which lives on the api host). The PRIMARY check for DhanNow's SELFIE step: one captured selfie in,
  * a synchronous passive-liveness verdict out. It does <b>not</b> compare the face to any document photo.
  *
  * <p>{@code input_image} takes a public URL or base64; we pass the presigned S3 URL (verified live

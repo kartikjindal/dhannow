@@ -31,7 +31,7 @@ class LeadOutreachServiceTest {
     @Mock private LeadOutreachRepository outreachRepository;
 
     private LeadOutreachService service() {
-        return new LeadOutreachService(smsGateway, mailPort, outreachRepository);
+        return new LeadOutreachService(smsGateway, mailPort, outreachRepository, new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"));
     }
 
     private static Lead lead(long id, String mobile, String email) {
@@ -89,13 +89,13 @@ class LeadOutreachServiceTest {
         assertThat(result.status()).isEqualTo("SENT");
         assertThat(l.getEmail()).isEqualTo("ravi@x.com");
         verify(mailPort).sendHtml(org.mockito.ArgumentMatchers.eq("ravi@x.com"),
-                org.mockito.ArgumentMatchers.eq("How DhanBoost works, in 3 simple steps"), anyString(),
-                org.mockito.ArgumentMatchers.argThat(h -> h.contains("Hi Ravi,") && h.contains("dhanboost-mark.png")));
+                org.mockito.ArgumentMatchers.eq("How DhanNow works, in 3 simple steps"), anyString(),
+                org.mockito.ArgumentMatchers.argThat(h -> h.contains("Hi Ravi,") && h.contains("www.dhannow.com/logo.jpeg")));
     }
 
     @Test
     void aLeadNameThatIsNotAPlainNameNeverReachesTheEmail() {
-        var email = DsaEmailTemplates.render("INTRO", "secure-dhanboost.co/login now");
+        var email = DsaEmailTemplates.render("INTRO", "secure-dhanboost.co/login now", new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"));
         assertThat(email.subject()).isEqualTo("Get a salary advance before payday");
         assertThat(email.html()).contains("Hi there,").doesNotContain("secure-dhanboost");
         assertThat(email.text()).doesNotContain("secure-dhanboost");

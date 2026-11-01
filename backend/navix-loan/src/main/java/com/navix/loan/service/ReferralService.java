@@ -68,6 +68,7 @@ public class ReferralService {
     private final ReferralProperties properties;
     private final FeatureFlagService featureFlags;
     private final ApplicationEventPublisher eventPublisher;
+    private final com.navix.common.brand.BrandProperties brand;
 
     /**
      * Whether the referral program is on. The dev-controlled {@code feature_flag} row ("referral") is the
@@ -125,7 +126,7 @@ public class ReferralService {
         }
         if (!loanRepository.findByCustomerId(customerId).isEmpty()) {
             throw new BusinessException("NOT_NEW_BORROWER",
-                    "Referral codes apply to your first DhanBoost loan only.");
+                    "Referral codes apply to your first loan only.");
         }
         Referral referral = new Referral();
         referral.setReferrerCustomerId(referrerId);
@@ -318,7 +319,7 @@ public class ReferralService {
     }
 
     private String shareMessage(String code) {
-        return "Use my DhanBoost referral code " + code + " when you sign up — you and I each get ₹"
+        return "Use my " + brand.name() + " referral code " + code + " when you sign up — you and I each get ₹"
                 + properties.rewardRupees() + " once your first loan is disbursed.";
     }
 

@@ -30,5 +30,13 @@ public enum StaffRole {
      * step), so — like TELECALLER — it never participates in maker-checker or SoD.
      */
     DSA,
-    ADMIN
+    ADMIN,
+    /** Field and legal recovery (PLAN Phase 7). No money rights of its own yet. */
+    RECOVERY,
+    /** The grievance desk: complaints and disputes. Never touches a balance or a due date. */
+    SUPPORT,
+    /** Refunds and payment reversals, alongside the Accountant. Needs MFA. */
+    FINANCE,
+    /** Read-only across the console; every write is refused at the security filter. */
+    COMPLIANCE
 }

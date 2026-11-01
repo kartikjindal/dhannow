@@ -54,6 +54,7 @@ public class LoanDirectoryAdapter implements LoanDirectory {
     private final RepaymentService repaymentService;
     private final LoanExtensionLedger extensionLedger;
     private final Clock clock;
+    private final PaymentAllocator allocator;
 
     @Override
     @Transactional(readOnly = true)
@@ -260,6 +261,16 @@ public class LoanDirectoryAdapter implements LoanDirectory {
     @Transactional
     public void recomputeOutstanding(Long loanId) {
         repaymentService.recomputeOutstanding(loanId);
+    }
+
+    @Override
+    @Transactional
+    public void recordAdjustment(Long loanId, String kind, Map<String, Object> before, Map<String, Object> after,
+                                 Long approverId, String reasonCode, String note) {
+        Loan loan = loanRepository.findById(loanId)
+                .orElseThrow(() -> new com.navix.common.exception.ResourceNotFoundException("Loan", String.valueOf(loanId)));
+        allocator.adjustment(loanId, loan.getCustomerId(), kind, before, after, approverId, reasonCode, note,
+                clock.instant());
     }
 
     @Override

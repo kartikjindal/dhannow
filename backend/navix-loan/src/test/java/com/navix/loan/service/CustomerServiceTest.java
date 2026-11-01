@@ -890,6 +890,24 @@ class CustomerServiceTest {
         verify(jdbc, org.mockito.Mockito.never()).update(anyString(), any(Object[].class));
     }
 
+    /** CLAUDE.md account deletion: blocked while a loan is open; loan and complaint records are retained. */
+    @Test
+    void deleteCustomerIsRefusedWhileALoanIsOpenAndWhenRecordsMustBeKept() {
+        ActorContext.set(new CurrentActor("10", "Admin", "ADMIN"));
+        lenient().when(jdbc.queryForObject(org.mockito.ArgumentMatchers.contains("lifecycle_status <> 'CLOSED'"),
+                org.mockito.ArgumentMatchers.eq(Long.class), any(Object.class))).thenReturn(1L);
+        assertThatThrownBy(() -> service.deleteCustomer(9000001L))
+                .isInstanceOf(BusinessException.class).hasFieldOrPropertyWithValue("code", "LOAN_OPEN");
+
+        lenient().when(jdbc.queryForObject(org.mockito.ArgumentMatchers.contains("lifecycle_status <> 'CLOSED'"),
+                org.mockito.ArgumentMatchers.eq(Long.class), any(Object.class))).thenReturn(0L);
+        lenient().when(jdbc.queryForObject(org.mockito.ArgumentMatchers.eq("select count(*) from complaint where customer_id = ?"),
+                org.mockito.ArgumentMatchers.eq(Long.class), any(Object.class))).thenReturn(1L);
+        assertThatThrownBy(() -> service.deleteCustomer(9000001L))
+                .isInstanceOf(BusinessException.class).hasFieldOrPropertyWithValue("code", "RECORDS_RETAINED");
+        verify(jdbc, org.mockito.Mockito.never()).update(anyString(), any(Object[].class));
+    }
+
     @Test
     void deleteCustomerCascadesForAdmin() {
         ActorContext.set(new CurrentActor("10", "Admin", "ADMIN"));

@@ -1,5 +1,5 @@
 /**
- * Role-based access control for DhanBoost staff users.
+ * Role-based access control for DhanNow staff users.
  *
  * StaffRole mirrors the backend (com.navix.iam) role enum exactly.
  *
@@ -18,6 +18,11 @@ export const STAFF_ROLES = [
   "TELECALLER",
   "DSA",
   "ADMIN",
+  // PLAN Phase 7 (backend V107). Console screens for these land in Phase 10; until then they only view customers.
+  "RECOVERY",
+  "SUPPORT",
+  "FINANCE",
+  "COMPLIANCE",
 ] as const;
 
 export type StaffRole = (typeof STAFF_ROLES)[number];
@@ -33,6 +38,10 @@ export const STAFF_ROLE_LABELS: Record<StaffRole, string> = {
   TELECALLER: "Telecaller",
   DSA: "DSA",
   ADMIN: "Administrator",
+  RECOVERY: "Recovery",
+  SUPPORT: "Support",
+  FINANCE: "Finance",
+  COMPLIANCE: "Compliance",
 };
 
 /**
@@ -194,6 +203,11 @@ const ROLE_PERMISSIONS: Record<StaffRole, Permission[]> = {
     "dsa:manage",
     "leads:import",
   ],
+  RECOVERY: ["customer:view"],
+  SUPPORT: ["customer:view"],
+  FINANCE: ["customer:view"],
+  // Read-only: the backend refuses every write from this role (403 READ_ONLY_ROLE).
+  COMPLIANCE: ["customer:view"],
 };
 
 /** Returns true when the role grants the given permission. */
@@ -278,6 +292,10 @@ export const ROLE_META: Record<StaffRole, { purpose: string }> = {
   TELECALLER: { purpose: "Call leads and log outcomes" },
   DSA: { purpose: "Your leads and earnings" },
   ADMIN: { purpose: "Staff, settings and company-wide oversight" },
+  RECOVERY: { purpose: "Recover overdue loans" },
+  SUPPORT: { purpose: "Complaints and disputes" },
+  FINANCE: { purpose: "Refunds and payment reversals" },
+  COMPLIANCE: { purpose: "Read-only review of the console" },
 };
 
 /** A maker-checker step in the loan lifecycle. */

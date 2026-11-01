@@ -691,8 +691,8 @@ public class RepaymentService {
     @Transactional
     public Payment reversePayment(Long paymentId, String reason) {
         var actor = ActorContext.get();
-        if (!"ACCOUNTANT".equals(actor.role()) && !"ADMIN".equals(actor.role())) {
-            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role ACCOUNTANT or ADMIN");
+        if (!java.util.Set.of("ACCOUNTANT", "FINANCE", "ADMIN").contains(actor.role())) {
+            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role ACCOUNTANT, FINANCE or ADMIN");
         }
         if (reason == null || reason.isBlank()) {
             throw new BusinessException("REASON_REQUIRED", "Say why the payment is reversed.");
@@ -750,7 +750,7 @@ public class RepaymentService {
         after.put("outstandingPaise", loan.getOutstanding());
         after.put("paymentId", paymentId);
         allocator.adjustment(loan.getId(), loan.getCustomerId(), "PAYMENT_REVERSAL", before, after, by,
-                reason.trim(), now);
+                "PAYMENT_REVERSED", reason.trim(), now);
         return payment;
     }
 

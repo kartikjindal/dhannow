@@ -178,6 +178,8 @@ public class ApplicationVerificationService {
 
     // ---- statuses ----
     public static final String PASS = "PASS";
+    /** Provider of the checks we run ourselves (address review, salary, agreement, consent, email OTP). */
+    public static final String INTERNAL_PROVIDER = "INTERNAL";
     public static final String FAIL = "FAIL";
     public static final String REVIEW = "REVIEW";
     public static final String PENDING = "PENDING";
@@ -649,7 +651,7 @@ public class ApplicationVerificationService {
         profileRepo.save(profile);
         Map<String, Object> derived = new LinkedHashMap<>();
         derived.put("manualAddress", manualAddress);
-        return view(upsert(appId, ADDRESS, REVIEW, "DhanBoost", null, ref(appId, ADDRESS),
+        return view(upsert(appId, ADDRESS, REVIEW, INTERNAL_PROVIDER, null, ref(appId, ADDRESS),
                 null, null, null, derived, "Manual address — pending review"));
     }
 
@@ -2139,7 +2141,7 @@ public class ApplicationVerificationService {
         Map<String, Object> derived = new LinkedHashMap<>();
         derived.put("monthlySalaryPaise", monthlySalaryPaise);
         derived.put("eligibleLimitPaise", eligible);
-        return view(upsert(appId, SALARY, PASS, "DhanBoost", null, ref(appId, SALARY),
+        return view(upsert(appId, SALARY, PASS, INTERNAL_PROVIDER, null, ref(appId, SALARY),
                 null, null, primaryKey, derived, "Declared salary recorded"));
     }
 
@@ -2724,7 +2726,7 @@ public class ApplicationVerificationService {
         profileRepo.save(profile);
         Map<String, Object> derived = new LinkedHashMap<>();
         derived.put("versions", versions != null ? versions : List.of());
-        return view(upsert(appId, AGREEMENT, PASS, "DhanBoost", null, ref(appId, AGREEMENT),
+        return view(upsert(appId, AGREEMENT, PASS, INTERNAL_PROVIDER, null, ref(appId, AGREEMENT),
                 null, null, null, derived, "Agreement accepted"));
     }
 
@@ -3033,7 +3035,7 @@ public class ApplicationVerificationService {
         Map<String, Object> derived = new LinkedHashMap<>();
         derived.put("consentText", consentText);
         derived.put("channel", "OTP");
-        return view(upsert(appId, BUREAU_CONSENT, PASS, "DhanBoost", null, ref(appId, BUREAU_CONSENT),
+        return view(upsert(appId, BUREAU_CONSENT, PASS, INTERNAL_PROVIDER, null, ref(appId, BUREAU_CONSENT),
                 null, null, null, derived, "Bureau consent given (OTP verified)"));
     }
 
@@ -3072,7 +3074,7 @@ public class ApplicationVerificationService {
         // Shown in full on the staff verification tab — staff already see every other identity field
         // (name, PAN, mobile) unmasked, so masking only this one was inconsistent, not protective.
         derived.put("email", email);
-        return view(upsert(appId, EMAIL_OTP, PASS, "DhanBoost", null, ref(appId, EMAIL_OTP),
+        return view(upsert(appId, EMAIL_OTP, PASS, INTERNAL_PROVIDER, null, ref(appId, EMAIL_OTP),
                 null, null, null, derived, "Personal email verified (OTP)"));
     }
 
@@ -3102,7 +3104,7 @@ public class ApplicationVerificationService {
             derived.put("channel", "OTP");
             derived.put("email", email);
             derived.put("delivered", false);
-            upsert(appId, OFFICIAL_EMAIL_OTP, REVIEW, "DhanBoost", null,
+            upsert(appId, OFFICIAL_EMAIL_OTP, REVIEW, INTERNAL_PROVIDER, null,
                     ref(appId, OFFICIAL_EMAIL_OTP), null, null, null, derived,
                     "Verification code could not be delivered to the work email");
         }
@@ -3125,7 +3127,7 @@ public class ApplicationVerificationService {
         Map<String, Object> derived = new LinkedHashMap<>();
         derived.put("channel", "OTP");
         derived.put("email", email);
-        return view(upsert(appId, OFFICIAL_EMAIL_OTP, PASS, "DhanBoost", null,
+        return view(upsert(appId, OFFICIAL_EMAIL_OTP, PASS, INTERNAL_PROVIDER, null,
                 ref(appId, OFFICIAL_EMAIL_OTP), null, null, null, derived,
                 "Official email verified (OTP)"));
     }

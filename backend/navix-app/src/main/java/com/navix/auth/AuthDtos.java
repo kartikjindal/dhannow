@@ -20,7 +20,22 @@ public final class AuthDtos {
      * validation's.
      */
     public record StaffLoginRequest(@NotBlank String email, @NotBlank String password, Boolean force,
-                                    String captchaToken) {
+                                    String captchaToken, String totpCode) {
+        public StaffLoginRequest(String email, String password, Boolean force, String captchaToken) {
+            this(email, password, force, captchaToken, null);
+        }
+    }
+
+    /**
+     * Staff MFA enrolment (PLAN Phase 7) happens before the first MFA sign-in, so it re-checks the password instead
+     * of a session. {@code code} is only read by confirm.
+     */
+    public record MfaEnrolRequest(@NotBlank String email, @NotBlank String password, String captchaToken,
+                                  String code) {
+    }
+
+    /** The secret to type or scan into an authenticator app, shown once. */
+    public record MfaEnrolResponse(String secret, String otpauthUri) {
     }
 
     /**

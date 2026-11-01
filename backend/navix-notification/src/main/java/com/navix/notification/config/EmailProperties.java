@@ -22,7 +22,7 @@ public record EmailProperties(String provider, Boolean enabled, String from, Str
             enabled = Boolean.TRUE;
         }
         if (from == null || from.isBlank()) {
-            from = "DhanBoost <no-reply@dhanboost.example>";
+            from = "no-reply@localhost";
         }
         if (configurationSet != null && configurationSet.isBlank()) {
             configurationSet = null;

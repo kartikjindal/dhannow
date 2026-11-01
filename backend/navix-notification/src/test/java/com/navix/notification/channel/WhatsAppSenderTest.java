@@ -24,7 +24,7 @@ class WhatsAppSenderTest {
 
     private final WhatsAppGateway gateway = mock(WhatsAppGateway.class);
     private final WhatsAppSender sender = new WhatsAppSender(gateway);
-    private final TemplateRenderer renderer = new TemplateRenderer(new NotificationTemplates());
+    private final TemplateRenderer renderer = new TemplateRenderer(new NotificationTemplates(), new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"), new com.navix.common.brand.GrievanceProperties("Dharmendra Rajput", "9211331170", "grievance@dhannow.com"));
     private final ContactInfo borrower =
             new ContactInfo(RecipientType.BORROWER, 7L, "Asha", null, "9812345678", "BORROWER");
 

@@ -7,18 +7,18 @@ import org.junit.jupiter.api.Test;
 /** The branded HTML wrapper: structure, brand, escaping, and paragraph handling. */
 class EmailHtmlRendererTest {
 
-    private final EmailHtmlRenderer renderer = new EmailHtmlRenderer();
+    private final EmailHtmlRenderer renderer = new EmailHtmlRenderer(new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"));
 
     @Test
     void rendersBrandedShellWithSubjectAndBody() {
         String html = renderer.render("Your loan is approved", "Hi Asha,\n\nGood news.");
 
         assertThat(html).startsWith("<!DOCTYPE html>");
-        assertThat(html).contains("DhanBoost");                         // wordmark
+        assertThat(html).contains("DhanNow");                         // wordmark
         assertThat(html).contains("#0C2540");                       // brand navy
         assertThat(html).contains("Your loan is approved");         // subject in <title>/<h1>
         assertThat(html).contains("Good news.");                    // body
-        assertThat(html).contains("DhanBoost");                 // footer
+        assertThat(html).contains("DhanNow");                 // footer
     }
 
     @Test

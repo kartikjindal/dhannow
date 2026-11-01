@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 /**
- * Signzy DigiLocker <b>v2</b> consent flow. Two calls DhanBoost uses:
+ * Signzy DigiLocker <b>v2</b> consent flow. Two calls DhanNow uses:
  * <ol>
  *   <li>{@code POST /api/v3/digilocker-v2/createUrl} → a DigiLocker OAuth consent {@code url} + a
  *       {@code requestId}. The caller passes a UNIQUE redirect/callback URL per attempt (carrying the

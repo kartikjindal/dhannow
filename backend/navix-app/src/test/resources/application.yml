@@ -11,6 +11,9 @@ navix:
   # Same for the 00:05 extension expiry sweep.
   extension:
     expiry-cron: "-"
+  # And the complaint SLA sweep.
+  complaints:
+    sla-cron: "-"
   esign:
     provider: mock
   # Digio mandates are real NPCI filings: never reach the provider from a test.

@@ -79,7 +79,7 @@ class NotificationDispatcherTest {
 
     @BeforeEach
     void setUp() {
-        TemplateRenderer renderer = new TemplateRenderer(new NotificationTemplates());
+        TemplateRenderer renderer = new TemplateRenderer(new NotificationTemplates(), new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"), new com.navix.common.brand.GrievanceProperties("Dharmendra Rajput", "9211331170", "grievance@dhannow.com"));
         lenient().when(borrowerPreferences.optedOutChannels(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Set.of());
         lenient().when(staffPreferences.optedOutChannels(org.mockito.ArgumentMatchers.any()))
@@ -243,7 +243,7 @@ class NotificationDispatcherTest {
 
         AtomicReference<RenderedMessage> captured = new AtomicReference<>();
         NotificationDispatcher localDispatcher = new NotificationDispatcher(
-                new TemplateRenderer(new NotificationTemplates()), audienceResolver, notificationRepo,
+                new TemplateRenderer(new NotificationTemplates(), new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"), new com.navix.common.brand.GrievanceProperties("Dharmendra Rajput", "9211331170", "grievance@dhannow.com")), audienceResolver, notificationRepo,
                 deliveryRepo, loanDirectory, borrowerPreferences, staffPreferences, borrowerContacts,
                 List.of(okSender(NotificationChannel.IN_APP), okSender(NotificationChannel.SMS),
                         capturingEmailSender(captured)));
@@ -267,7 +267,7 @@ class NotificationDispatcherTest {
 
         AtomicReference<RenderedMessage> captured = new AtomicReference<>();
         NotificationDispatcher localDispatcher = new NotificationDispatcher(
-                new TemplateRenderer(new NotificationTemplates()), audienceResolver, notificationRepo,
+                new TemplateRenderer(new NotificationTemplates(), new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"), new com.navix.common.brand.GrievanceProperties("Dharmendra Rajput", "9211331170", "grievance@dhannow.com")), audienceResolver, notificationRepo,
                 deliveryRepo, loanDirectory, borrowerPreferences, staffPreferences, borrowerContacts,
                 List.of(okSender(NotificationChannel.IN_APP), okSender(NotificationChannel.SMS),
                         capturingEmailSender(captured)));

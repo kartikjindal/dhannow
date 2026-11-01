@@ -82,7 +82,7 @@ public class DigitapCrifClient {
     /** Same split the Experian client uses — Digitap wants first/last separately. */
     private static String[] splitName(String name) {
         if (name == null || name.isBlank()) {
-            return new String[] {"DhanBoost", "."};
+            return new String[] {"Applicant", "."};
         }
         String trimmed = name.trim();
         int sp = trimmed.indexOf(' ');

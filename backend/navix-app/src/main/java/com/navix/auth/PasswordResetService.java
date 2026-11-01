@@ -54,6 +54,7 @@ public class PasswordResetService {
     private final EmailSuppressionService suppression;
     private final EmailProperties emailProperties;
     private final String frontendBaseUrl;
+    private final com.navix.common.brand.BrandProperties brand;
     private final SecureRandom random = new SecureRandom();
 
     public PasswordResetService(PasswordResetTokenRepository tokenRepository,
@@ -64,7 +65,9 @@ public class PasswordResetService {
                                 EmailClient emailClient,
                                 EmailSuppressionService suppression,
                                 EmailProperties emailProperties,
-                                @Value("${navix.app.frontend-base-url:http://localhost:3000}") String frontendBaseUrl) {
+                                @Value("${navix.app.frontend-base-url:http://localhost:3000}") String frontendBaseUrl,
+                                com.navix.common.brand.BrandProperties brand) {
+        this.brand = brand;
         this.tokenRepository = tokenRepository;
         this.credentialRepository = credentialRepository;
         this.staffRepository = staffRepository;
@@ -189,10 +192,11 @@ public class PasswordResetService {
         if ("log".equalsIgnoreCase(emailProperties.provider())) {
             log.info("DEV password-reset link for {}: {}", Masking.maskEmail(to), link);
         }
-        String body = "Hi,\n\nWe received a request to reset your DhanBoost password. Use the link below within "
+        String name = brand.name();
+        String body = "Hi,\n\nWe received a request to reset your " + name + " password. Use the link below within "
                 + "30 minutes to set a new one:\n\n" + link + "\n\nIf you didn't request this, you can safely "
-                + "ignore this email — your password won't change.\n\n— DhanBoost";
-        EmailResult result = emailClient.send(new EmailMessage(to, "Reset your DhanBoost password", body, null));
+                + "ignore this email — your password won't change.\n\n— " + name;
+        EmailResult result = emailClient.send(new EmailMessage(to, "Reset your " + name + " password", body, null));
         if (!result.ok()) {
             log.warn("password-reset email to {} failed: {}", Masking.maskEmail(to), result.error());
         }

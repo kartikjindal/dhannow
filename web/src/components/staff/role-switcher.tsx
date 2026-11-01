@@ -32,6 +32,10 @@ export const ROLE_ICON: Record<StaffRole, LucideIcon> = {
   TELECALLER: Headset,
   DSA: Briefcase,
   ADMIN: Shield,
+  RECOVERY: UsersRound,
+  SUPPORT: Headset,
+  FINANCE: Calculator,
+  COMPLIANCE: ShieldCheck,
 };
 
 const PILL = "inline-flex h-[38px] items-center gap-1.5 rounded-full border border-line bg-paper px-3.5 shadow-pill";

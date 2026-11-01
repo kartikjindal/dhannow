@@ -59,7 +59,7 @@ public class LoanController {
         // Every borrower's pending payment, with names and proof links — the same audience as the
         // ledger below. /api/loan is not behind the staff audience gate, so without this any token
         // (a borrower's included) read the whole queue.
-        requireRole("ACCOUNTANT", "ADMIN");
+        requireRole("ACCOUNTANT", "FINANCE", "COMPLIANCE", "ADMIN");
         // Reuse the staff-only ledger's loan → customer enrichment so the verifier can identify the
         // borrower before accepting a transfer, without rebuilding the whole ledger for a handful of
         // rows. Borrower repayment endpoints still use PaymentView.of(payment).
@@ -91,7 +91,7 @@ public class LoanController {
         // the roles the UI exposes it to (Accountant + Admin). Closes a leak where any authenticated
         // token (incl. a BORROWER JWT) could read every borrower's transactions. Optional from/to filter
         // a statement period server-side.
-        requireRole("ACCOUNTANT", "ADMIN");
+        requireRole("ACCOUNTANT", "FINANCE", "COMPLIANCE", "ADMIN");
         return ApiResponse.ok(transactionService.listTransactions(q, direction, from, to, page, size));
     }
 
@@ -113,7 +113,7 @@ public class LoanController {
             @RequestParam(required = false) String dir,
             @RequestParam java.util.Map<String, String> all) {
         // Same PII as /transactions (names + full PAN): Accountant + Admin only.
-        requireRole("ACCOUNTANT", "ADMIN");
+        requireRole("ACCOUNTANT", "FINANCE", "COMPLIANCE", "ADMIN");
         return ApiResponse.ok(transactionService.page(q, direction, from, to, page, size, sort, dir, all));
     }
 
@@ -129,7 +129,7 @@ public class LoanController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam java.util.Map<String, String> all) {
-        requireRole("ACCOUNTANT", "ADMIN");
+        requireRole("ACCOUNTANT", "FINANCE", "COMPLIANCE", "ADMIN");
         return ApiResponse.ok(transactionService.facets(q, direction, from, to, column, all));
     }
 

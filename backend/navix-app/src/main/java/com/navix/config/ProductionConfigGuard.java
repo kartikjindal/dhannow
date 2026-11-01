@@ -25,6 +25,7 @@ import org.springframework.stereotype.Component;
  *   <li>{@code navix.sms.dev-echo} — returns the OTP in the HTTP response, same class of bypass.</li>
  *   <li>{@code navix.esign.provider=mock} — reports every loan agreement as signed without anyone
  *       signing anything, so the file reaches disbursement on a signature that does not exist.</li>
+ *   <li>staff MFA switched off ({@code navix.mfa.enforce=false}) or no valid {@code navix.mfa.encryption-key};</li>
  *   <li>a blank or {@code [placeholder]} {@code navix.lender.*} value — every loan document names the
  *       lender of record, and a document naming no real lender must never reach a borrower.</li>
  * </ul>
@@ -49,6 +50,7 @@ public class ProductionConfigGuard {
     private final SmsProperties sms;
     private final FeatureFlagService featureFlags;
     private final LenderProperties lender;
+    private final MfaProperties mfa;
 
     @Value("${NAVIX_ENV:dev}")
     private String env;
@@ -91,6 +93,14 @@ public class ProductionConfigGuard {
             throw new IllegalStateException("NAVIX_ENV=prod with navix.esign.provider=mock — every loan "
                     + "agreement would be recorded as signed without a real Aadhaar e-signature. "
                     + "Unset NAVIX_ESIGN_PROVIDER.");
+        }
+        if (!mfa.enforce()) {
+            throw new IllegalStateException("NAVIX_ENV=prod with navix.mfa.enforce=false — ADMIN, FINANCE and the "
+                    + "Heads would sign in with a password alone. Unset NAVIX_STAFF_MFA_ENFORCE.");
+        }
+        if (mfa.keyBytes() == null) {
+            throw new IllegalStateException("NAVIX_ENV=prod without a valid navix.mfa.encryption-key — set "
+                    + "NAVIX_MFA_ENCRYPTION_KEY to base64 of 32 random bytes (openssl rand -base64 32).");
         }
         if (!lender.unset().isEmpty()) {
             throw new IllegalStateException("NAVIX_ENV=prod with the lender of record unset or a placeholder: "

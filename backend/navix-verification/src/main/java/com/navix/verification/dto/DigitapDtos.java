@@ -6,7 +6,7 @@ import com.navix.common.verification.BureauReportFacts;
 import java.util.List;
 
 /**
- * Request/response records for the Digitap verification APIs used by DhanBoost (the FALLBACK provider):
+ * Request/response records for the Digitap verification APIs used by DhanNow (the FALLBACK provider):
  * PAN Details Plus, Credit Analytics (Experian), Face Match, Email Verification, and Address
  * verification. Digitap's standard envelope is
  * {@code {http_response_code, result_code(101=ok), request_id, client_ref_num, result:{...}}};

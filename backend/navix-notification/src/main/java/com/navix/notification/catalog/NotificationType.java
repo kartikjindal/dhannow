@@ -28,7 +28,7 @@ import com.navix.common.notification.NotificationChannel;
 import java.util.Set;
 
 /**
- * The self-describing catalog of every notification DhanBoost can emit. Each constant carries its
+ * The self-describing catalog of every notification DhanNow can emit. Each constant carries its
  * {@link NotificationCategory}, the {@link NotificationChannel}s to attempt, and the
  * {@link RecipientPolicy} audience. The enum {@code name()} is the template key
  * ({@code NotificationTemplates}). Channels are address-gated per recipient at dispatch (IN_APP
@@ -150,6 +150,13 @@ public enum NotificationType {
     // The offer lapsed, or the borrower declined: the officer on the case is told.
     EXTENSION_EXPIRED(EXTENSION, Set.of(IN_APP), Set.of(TO_ASSIGNED_EXECUTIVE)),
     EXTENSION_DECLINED(EXTENSION, Set.of(IN_APP), Set.of(TO_ASSIGNED_EXECUTIVE)),
+
+    // ---- COMPLAINTS (PLAN Phase 7) ----
+    // The borrower's acknowledgement: ticket number, the reply-by date and the grievance officer (from config).
+    COMPLAINT_RECEIVED(SYSTEM, Set.of(IN_APP, EMAIL), Set.of(TO_BORROWER)),
+    COMPLAINT_RESOLVED(SYSTEM, Set.of(IN_APP, EMAIL), Set.of(TO_BORROWER)),
+    // An SLA milestone passed unmet: the assignee (if any) and the ADMINs.
+    COMPLAINT_SLA_BREACHED(SYSTEM, Set.of(IN_APP, EMAIL), Set.of(TO_STAFF_SUBJECT, TO_ADMINS)),
 
     // ---- SYSTEM ----
     APPLICATION_CANCELLED(SYSTEM, Set.of(IN_APP, WHATSAPP), Set.of(TO_BORROWER)),

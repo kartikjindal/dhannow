@@ -42,6 +42,7 @@ class AuthControllerTest {
     private static final long STAFF_TTL_SECONDS = 86400L;
 
     @Mock private StaffUserRepository staffRepository;
+    @Mock private StaffMfaService mfa;
     @Mock private BorrowerOtpService otpService;
     @Mock private CustomerProfileRepository profileRepository;
     @Mock private BorrowerCredentialRepository credentialRepository;
@@ -59,7 +60,7 @@ class AuthControllerTest {
         PasswordEncoder encoder = new BCryptPasswordEncoder();
         controller = new AuthController(staffRepository, jwt, encoder, otpService, profileRepository,
                 credentialRepository, passwordResetService, inviteService, mobileRepository,
-                new AttemptLimiter(), new CaptchaVerifier("", ""), staffSessionRegistry);
+                new AttemptLimiter(), new CaptchaVerifier("", ""), staffSessionRegistry, mfa);
         // @Value-injected field, so there is no constructor slot for it — set what Spring would.
         org.springframework.test.util.ReflectionTestUtils.setField(
                 controller, "staffTtlSeconds", STAFF_TTL_SECONDS);
@@ -100,6 +101,36 @@ class AuthControllerTest {
         assertThat(p.role()).isEqualTo("ADMIN");
         assertThat(p.audience()).isEqualTo(JwtService.AUDIENCE_STAFF);
         assertThat(p.sessionId()).isNotBlank(); // a fresh session id is minted on first login
+    }
+
+    /** PLAN Phase 7: the TOTP step runs after the password, and its failure keeps the attempt on the limiter. */
+    @Test
+    void staffLogin_mfaRequiredForTheRoleBlocksAPasswordOnlySignIn() {
+        when(staffRepository.findByEmail("meera.krishnan@navix.example")).thenReturn(Optional.of(admin()));
+        org.mockito.Mockito.doThrow(new BusinessException("MFA_REQUIRED", "Enter the code"))
+                .when(mfa).checkAtLogin(any(), org.mockito.ArgumentMatchers.eq("ADMIN"), org.mockito.ArgumentMatchers.isNull());
+
+        for (int i = 0; i < 3; i++) {
+            assertThatThrownBy(() -> controller.staffLogin(
+                    new StaffLoginRequest("meera.krishnan@navix.example", "Test@12345", null, null)))
+                    .isInstanceOf(BusinessException.class).hasFieldOrPropertyWithValue("code", "MFA_REQUIRED");
+        }
+        // Three tries without a code used up the three attempts: the code cannot be ground out with the password.
+        assertThatThrownBy(() -> controller.staffLogin(
+                new StaffLoginRequest("meera.krishnan@navix.example", "Test@12345", null, null, "123456")))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("Too many");
+        verify(staffRepository, never()).save(any());
+    }
+
+    @Test
+    void staffLogin_passesTheCodeToTheMfaCheck() {
+        when(staffRepository.findByEmail("meera.krishnan@navix.example")).thenReturn(Optional.of(admin()));
+
+        var resp = controller.staffLogin(
+                new StaffLoginRequest("meera.krishnan@navix.example", "Test@12345", null, null, "654321"));
+
+        assertThat(resp.isSuccess()).isTrue();
+        verify(mfa).checkAtLogin(any(), org.mockito.ArgumentMatchers.eq("ADMIN"), org.mockito.ArgumentMatchers.eq("654321"));
     }
 
     @Test

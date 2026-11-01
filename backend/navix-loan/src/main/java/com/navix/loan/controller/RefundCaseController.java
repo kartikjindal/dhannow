@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/** The refund register (CC-08): money owed back to borrowers. Accountant and Admin. */
+/** The refund register (CC-08): money owed back to borrowers. Accountant, Finance and Admin; Compliance reads. */
 @RestController
 @RequestMapping("/api/refund-cases")
 @RequiredArgsConstructor
@@ -33,8 +33,8 @@ public class RefundCaseController {
 
     @GetMapping
     public ApiResponse<List<RefundCaseView>> list(@RequestParam(required = false) String status) {
-        if (!Set.of("ACCOUNTANT", "ADMIN").contains(ActorContext.get().role())) {
-            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role ACCOUNTANT or ADMIN");
+        if (!Set.of("ACCOUNTANT", "FINANCE", "COMPLIANCE", "ADMIN").contains(ActorContext.get().role())) {
+            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role ACCOUNTANT, FINANCE or ADMIN");
         }
         return ApiResponse.ok(refunds.list(status));
     }
@@ -53,8 +53,8 @@ public class RefundCaseController {
     /** @return the acting staff id */
     private static Long requireFinance() {
         var actor = ActorContext.get();
-        if (!Set.of("ACCOUNTANT", "ADMIN").contains(actor.role())) {
-            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role ACCOUNTANT or ADMIN");
+        if (!Set.of("ACCOUNTANT", "FINANCE", "ADMIN").contains(actor.role())) {
+            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role ACCOUNTANT, FINANCE or ADMIN");
         }
         try {
             return Long.valueOf(actor.id());

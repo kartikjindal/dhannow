@@ -73,7 +73,7 @@ class ReferralServiceTest {
     private ReferralService serviceFlag(boolean propertyEnabled, boolean flagEnabled) {
         lenient().when(featureFlags.isEnabled(eq("referral"), anyBoolean())).thenReturn(flagEnabled);
         return new ReferralService(codeRepository, referralRepository, payoutRepository, loanRepository,
-                reviewService, new ReferralProperties(propertyEnabled, REWARD), featureFlags, eventPublisher);
+                reviewService, new ReferralProperties(propertyEnabled, REWARD), featureFlags, eventPublisher, new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"));
     }
 
     @AfterEach

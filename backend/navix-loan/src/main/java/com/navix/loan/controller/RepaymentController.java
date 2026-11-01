@@ -114,7 +114,7 @@ public class RepaymentController {
     @PostMapping("/{paymentId}/reverse")
     public ApiResponse<PaymentView> reverse(@PathVariable Long loanId, @PathVariable Long paymentId,
                                             @RequestBody ReverseRequest request) {
-        requireRole("ACCOUNTANT", "ADMIN");
+        requireRole("ACCOUNTANT", "FINANCE", "ADMIN");
         if (repaymentService.listPayments(loanId).stream().noneMatch(p -> p.getId().equals(paymentId))) {
             throw new com.navix.common.exception.ResourceNotFoundException("Payment", String.valueOf(paymentId));
         }

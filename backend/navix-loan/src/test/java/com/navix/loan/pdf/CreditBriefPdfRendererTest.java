@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 /** Smoke test: the renderer emits a valid (non-empty, %PDF-headed) document for a full + a sparse facts set. */
 class CreditBriefPdfRendererTest {
 
-    private final CreditBriefPdfRenderer renderer = new CreditBriefPdfRenderer();
+    private final CreditBriefPdfRenderer renderer = new CreditBriefPdfRenderer(new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"));
     private final CreditRatingCalculator calc = new CreditRatingCalculator();
 
     @Test

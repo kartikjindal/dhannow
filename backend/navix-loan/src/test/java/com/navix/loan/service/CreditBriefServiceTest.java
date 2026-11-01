@@ -46,7 +46,7 @@ class CreditBriefServiceTest {
     @Test
     void generatedDocumentContainsTheCompleteProviderResponseAppendix() throws Exception {
         CreditBriefService service = new CreditBriefService(
-                new CreditRatingCalculator(), new CreditBriefPdfRenderer(),
+                new CreditRatingCalculator(), new CreditBriefPdfRenderer(new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com")),
                 new CreditBriefPdfWriter(storage, documentRepo),
                 documentRepo, profileRepo, applicationRepo, verificationRepo, new ObjectMapper(),
                 bureauStateService);
@@ -89,7 +89,7 @@ class CreditBriefServiceTest {
     void staffViewReturnsTheCompleteStoredProviderResponseAsStructuredJson() throws Exception {
         ObjectMapper json = new ObjectMapper();
         CreditBriefService service = new CreditBriefService(
-                new CreditRatingCalculator(), new CreditBriefPdfRenderer(),
+                new CreditRatingCalculator(), new CreditBriefPdfRenderer(new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com")),
                 new CreditBriefPdfWriter(storage, documentRepo),
                 documentRepo, profileRepo, applicationRepo, verificationRepo, json,
                 bureauStateService);
@@ -142,7 +142,7 @@ class CreditBriefServiceTest {
     void viewOnAReadOnlyTransactionReturnsTheBriefWithoutWritingAnything() throws Exception {
         ObjectMapper json = new ObjectMapper();
         CreditBriefService service = new CreditBriefService(
-                new CreditRatingCalculator(), new CreditBriefPdfRenderer(),
+                new CreditRatingCalculator(), new CreditBriefPdfRenderer(new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com")),
                 new CreditBriefPdfWriter(storage, documentRepo),
                 documentRepo, profileRepo, applicationRepo, verificationRepo, json,
                 bureauStateService);
@@ -179,7 +179,7 @@ class CreditBriefServiceTest {
 
     private CreditBriefService serviceForClearing() {
         return new CreditBriefService(
-                new CreditRatingCalculator(), new CreditBriefPdfRenderer(),
+                new CreditRatingCalculator(), new CreditBriefPdfRenderer(new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com")),
                 new CreditBriefPdfWriter(storage, documentRepo),
                 documentRepo, profileRepo, applicationRepo, verificationRepo, new ObjectMapper(),
                 bureauStateService);
@@ -236,7 +236,7 @@ class CreditBriefServiceTest {
     @Test
     void aReportWithNoUsableScoreKeepsItsFactsButGetsNoRating() {
         CreditBriefService service = new CreditBriefService(
-                new CreditRatingCalculator(), new CreditBriefPdfRenderer(),
+                new CreditRatingCalculator(), new CreditBriefPdfRenderer(new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com")),
                 new CreditBriefPdfWriter(storage, documentRepo),
                 documentRepo, profileRepo, applicationRepo, verificationRepo, new ObjectMapper(),
                 bureauStateService);
@@ -260,7 +260,7 @@ class CreditBriefServiceTest {
     @Test
     void viewReturnsAnAvailableBriefForAReportWithNoScore() {
         CreditBriefService service = new CreditBriefService(
-                new CreditRatingCalculator(), new CreditBriefPdfRenderer(),
+                new CreditRatingCalculator(), new CreditBriefPdfRenderer(new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com")),
                 new CreditBriefPdfWriter(storage, documentRepo),
                 documentRepo, profileRepo, applicationRepo, verificationRepo, new ObjectMapper(),
                 bureauStateService);

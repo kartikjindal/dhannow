@@ -1,7 +1,10 @@
 package com.navix.notification.template;
 
+import com.navix.common.brand.BrandProperties;
+import com.navix.common.brand.GrievanceProperties;
 import com.navix.common.notification.NotificationChannel;
 import com.navix.notification.catalog.NotificationType;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -21,9 +24,25 @@ public class TemplateRenderer {
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{(\\w+)\\}");
 
     private final NotificationTemplates templates;
+    /** The brand and grievance tokens every template may use ({brand}, {brandWebsite}, {grievanceName}…). */
+    private final Map<String, Object> brandModel;
 
-    public TemplateRenderer(NotificationTemplates templates) {
+    public TemplateRenderer(NotificationTemplates templates, BrandProperties brand, GrievanceProperties grievance) {
         this.templates = templates;
+        this.brandModel = brandModel(brand, grievance);
+    }
+
+    /** One brand config (CLAUDE.md): the copy never names the brand itself. */
+    public static Map<String, Object> brandModel(BrandProperties brand, GrievanceProperties grievance) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("brand", brand.name());
+        m.put("brandWebsite", brand.website());
+        m.put("supportPhone", brand.supportPhone());
+        m.put("supportEmail", brand.supportEmail());
+        m.put("grievanceName", grievance.officerName());
+        m.put("grievancePhone", grievance.officerPhone());
+        m.put("grievanceEmail", grievance.officerEmail());
+        return java.util.Collections.unmodifiableMap(m);
     }
 
     /** Render the template for {@code type}+{@code channel}, or {@code null} if none is defined. */
@@ -32,6 +51,11 @@ public class TemplateRenderer {
         if (def == null) {
             return null;
         }
+        Map<String, Object> merged = new HashMap<>(brandModel);
+        if (model != null) {
+            merged.putAll(model);
+        }
+        model = merged;
         String subject = substitute(def.subject(), model);
         String body = substitute(def.body(), model);
         if (channel == NotificationChannel.SMS) {

@@ -13,7 +13,7 @@ import lombok.Setter;
 
 /**
  * Audit of every PAN a DSA tried to enter that was rejected at lead-creation time — because
- * another DSA already holds it, or it belongs to an existing DhanBoost customer (V55). Both cases
+ * another DSA already holds it, or it belongs to an existing DhanNow customer (V55). Both cases
  * surface the same generic {@code LEAD_ALREADY_KNOWN} error to the DSA, so this table is what makes
  * bulk PAN enumeration visible to ADMIN instead of silent; it also backs the daily lead-creation
  * rate limit alongside successful creates.

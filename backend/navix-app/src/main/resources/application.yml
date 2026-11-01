@@ -47,7 +47,7 @@ logging:
   level:
     com.navix: ${NAVIX_LOG_LEVEL:INFO}
 
-# DhanBoost integration settings
+# DhanNow integration settings
 navix:
   # Opt-in local fixture: when set, every Experian bureau pull returns this report instead of calling
   # Fintrix (the live sandbox is thin-file). An absolute path to a report JSON. Leave blank in real
@@ -96,7 +96,7 @@ navix:
     # Only honoured together with the year-of-birth and gender flags, which we send when DigiLocker gave
     # us those fields.
     name-match-threshold: ${NAVIX_ESIGN_NAME_MATCH_THRESHOLD:0.90}
-    # DhanBoost branding on eMudhra's signing pages.
+    # DhanNow branding on eMudhra's signing pages.
     logo-url: ${NAVIX_ESIGN_LOGO_URL:}
     header-colour: ${NAVIX_ESIGN_HEADER_COLOUR:#0C2540}
     button-colour: ${NAVIX_ESIGN_BUTTON_COLOUR:#E9B53A}
@@ -189,6 +189,18 @@ navix:
     ttl-seconds: ${AUTH_TTL_SECONDS:86400}
     borrower-ttl-seconds: ${BORROWER_AUTH_TTL_SECONDS:604800}
 
+  # Staff two-step sign-in (TOTP, PLAN Phase 7). Required for these roles while enforce is on; prod refuses to boot
+  # with enforce off or without a key. The key is base64 of 32 random bytes (openssl rand -base64 32), from SSM
+  # /dhannow/<env>/navix/mfa/encryption-key; never commit one. Local runs without a key: NAVIX_STAFF_MFA_ENFORCE=false.
+  mfa:
+    enforce: ${NAVIX_STAFF_MFA_ENFORCE:true}
+    encryption-key: ${NAVIX_MFA_ENCRYPTION_KEY:}
+    required-roles: ADMIN,FINANCE,CREDIT_HEAD,DISBURSEMENT_HEAD
+
+  # Complaint SLA sweep (PLAN Phase 7): flags missed acknowledgement / review / resolution deadlines.
+  complaints:
+    sla-cron: ${NAVIX_COMPLAINT_SLA_CRON:0 */15 * * * *}
+
   # Cloudflare Turnstile on the pre-auth forms (password logins + forgot-password).
   # UNSET = the check is skipped entirely (local dev, ./mvnw test, e2e, the demo seed script).
   captcha:
@@ -262,7 +274,7 @@ navix:
       REFERRAL_REWARD_CREDITED: ${NAVIX_SMS_DLT_REFERRAL_REWARD_CREDITED:1777178551284965972}
     # DLT-registered OTP message ({otp} = code, {ttl} = minutes). MUST match a template
     # registered for the sender or the gateway returns "Invalid template text".
-    otp-template: ${NAVIX_SMS_OTP_TEMPLATE:Your OTP for DhanBoost login is {otp}. It is valid for {ttl} minutes. Do not share this OTP with anyone. - DhanBoost}
+    otp-template: ${NAVIX_SMS_OTP_TEMPLATE:Your OTP for {brand} login is {otp}. It is valid for {ttl} minutes. Do not share this OTP with anyone. - {brand}}
     enabled: ${NAVIX_SMS_ENABLED:true}
     # DEV ONLY — returns the OTP in the request response when SMS can't reach a handset. MUST be false in prod.
     dev-echo: ${NAVIX_SMS_DEV_ECHO:false}
@@ -290,7 +302,7 @@ navix:
   email:
     provider: ${NAVIX_EMAIL_PROVIDER:log}      # log | smtp | ses | resend
     enabled: ${NAVIX_EMAIL_ENABLED:true}
-    from: ${NAVIX_EMAIL_FROM:DhanBoost <no-reply@dhanboost.example>}
+    from: ${NAVIX_EMAIL_FROM:${navix.brand.name} <no-reply@dhannow.com>}
     # SES only: tag sends with a SES configuration set so bounce/complaint events fire to SNS->SQS.
     configuration-set: ${NAVIX_SES_CONFIG_SET:}
     # Resend only: API key for the Resend HTTP provider (interim while SES is sandbox-blocked).

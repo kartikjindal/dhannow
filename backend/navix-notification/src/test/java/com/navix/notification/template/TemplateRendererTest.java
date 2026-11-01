@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 /** Placeholder substitution + the money/date format helpers the templates rely on. */
 class TemplateRendererTest {
 
-    private final TemplateRenderer renderer = new TemplateRenderer(new NotificationTemplates());
+    private final TemplateRenderer renderer = new TemplateRenderer(new NotificationTemplates(), new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"), new com.navix.common.brand.GrievanceProperties("Dharmendra Rajput", "9211331170", "grievance@dhannow.com"));
 
     @Test
     void substituteReplacesKnownPlaceholders() {
@@ -83,7 +83,7 @@ class TemplateRendererTest {
         RenderedMessage m = renderer.render(NotificationType.KYC_APPROVED, NotificationChannel.EMAIL,
                 Map.of("name", "Asha"));
         assertThat(m).isNotNull();
-        assertThat(m.subject()).isEqualTo("Your DhanBoost KYC is approved — instant loan up to ₹10,00,000");
+        assertThat(m.subject()).isEqualTo("Your DhanNow KYC is approved — instant loan up to ₹10,00,000");
         assertThat(m.body()).contains("Hi Asha,");
     }
 

@@ -105,6 +105,15 @@ public interface LoanDirectory {
      */
     void recomputeOutstanding(Long loanId);
 
+    /**
+     * PLAN Phase 7: record a money or schedule change made outside the loan module (a settlement) as a
+     * {@code balance_adjustment} row. {@code reasonCode} is a {@code balance_adjustment_reason} code.
+     */
+    default void recordAdjustment(Long loanId, String kind, java.util.Map<String, Object> before,
+                                  java.util.Map<String, Object> after, Long approverId, String reasonCode, String note) {
+        throw new UnsupportedOperationException("recordAdjustment");
+    }
+
     // ---- loan extension (PLAN Phase 6b) ----------------------------------------------------
 
     /**

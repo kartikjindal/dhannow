@@ -40,7 +40,7 @@ import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
- * Renders the one-page, DhanBoost-branded credit brief to PDF bytes (OpenPDF). Pure / stateless.
+ * Renders the one-page, brand-named credit brief to PDF bytes (OpenPDF). Pure / stateless.
  *
  * <p>Layout: wordmark + title header, customer line, the 1–5★ recommendation (drawn as vector
  * star polygons — no font-glyph dependency), credit score, the spec's three categories (A Identity /
@@ -49,6 +49,12 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class CreditBriefPdfRenderer {
+
+    private final com.navix.common.brand.BrandProperties brand;
+
+    public CreditBriefPdfRenderer(com.navix.common.brand.BrandProperties brand) {
+        this.brand = brand;
+    }
 
     private static final Color NAVY = new Color(10, 37, 64);
     private static final Color GOLD = new Color(212, 160, 23);
@@ -141,7 +147,7 @@ public class CreditBriefPdfRenderer {
             doc.add(footerSpacer());
             doc.add(rule());
             Paragraph footer = new Paragraph(
-                    "Confidential — DhanBoost internal underwriting brief.  Generated " + generatedOn
+                    "Confidential — " + brand.name() + " internal underwriting brief.  Generated " + generatedOn
                             + ".  Bureau data is provided as-is for credit decisioning.", FOOTER);
             footer.setAlignment(Element.ALIGN_CENTER);
             doc.add(footer);
@@ -767,7 +773,7 @@ public class CreditBriefPdfRenderer {
         // Wider on the landscape page than the portrait 2:1 split — the wordmark side otherwise leaves
         // a lot of dead space next to a right-aligned title on an 842pt-wide band.
         t.setWidths(new float[] {3f, 1f});
-        t.addCell(borderless(new Phrase("DhanBoost FINANCE", WORDMARK), Element.ALIGN_LEFT));
+        t.addCell(borderless(new Phrase(String.valueOf(brand.name()), WORDMARK), Element.ALIGN_LEFT));
         t.addCell(borderless(new Phrase("CREDIT BRIEF", TITLE), Element.ALIGN_RIGHT));
         return t;
     }

@@ -34,7 +34,17 @@ class ProductionConfigGuardTest {
 
     private static ProductionConfigGuard guard(String env, String secret, boolean mock, boolean devEcho,
                                                String esignProvider, LenderProperties lender) {
-        ProductionConfigGuard g = new ProductionConfigGuard(sms(mock, devEcho), flags(false), lender);
+        return guard(env, secret, mock, devEcho, esignProvider, lender, MFA);
+    }
+
+    /** A valid key (32 zero bytes, base64) with enforcement on: what prod must have. */
+    private static final MfaProperties MFA = new MfaProperties(true,
+            java.util.Base64.getEncoder().encodeToString(new byte[32]), java.util.List.of("ADMIN"));
+
+    private static ProductionConfigGuard guard(String env, String secret, boolean mock, boolean devEcho,
+                                               String esignProvider, LenderProperties lender,
+                                               MfaProperties mfa) {
+        ProductionConfigGuard g = new ProductionConfigGuard(sms(mock, devEcho), flags(false), lender, mfa);
         ReflectionTestUtils.setField(g, "env", env);
         ReflectionTestUtils.setField(g, "secret", secret);
         ReflectionTestUtils.setField(g, "esignProvider", esignProvider);
@@ -52,6 +62,21 @@ class ProductionConfigGuardTest {
     private static SmsProperties sms(boolean mock, boolean devEcho) {
         return new SmsProperties(null, null, null, null, null, null, null, null, null,
                 java.util.Map.of(), null, null, true, devEcho, 300, 6, mock, "123456");
+    }
+
+    @Test
+    void prod_refusesStaffMfaOffOrWithoutAValidKey() {
+        var off = new MfaProperties(false, MFA.encryptionKey(), MFA.requiredRoles());
+        assertThatThrownBy(() -> guard("prod", STRONG_SECRET, false, false, "signzy", LENDER, off).check())
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("navix.mfa.enforce");
+        for (String key : new String[] {null, "", "c2hvcnQ="}) {
+            var bad = new MfaProperties(true, key, MFA.requiredRoles());
+            assertThatThrownBy(() -> guard("prod", STRONG_SECRET, false, false, "signzy", LENDER, bad).check())
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("encryption-key");
+        }
+        var devOff = new MfaProperties(false, null, MFA.requiredRoles());
+        assertThatCode(() -> guard("dev", STRONG_SECRET, false, false, "signzy", LENDER, devOff).check())
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -97,7 +122,7 @@ class ProductionConfigGuardTest {
     }
 
     private static ProductionConfigGuard digioGuard(String env, boolean flagOn) {
-        ProductionConfigGuard g = new ProductionConfigGuard(sms(false, false), flags(flagOn), LENDER);
+        ProductionConfigGuard g = new ProductionConfigGuard(sms(false, false), flags(flagOn), LENDER, MFA);
         ReflectionTestUtils.setField(g, "env", env);
         ReflectionTestUtils.setField(g, "secret", STRONG_SECRET);
         ReflectionTestUtils.setField(g, "esignProvider", "signzy");

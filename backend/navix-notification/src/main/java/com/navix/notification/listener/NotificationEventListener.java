@@ -433,6 +433,43 @@ public class NotificationEventListener {
                 .build());
     }
 
+    // ---- complaints (PLAN Phase 7) ----
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onComplaintFiled(com.navix.common.notification.event.ComplaintFiledEvent e) {
+        dispatcher.dispatch(NotificationType.COMPLAINT_RECEIVED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .put("ticketNo", e.ticketNo())
+                .put("resolveBy", NotificationFormat.date(e.resolveDueAt().atZone(IST).toLocalDate()))
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onComplaintResolved(com.navix.common.notification.event.ComplaintResolvedEvent e) {
+        dispatcher.dispatch(NotificationType.COMPLAINT_RESOLVED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .put("ticketNo", e.ticketNo())
+                .put("resolution", e.resolutionNote())
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onComplaintSlaBreached(com.navix.common.notification.event.ComplaintSlaBreachedEvent e) {
+        dispatcher.dispatch(NotificationType.COMPLAINT_SLA_BREACHED, NotificationContext.builder()
+                .staffSubjectId(e.assignedTo())
+                .put("ticketNo", e.ticketNo())
+                .put("milestone", switch (e.milestone()) {
+                    case "ACK" -> "acknowledgement";
+                    case "REVIEW" -> "review";
+                    default -> "resolution";
+                })
+                .put("dueAt", NotificationFormat.date(e.dueAt().atZone(IST).toLocalDate()))
+                .build());
+    }
+
     /**
      * A borrower's bank cannot do an API eMandate — page the Disbursement Heads, who are the ones the
      * borrower's "our team will be in touch" promises.

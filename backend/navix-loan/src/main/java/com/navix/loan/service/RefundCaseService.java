@@ -59,6 +59,7 @@ public class RefundCaseService {
                 + " updated_at = now(), updated_by = ? where id = ? and status = 'OPEN'",
                 ref, refundedOn != null ? refundedOn : LocalDate.now(java.time.ZoneId.of("Asia/Kolkata")), by,
                 String.valueOf(by), id);
+        adjust(id, "REFUND_PAID", null, by);
         return get(id);
     }
 
@@ -70,7 +71,20 @@ public class RefundCaseService {
         }
         decide(id, "update refund_case set status = 'CANCELLED', cancel_reason = ?, decided_by = ?, updated_at = now(),"
                 + " updated_by = ? where id = ? and status = 'OPEN'", reason.trim(), by, String.valueOf(by), id);
+        adjust(id, "REFUND_CANCELLED", reason.trim(), by);
         return get(id);
+    }
+
+    /** PLAN Phase 7: every refund decision is a {@code balance_adjustment} row (money owed back, now settled). */
+    private void adjust(Long id, String reasonCode, String note, Long by) {
+        jdbc.update("""
+                insert into balance_adjustment (loan_id, customer_id, kind, before, after, approver_id, reason_code, note)
+                select loan_id, customer_id, 'REFUND',
+                       jsonb_build_object('refundCaseId', id, 'status', 'OPEN', 'amountPaise', amount_paise),
+                       jsonb_build_object('refundCaseId', id, 'status', status, 'refundUtr', refund_utr,
+                                          'refundedOn', refunded_on),
+                       ?, ?, ? from refund_case where id = ?
+                """, by, reasonCode, note, id);
     }
 
     private void decide(Long id, String sql, Object... args) {

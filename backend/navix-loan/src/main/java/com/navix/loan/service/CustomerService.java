@@ -1622,11 +1622,13 @@ public class CustomerService {
     }
 
     /**
-     * ADMIN — permanently delete a customer and ALL of their data. Because the schema has no FK
-     * constraints, this cascades by hand across every table keyed to the customer (their applications,
-     * loans, verifications, documents, events, payments, collections, credentials, preferences,
-     * referrals, notifications, reset tokens…), children before parents, in one transaction — so it
-     * either fully succeeds or rolls back, never leaving orphans. Irreversible.
+     * ADMIN — permanently delete a customer who never had a loan (a lead, a rejected or abandoned file) and all of
+     * their data, children before parents, in one transaction. Irreversible.
+     *
+     * <p>Account deletion (CLAUDE.md): refused while a loan is open ({@code LOAN_OPEN}), and refused for anyone with a
+     * loan or a complaint on file ({@code RECORDS_RETAINED}): loans, schedules, payments, adjustments and grievance
+     * records are regulatory records kept for the retention period (the schedule and audit tables refuse deletes).
+     * Retention-aware deletion and the purge job are Phase 9 (CC-45).
      */
     @Transactional
     public DeletionResult deleteCustomer(Long customerId) {
@@ -1634,22 +1636,31 @@ public class CustomerService {
         if (customerId == null) {
             throw new BusinessException("INVALID_CUSTOMER", "customerId is required");
         }
+        if (count("select count(*) from loan where customer_id = ? and lifecycle_status <> 'CLOSED'", customerId) > 0) {
+            throw new BusinessException("LOAN_OPEN", "This customer has a loan open; it must close first.");
+        }
+        if (count("select count(*) from loan where customer_id = ?", customerId)
+                + count("select count(*) from complaint where customer_id = ?", customerId) > 0) {
+            throw new BusinessException("RECORDS_RETAINED",
+                    "This customer has loan or complaint records, which are kept for the retention period.");
+        }
         int total = 0;
-        // --- collections (uuid-keyed) → payments, all hung off this customer's loans ---
-        total += jdbc.update("DELETE FROM settlement WHERE collection_case_id IN "
-                + "(SELECT id FROM collection_case WHERE loan_id IN (SELECT id FROM loan WHERE customer_id = ?))", customerId);
-        total += jdbc.update("DELETE FROM collection_case WHERE loan_id IN (SELECT id FROM loan WHERE customer_id = ?)", customerId);
-        total += jdbc.update("DELETE FROM payment WHERE loan_id IN (SELECT id FROM loan WHERE customer_id = ?)", customerId);
+        // --- documents issued on an offer that never became a loan (V100), access log first ---
+        total += jdbc.update("DELETE FROM loan_document_access WHERE loan_document_id IN (SELECT id FROM loan_document"
+                + " WHERE application_id IN (SELECT id FROM loan_application WHERE customer_id = ?))", customerId);
+        total += jdbc.update("DELETE FROM loan_document WHERE application_id IN (SELECT id FROM loan_application"
+                + " WHERE customer_id = ?)", customerId);
         // --- application children (by the customer's application ids) ---
         total += jdbc.update("DELETE FROM application_document WHERE application_id IN (SELECT id FROM loan_application WHERE customer_id = ?)", customerId);
         total += jdbc.update("DELETE FROM application_verification WHERE application_id IN (SELECT id FROM loan_application WHERE customer_id = ?)", customerId);
         total += jdbc.update("DELETE FROM application_event WHERE application_id IN (SELECT id FROM loan_application WHERE customer_id = ?)", customerId);
         total += jdbc.update("DELETE FROM customer_profile WHERE application_id IN (SELECT id FROM loan_application WHERE customer_id = ?)", customerId);
-        // --- the loan + application aggregates ---
-        int loans = jdbc.update("DELETE FROM loan WHERE customer_id = ?", customerId);
+        // --- the application aggregate (no loan exists, checked above) ---
         int apps = jdbc.update("DELETE FROM loan_application WHERE customer_id = ?", customerId);
-        total += loans + apps;
+        total += apps;
         // --- customer-keyed satellites ---
+        total += jdbc.update("DELETE FROM credit_level_history WHERE customer_id = ?", customerId);
+        total += jdbc.update("DELETE FROM credit_level WHERE customer_id = ?", customerId);
         total += jdbc.update("DELETE FROM profile_change_log WHERE customer_id = ?", customerId);
         total += jdbc.update("DELETE FROM customer_remark WHERE customer_id = ?", customerId);
         total += jdbc.update("DELETE FROM customer_call_log WHERE customer_id = ?", customerId);
@@ -1673,7 +1684,12 @@ public class CustomerService {
         if (total == 0) {
             throw new ResourceNotFoundException("Customer", "customer:" + customerId);
         }
-        return new DeletionResult(customerId, apps, loans, total);
+        return new DeletionResult(customerId, apps, 0, total);
+    }
+
+    private long count(String sql, Long customerId) {
+        Long n = jdbc.queryForObject(sql, Long.class, customerId);
+        return n == null ? 0 : n;
     }
 
     /**

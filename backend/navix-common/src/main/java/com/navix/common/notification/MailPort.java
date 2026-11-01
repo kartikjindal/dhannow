@@ -12,7 +12,7 @@ package com.navix.common.notification;
 public interface MailPort {
 
     /**
-     * Send a branded email with {@code textBody} wrapped in the standard DhanBoost HTML shell.
+     * Send a branded email with {@code textBody} wrapped in the standard DhanNow HTML shell.
      *
      * @return {@code true} if the send succeeded (or the provider is the no-op {@code log} client
      *         in a state that counts as success), {@code false} on a real delivery failure

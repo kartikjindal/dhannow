@@ -52,7 +52,7 @@ class PasswordResetServiceTest {
         EmailProperties emailProperties = new EmailProperties("log", true, null, null, null);
         service = new PasswordResetService(tokenRepository, credentialRepository, staffRepository,
                 profileRepository, passwordEncoder, emailClient, suppression, emailProperties,
-                "http://localhost:3000");
+                "http://localhost:3000", new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"));
     }
 
     private static StaffUser staff(long id, String email, StaffStatus status) {

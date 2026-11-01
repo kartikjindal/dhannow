@@ -55,7 +55,7 @@ public class DebitService {
     private static final Set<String> LIVE_LOAN = Set.of("ACTIVE", "OVERDUE", "IN_COLLECTIONS");
     private static final Pattern NARRATION = Pattern.compile("^[0-9A-Za-z& .]{1,20}$");
     private static final Pattern UNIQUE_KEY = Pattern.compile("^[A-Za-z0-9_-]{1,30}$");
-    static final String NARRATION_TEXT = "DhanBoost repayment";
+    static final String NARRATION_TEXT = "Loan repayment";
     /** Keeps the loan-keyed advisory lock out of the customer-keyed one MandateService takes. */
     static final long LOCK_NAMESPACE = 1L << 40;
     /** A row with no provider ids is closed locally only once its last write is older than any create call. */
