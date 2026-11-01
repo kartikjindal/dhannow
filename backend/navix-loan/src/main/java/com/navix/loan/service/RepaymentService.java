@@ -8,9 +8,11 @@ import com.navix.common.exception.ResourceNotFoundException;
 import com.navix.common.notification.event.RepaymentRecordedEvent;
 import com.navix.common.notification.event.RepaymentRejectedEvent;
 import com.navix.common.notification.event.RepaymentVerifiedEvent;
+import com.navix.loan.domain.LoanLifecycle;
 import com.navix.loan.domain.LoanStatus;
 import com.navix.loan.domain.PaymentMethod;
 import com.navix.loan.domain.PaymentStatus;
+import com.navix.loan.domain.RepaymentStatus;
 import com.navix.loan.entity.Loan;
 import com.navix.loan.entity.Payment;
 import com.navix.loan.repository.LoanRepository;
@@ -107,6 +109,8 @@ public class RepaymentService {
         payment.setPaidOn(effectivePaidOn);
         payment.setPartial(amountPaise < remaining);
         Payment saved = paymentRepository.save(payment);
+        // The loan is managed in this transaction, so the change is flushed with it.
+        loan.setRepaymentStatus(RepaymentStatus.PAID_PENDING_VERIFICATION);
         eventPublisher.publishEvent(new RepaymentRecordedEvent(
                 loanId, loan.getCustomerId(), saved.getId(), amountPaise, Instant.now()));
         return saved;
@@ -217,6 +221,8 @@ public class RepaymentService {
             paymentRepository.save(payment);
         }
         Loan loan = requireLoan(payment.getLoanId());
+        // No balance change, only where repayment stands; the managed loan is flushed with the payment.
+        refreshRepaymentStatus(loan);
         eventPublisher.publishEvent(new RepaymentRejectedEvent(
                 loan.getId(), loan.getCustomerId(), payment.getId(), payment.getAmount(),
                 reason, note, Instant.now()));
@@ -441,12 +447,15 @@ public class RepaymentService {
 
         if (owedAtPayment > 0L) {
             loan.setOutstanding(outstandingAsOf(loanId, LocalDate.now(IST)));
+            refreshRepaymentStatus(loan);
             loanRepository.save(loan);
             return;
         }
         boolean newlyClosed = loan.getStatus() != LoanStatus.CLOSED;
         loan.setOutstanding(0L);
-        loan.setStatus(LoanStatus.CLOSED);
+        // Any open state → CLOSED once a verified reconciliation leaves nothing owed (PLAN Phase 3).
+        loan.moveTo(LoanLifecycle.CLOSED);
+        refreshRepaymentStatus(loan);
         // Freeze the balance as of the day it actually closed — the same date the closure was judged
         // on — so outstandingBreakdownAsOf never keeps accruing penalty past it for a closed loan.
         loan.setClosedOn(settledOn);
@@ -480,6 +489,24 @@ public class RepaymentService {
     @Transactional(readOnly = true)
     public long settlementBalance(Long loanId) {
         return outstandingAsOf(loanId, latestVerifiedPaidOn(loanId).orElse(LocalDate.now(IST)));
+    }
+
+    /**
+     * {@code repayment_status} from the payments on file: PAID once closed, else a payment awaiting
+     * the accountant, else part-paid (a verified payment), else unpaid (CC-09, CC-11).
+     */
+    private void refreshRepaymentStatus(Loan loan) {
+        if (loan.getLifecycleStatus() == LoanLifecycle.CLOSED) {
+            loan.setRepaymentStatus(RepaymentStatus.PAID);
+            return;
+        }
+        List<Payment> payments = paymentRepository.findByLoanId(loan.getId());
+        loan.setRepaymentStatus(
+                payments.stream().anyMatch(p -> p.getStatus() == PaymentStatus.PENDING_VERIFICATION)
+                        ? RepaymentStatus.PAID_PENDING_VERIFICATION
+                        : payments.stream().anyMatch(p -> p.getStatus() == PaymentStatus.VERIFIED)
+                                ? RepaymentStatus.PARTIAL
+                                : RepaymentStatus.UNPAID);
     }
 
     /** The date the borrower last actually paid, over VERIFIED payments only. */

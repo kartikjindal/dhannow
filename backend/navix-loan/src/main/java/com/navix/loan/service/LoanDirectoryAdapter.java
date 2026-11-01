@@ -3,6 +3,8 @@ package com.navix.loan.service;
 import com.navix.common.loan.LoanDirectory;
 import com.navix.common.loan.LoanDues;
 import com.navix.common.loan.LoanSummary;
+import com.navix.loan.domain.LoanHold;
+import com.navix.loan.domain.LoanLifecycle;
 import com.navix.loan.domain.LoanStatus;
 import com.navix.loan.domain.PaymentMethod;
 import com.navix.loan.entity.CustomerProfile;
@@ -15,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.LocalDate;
 import java.util.Collection;
 import java.util.HashMap;
@@ -49,6 +52,7 @@ public class LoanDirectoryAdapter implements LoanDirectory {
     private final LoanApplicationRepository applicationRepository;
     private final CustomerProfileRepository profileRepository;
     private final RepaymentService repaymentService;
+    private final Clock clock;
 
     @Override
     @Transactional(readOnly = true)
@@ -156,8 +160,12 @@ public class LoanDirectoryAdapter implements LoanDirectory {
         // Batched for the same reason listUpcoming is: this now reaches a week past today, so it is
         // no longer the short overdue tail that made per-row resolution acceptable, and it backs a
         // polled register.
+        // A DISPUTED loan is off the worklist (no collections calls) and so off the NACH sweep, which
+        // presents from this list, until the dispute is resolved (PLAN Phase 3).
         return enrich(loanRepository
-                .findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc(COLLECTIBLE, horizon),
+                .findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc(COLLECTIBLE, horizon).stream()
+                .filter(l -> l.getHoldStatus() != LoanHold.DISPUTED)
+                .toList(),
                 effectiveAsOf);
     }
 
@@ -216,9 +224,11 @@ public class LoanDirectoryAdapter implements LoanDirectory {
             // running to term is a courtesy call, not a delinquency: flipping the status would show
             // an on-time borrower as in-collections in every segment, queue and dashboard count.
             // Called unconditionally by the daily reminder sweep, so the flip lands the day it is due.
-            boolean pastDue = loan.getDueDate() != null && LocalDate.now(IST).isAfter(loan.getDueDate());
-            if (pastDue && (loan.getStatus() == LoanStatus.ACTIVE || loan.getStatus() == LoanStatus.OVERDUE)) {
-                loan.setStatus(LoanStatus.IN_COLLECTIONS);
+            // DhanNow: IN_COLLECTIONS is the navix twin of OVERDUE_REVIEW, so this is the one way into
+            // that state, for an officer's case and for the lifecycle job at overdue_review_dpd.
+            boolean pastDue = loan.getDueDate() != null && LocalDate.now(clock).isAfter(loan.getDueDate());
+            if (pastDue && (loan.getStatus() == LoanStatus.ACTIVE || loan.getStatus() == LoanStatus.OVERDUE)
+                    && loan.advanceTo(LoanLifecycle.OVERDUE_REVIEW)) {
                 loanRepository.save(loan);
             }
         });

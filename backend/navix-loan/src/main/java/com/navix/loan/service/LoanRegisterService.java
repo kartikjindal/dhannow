@@ -355,7 +355,10 @@ public class LoanRegisterService {
                     officerId,
                     officerName,
                     loan.getDisbursalTxnRef(),
-                    trustByCustomer.get(loan.getCustomerId())));
+                    trustByCustomer.get(loan.getCustomerId()),
+                    loan.getLifecycleStatus().name(),
+                    loan.getHoldStatus().name(),
+                    loan.getRepaymentStatus().name()));
         }
         return rows;
     }

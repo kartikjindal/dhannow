@@ -34,7 +34,7 @@ import org.springframework.stereotype.Component;
  * mirrors {@link DpdCalculator}; keep the two in step.
  *
  * <p>The set of loans mirrors {@code LoanDirectoryAdapter.listCollectible}: ACTIVE / OVERDUE /
- * IN_COLLECTIONS, due on or before {@code asOf + PRE_DUE_WINDOW_DAYS}.
+ * IN_COLLECTIONS, due on or before {@code asOf + PRE_DUE_WINDOW_DAYS}, not on a DISPUTED hold (no calls).
  */
 @Component
 public class CollectionsWorklistQuery {
@@ -77,7 +77,7 @@ public class CollectionsWorklistQuery {
                 left join (select distinct on (c.loan_id) c.loan_id, c.assigned_officer_id
                            from collection_case c order by c.loan_id, c.created_at, c.id) cc on cc.loan_id = l.id
                 left join staff_user su on su.id = cc.assigned_officer_id
-                where l.status in ('ACTIVE', 'OVERDUE', 'IN_COLLECTIONS')
+                where l.status in ('ACTIVE', 'OVERDUE', 'IN_COLLECTIONS') and l.hold_status <> 'DISPUTED'
                   and l.due_date <= cast(:horizon as date)
             )
             """;

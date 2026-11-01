@@ -57,6 +57,7 @@ final class TestPricing {
         row.setTimezone(seed.zone().getId());
         row.setOneLiveLoan(true);
         row.setLateBlocksUpgradeDays(1);
+        row.setOverdueReviewDpd(seed.overdueReviewDpd());
         row.setStatus(status);
         return row;
     }

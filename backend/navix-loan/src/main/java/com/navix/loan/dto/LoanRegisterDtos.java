@@ -75,6 +75,10 @@ public final class LoanRegisterDtos {
             Long assignedOfficerId,
             String assignedOfficerName,
             String disbursalTxnRef,
-            com.navix.common.loan.TrustSignals trust) {
+            com.navix.common.loan.TrustSignals trust,
+            /** DhanNow (V97), additive: the persisted lifecycle, hold and repayment state. */
+            String lifecycleStatus,
+            String holdStatus,
+            String repaymentStatus) {
     }
 }

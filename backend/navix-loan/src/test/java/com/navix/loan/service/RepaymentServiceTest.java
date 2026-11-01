@@ -381,6 +381,9 @@ class RepaymentServiceTest {
         dhanNow.verifyPayment(99L);
 
         assertThat(loan.getStatus()).isEqualTo(LoanStatus.CLOSED);
+        // PLAN Phase 3: closure moves the lifecycle too, and the ladder hook ran once (verified below).
+        assertThat(loan.getLifecycleStatus()).isEqualTo(com.navix.loan.domain.LoanLifecycle.CLOSED);
+        assertThat(loan.getRepaymentStatus()).isEqualTo(com.navix.loan.domain.RepaymentStatus.PAID);
         assertThat(l1.getLevel()).isEqualTo((short) 2);
         assertThat(l1.getMaxPaise()).isEqualTo(200_000L);
         org.mockito.ArgumentCaptor<com.navix.loan.entity.CreditLevelHistory> row =
@@ -389,6 +392,39 @@ class RepaymentServiceTest {
         assertThat(row.getValue().getReason()).isEqualTo(com.navix.loan.domain.CreditLevelReason.ON_TIME_REPAID);
     }
 
+
+    /**
+     * CC-09: a part payment keeps the loan open as PARTIAL; a payment awaiting the accountant reads
+     * PAID_PENDING_VERIFICATION, and rejecting it puts the loan back where the verified payments say.
+     */
+    @Test
+    void cc09_partPaymentLeavesTheLoanOpenAndPartial() {
+        RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, dhanNowPricing(),
+                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage, creditLevels);
+        Loan loan = dhanNowLoan(today());
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        Payment pending = dhanNow.recordPayment(1L, 40_000L, PaymentMethod.UPI, "UTR-CC09", "proof", today());
+        assertThat(loan.getRepaymentStatus()).isEqualTo(com.navix.loan.domain.RepaymentStatus.PAID_PENDING_VERIFICATION);
+
+        when(paymentRepository.findById(98L)).thenReturn(Optional.of(pending));
+        when(paymentRepository.findByLoanId(1L)).thenReturn(List.of(pending));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(40_000L);
+        dhanNow.verifyPayment(98L);
+
+        assertThat(loan.getLifecycleStatus()).isEqualTo(com.navix.loan.domain.LoanLifecycle.ACTIVE);
+        assertThat(loan.getRepaymentStatus()).isEqualTo(com.navix.loan.domain.RepaymentStatus.PARTIAL);
+        verify(creditLevels, never()).onLoanClosed(any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
+
+        Payment second = new Payment();
+        second.setLoanId(1L);
+        second.setStatus(PaymentStatus.PENDING_VERIFICATION);
+        second.setAmount(10_000L);
+        when(paymentRepository.findById(99L)).thenReturn(Optional.of(second));
+        dhanNow.rejectPayment(99L, "NOT_RECEIVED", null);
+        assertThat(loan.getRepaymentStatus()).isEqualTo(com.navix.loan.domain.RepaymentStatus.PARTIAL);
+    }
     /** The V92/V93 seed rows behind ids 1. */
     private static PricingService dhanNowPricing() {
         PricingConfigRepository pricingRepo = org.mockito.Mockito.mock(PricingConfigRepository.class);

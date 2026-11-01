@@ -54,7 +54,7 @@ class LoanDirectoryAdapterTest {
     @BeforeEach
     void setUp() {
         adapter = new LoanDirectoryAdapter(loanRepository, applicationRepository, profileRepository,
-                repaymentService);
+                repaymentService, java.time.Clock.system(IST));
     }
 
     private Loan loan(long id, LoanStatus status) {
@@ -169,6 +169,8 @@ class LoanDirectoryAdapterTest {
         adapter.markInCollections(2L);
 
         assertThat(loan.getStatus()).isEqualTo(LoanStatus.IN_COLLECTIONS);
+        // DhanNow: IN_COLLECTIONS is OVERDUE_REVIEW, reached through every timed state.
+        assertThat(loan.getLifecycleStatus()).isEqualTo(com.navix.loan.domain.LoanLifecycle.OVERDUE_REVIEW);
         verify(loanRepository).save(loan);
     }
 
@@ -198,6 +200,19 @@ class LoanDirectoryAdapterTest {
 
         assertThat(loan.getStatus()).isEqualTo(LoanStatus.CLOSED);
         verify(loanRepository, never()).save(any());
+    }
+
+    /** PLAN Phase 3: a DISPUTED loan is off the collections worklist (calls paused) and the NACH sweep. */
+    @Test
+    void listCollectibleLeavesOutADisputedLoan() {
+        Loan disputed = loan(3L, LoanStatus.ACTIVE);
+        disputed.setHoldStatus(com.navix.loan.domain.LoanHold.DISPUTED);
+        when(loanRepository.findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc(any(), any()))
+                .thenReturn(List.of(loan(2L, LoanStatus.ACTIVE), disputed));
+        when(applicationRepository.findByLoanIdIn(List.of(2L))).thenReturn(List.of());
+        when(repaymentService.outstandingForAll(any(), any())).thenReturn(java.util.Map.of(2L, 999L));
+
+        assertThat(adapter.listCollectible(today())).extracting(LoanSummary::loanId).containsExactly(2L);
     }
 
     @Test

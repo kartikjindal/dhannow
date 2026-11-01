@@ -1,7 +1,11 @@
 package com.navix.loan.entity;
 
 import com.navix.common.entity.BaseAuditEntity;
+import com.navix.common.exception.BusinessException;
+import com.navix.loan.domain.LoanHold;
+import com.navix.loan.domain.LoanLifecycle;
 import com.navix.loan.domain.LoanStatus;
+import com.navix.loan.domain.RepaymentStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -117,6 +121,62 @@ public class Loan extends BaseAuditEntity {
     /** The instant the loan falls due: {@code dueDate} at 23:59:59 IST (product cutoff). */
     @Column(name = "due_at")
     private Instant dueAt;
+
+    /**
+     * DhanNow lifecycle (V97). Written only through {@link #moveTo}, which keeps {@link #status} in
+     * step. A loan row is minted at disbursal, so it starts ACTIVE.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "lifecycle_status", nullable = false, length = 32)
+    @Setter(lombok.AccessLevel.NONE)
+    private LoanLifecycle lifecycleStatus = LoanLifecycle.ACTIVE;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "hold_status", nullable = false, length = 16)
+    private LoanHold holdStatus = LoanHold.NONE;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "repayment_status", nullable = false, length = 32)
+    private RepaymentStatus repaymentStatus = RepaymentStatus.UNPAID;
+
+    /**
+     * Move the lifecycle to {@code next} and write the matching navix {@code status}. The same state
+     * is a no-op (false); a move the map forbids is {@code ILLEGAL_TRANSITION}.
+     */
+    public boolean moveTo(LoanLifecycle next) {
+        if (lifecycleStatus == next) {
+            return false;
+        }
+        if (!lifecycleStatus.canTransitionTo(next)) {
+            throw new BusinessException("ILLEGAL_TRANSITION", lifecycleStatus + " → " + next + " is not allowed");
+        }
+        lifecycleStatus = next;
+        status = next.legacyStatus();
+        return true;
+    }
+
+    /**
+     * Step along the timed path up to {@code target}, one legal move at a time, so a loan the
+     * scheduler missed for days still passes through every state (CC-13). False when already there
+     * or past it.
+     */
+    public boolean advanceTo(LoanLifecycle target) {
+        boolean moved = false;
+        while (lifecycleStatus.isBefore(target)) {
+            moved |= moveTo(lifecycleStatus.nextOnTimeline());
+        }
+        return moved;
+    }
+
+    /**
+     * CC-11: no NACH presentment while a manual payment awaits verification, the loan is disputed,
+     * or a restructure is pending.
+     */
+    public boolean presentmentPaused() {
+        return holdStatus == LoanHold.DISPUTED
+                || repaymentStatus == RepaymentStatus.PAID_PENDING_VERIFICATION
+                || lifecycleStatus == LoanLifecycle.RESTRUCTURE_PENDING;
+    }
 
     /**
      * Effective status on read: an ACTIVE loan past its due date reads as OVERDUE. This is computed,

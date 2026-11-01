@@ -51,12 +51,16 @@ public class ProductConfig extends BaseAuditEntity {
     @Column(name = "late_blocks_upgrade_days", nullable = false)
     private Integer lateBlocksUpgradeDays;
 
+    /** Days past due at which an overdue loan moves to OVERDUE_REVIEW (V97). */
+    @Column(name = "overdue_review_dpd", nullable = false)
+    private Integer overdueReviewDpd;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
     private ConfigStatus status;
 
     public ProductSnapshot toSnapshot() {
         return new ProductSnapshot(getId(), Arrays.asList(allowedAmountsPaise), minPaise, maxPaise,
-                dueCutoffTime, ZoneId.of(timezone));
+                dueCutoffTime, ZoneId.of(timezone), overdueReviewDpd);
     }
 }

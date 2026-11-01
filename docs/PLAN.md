@@ -314,6 +314,39 @@ Status is split into separate dimensions on `loan`, as the deck requires.
 - Fraud block.
 - Two schedulers running at once → single transition.
 
+**Status (2026-11-01): done.** `mvn verify` is green (1,863 unit) and `mvn verify -Pit` is green (69 integration, up from 63; V97–V98 applied to Testcontainers Postgres). Migrations:
+- **V97:** `lifecycle_status`, `hold_status` and `repayment_status` on `loan`, backfilled from `status` and the payments on file; one recreated `loan_status_check` covers all four columns. Also widens `loan_document.type` to the Phase 5–6 types and adds `product_config.overdue_review_dpd` (default 7, frozen with the other terms by the existing trigger).
+- **V98:** `scheduler_lock`.
+
+Code:
+- `LoanLifecycle` (allowed-transition map, `forTime` clock rule, and the navix `status` it writes alongside), plus `LoanHold` and `RepaymentStatus`.
+- `Loan.moveTo` is the only lifecycle writer; an illegal move is 422 `ILLEGAL_TRANSITION`.
+- `LoanLifecycleService` + `LoanLifecycleScheduler` (every 5 min, IST `Clock`) move a loan with a row lock.
+- `SchedulerLock` is a ShedLock-style lease. It also wraps `PaymentReminderScheduler` and `MandateDebitScheduler`, which fixes the single-instance issue.
+- The reminder sweep reads `lifecycle_status` and skips DISPUTED loans. The NACH sweep skips loans with `Loan.presentmentPaused`.
+- DISPUTED loans are left off the collections worklist (`listCollectible` and the worklist SQL). FRAUD_REVIEW blocks `createDraft`/`reborrow` (`FRAUD_REVIEW`).
+- `RepaymentService` closes through the lifecycle (the ladder hook still runs once, on the first close) and keeps `repayment_status` current.
+- `LoanView` (`/api/loan/{id}`, customer 360) and `LoanRegisterRow` gain `lifecycleStatus`, `holdStatus` and `repaymentStatus`. These fields are additive.
+
+Tests:
+- `LoanLifecycleTest` (map, clock boundaries, CC-13).
+- `LoanLifecycleServiceTest` (CC-13, review day from config).
+- `RepaymentServiceTest.cc09_partPaymentLeavesTheLoanOpenAndPartial`.
+- `MandateDebitSchedulerTest.cc11_presentmentSkippedWhilePendingVerificationDisputedOrRestructurePending`.
+- Dispute and fraud unit tests.
+- `LoanLifecycleIntegrationTest`: day 13 → 14 00:00 → 23:59:59 → +1 s (D1) → D7 (REVIEW); `cc13_…`; `cc14_twoSchedulersAtOnceMakeASingleTransition`; dispute pause; fraud block; V97 checks.
+
+JaCoCo's 80% gate now also covers `LoanLifecycle` and `LoanLifecycleService`.
+
+Deviations:
+- **Collection case.** OVERDUE_REVIEW is reached through navix `markInCollections`, which sets IN_COLLECTIONS but does not create a `collection_case` row; an officer opens the case, as in navix. An officer opening a case on a past-due loan also moves it to OVERDUE_REVIEW, so `status` and `lifecycle_status` never disagree.
+- **Reminder sweep and overdue reminders.** The reminder sweep no longer calls `markInCollections` (that flipped loans to IN_COLLECTIONS at D1). The lifecycle job owns it at the review day. Overdue reminders now run D1–D7 as navix documented, rather than stopping at D1.
+- **`Loan.effectiveStatus`.** It is kept for the navix `status` fields shown to staff and the borrower, and for its SQL twins. The schedulers and the new fields read the persisted state.
+- **CC-14 locking.** CC-14 uses the job lease plus a `SELECT … FOR UPDATE` per loan, instead of `@Version` on `loan`. `@Version` (409 `STALE_STATE`) lands with CC-21.
+- **CC-11.** Only the skip half is built; the "both clear → refund case" half is Phase 6.
+- **Who sets holds.** Nothing sets a hold yet: the dispute endpoint is Phase 7. The hold does not stop the lifecycle clock.
+- **Loan start state.** The loan row is still minted ACTIVE at disbursal. `DISBURSEMENT_PENDING → ACTIVE` arrives with the accountant confirmation (Phase 4).
+
 ## Phase 4: Disbursal confirmation + maker-checker (week 4)
 
 - **New `ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING`** between the Disbursement Head's UTR entry and ACTIVE (V99 updates the application status check).

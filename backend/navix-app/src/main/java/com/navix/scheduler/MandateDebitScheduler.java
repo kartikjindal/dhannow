@@ -4,11 +4,14 @@ import com.navix.collections.service.DpdCalculator;
 import com.navix.common.featureflag.FeatureFlagService;
 import com.navix.common.loan.LoanDirectory;
 import com.navix.common.loan.LoanSummary;
+import com.navix.loan.entity.Loan;
 import com.navix.loan.entity.MandateDebit;
 import com.navix.loan.entity.MandateDebit.Status;
 import com.navix.loan.entity.MandateDebit.Trigger;
+import com.navix.loan.repository.LoanRepository;
 import com.navix.loan.repository.MandateDebitRepository;
 import com.navix.loan.service.DebitService;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -27,7 +30,7 @@ import org.springframework.stereotype.Component;
  * only decides WHICH loans to offer it, gates on the {@code digio-debit} flag, and isolates failures.
  *
  * <p>Deliberately not {@code @Transactional}: {@code present}/{@code reconcile} put the provider call
- * between two commits. <b>Single instance only</b>, like every scheduler here (see SchedulingConfig).
+ * between two commits. Runs on one instance at a time ({@link SchedulerLock}).
  */
 @Component
 public class MandateDebitScheduler {
@@ -45,14 +48,19 @@ public class MandateDebitScheduler {
     private final LoanDirectory loans;
     private final DpdCalculator dpd;
     private final FeatureFlagService featureFlags;
+    private final LoanRepository loanRepository;
+    private final SchedulerLock locks;
 
     public MandateDebitScheduler(DebitService debitService, MandateDebitRepository debits, LoanDirectory loans,
-                                 DpdCalculator dpd, FeatureFlagService featureFlags) {
+                                 DpdCalculator dpd, FeatureFlagService featureFlags,
+                                 LoanRepository loanRepository, SchedulerLock locks) {
         this.debitService = debitService;
         this.debits = debits;
         this.loans = loans;
         this.dpd = dpd;
         this.featureFlags = featureFlags;
+        this.loanRepository = loanRepository;
+        this.locks = locks;
     }
 
     /**
@@ -62,6 +70,11 @@ public class MandateDebitScheduler {
      * cutoff; a late-evening run would have no margin for either. Override with {@code navix.digio.debit-cron}.
      */
     @Scheduled(cron = "${navix.digio.debit-cron:0 0 10 * * *}", zone = "Asia/Kolkata")
+    public void scheduledSweep() {
+        // One instance only (V98 scheduler_lock); the lease outlives the run so a late twin cannot re-present.
+        locks.runExclusive("mandate-debit", Duration.ofHours(1), Duration.ofHours(1), this::sweep);
+    }
+
     public void sweep() {
         if (!featureFlags.isEnabled(FLAG, false)) {
             return;
@@ -129,6 +142,11 @@ public class MandateDebitScheduler {
     private boolean shouldPresent(LoanSummary loan, LocalDate today) {
         int d = dpd.daysPastDue(loan.dueDate(), today);
         if (d < ATTEMPT_DPD[0] || d > ATTEMPT_DPD[ATTEMPT_DPD.length - 1]) {
+            return false;
+        }
+        // DhanNow (PLAN Phase 3, CC-11): the persisted state pauses presentment while a manual payment
+        // awaits verification, the loan is disputed, or a restructure is pending.
+        if (loanRepository.findById(loan.loanId()).map(Loan::presentmentPaused).orElse(true)) {
             return false;
         }
         // Most overdue loans hold no mandate, and present() would refuse each one with NO_USABLE_MANDATE

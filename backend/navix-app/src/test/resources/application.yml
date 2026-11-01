@@ -5,6 +5,9 @@
 # - Sign inline instead of calling Signzy: a real Aadhaar eSign needs a human with an
 #   Aadhaar-linked handset, and every session is a billable, legally binding contract.
 navix:
+  # The 5-minute lifecycle job would move fixture loans mid-test; tests drive it by hand.
+  lifecycle:
+    cron: "-"
   esign:
     provider: mock
   # Digio mandates are real NPCI filings: never reach the provider from a test.

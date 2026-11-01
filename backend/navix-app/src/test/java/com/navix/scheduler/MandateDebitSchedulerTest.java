@@ -38,6 +38,7 @@ class MandateDebitSchedulerTest {
     @Mock MandateDebitRepository debits;
     @Mock LoanDirectory loans;
     @Mock FeatureFlagService flags;
+    @Mock com.navix.loan.repository.LoanRepository loanRepository;
 
     MandateDebitScheduler sweep;
 
@@ -47,7 +48,9 @@ class MandateDebitSchedulerTest {
         when(debits.findFirstByLoanIdOrderByAttemptNoDesc(anyLong())).thenReturn(Optional.empty());
         when(debitService.configured()).thenReturn(true);
         org.mockito.Mockito.lenient().when(debitService.hasUsableMandate(anyLong())).thenReturn(true);
-        sweep = new MandateDebitScheduler(debitService, debits, loans, new DpdCalculator(), flags);
+        // An open loan with no hold: presentment is not paused (CC-11).
+        when(loanRepository.findById(anyLong())).thenAnswer(i -> Optional.of(new com.navix.loan.entity.Loan()));
+        sweep = new MandateDebitScheduler(debitService, debits, loans, new DpdCalculator(), flags, loanRepository, null);
     }
 
     private LoanSummary loan(long id, int dpd) {
@@ -230,5 +233,31 @@ class MandateDebitSchedulerTest {
         when(debitService.hasUsableMandate(6L)).thenReturn(true);
         sweep.sweep();
         verify(debitService).present(6L, null, Trigger.SCHEDULED, null);
+    }
+
+    /**
+     * CC-11 (the skip half; the refund case is Phase 6): no presentment while a manual payment awaits
+     * the accountant, the loan is disputed, or a restructure is pending. Flags forced ON here.
+     */
+    @Test
+    void cc11_presentmentSkippedWhilePendingVerificationDisputedOrRestructurePending() {
+        com.navix.loan.entity.Loan pending = new com.navix.loan.entity.Loan();
+        pending.setRepaymentStatus(com.navix.loan.domain.RepaymentStatus.PAID_PENDING_VERIFICATION);
+        com.navix.loan.entity.Loan disputed = new com.navix.loan.entity.Loan();
+        disputed.setHoldStatus(com.navix.loan.domain.LoanHold.DISPUTED);
+        com.navix.loan.entity.Loan restructuring = new com.navix.loan.entity.Loan();
+        restructuring.advanceTo(com.navix.loan.domain.LoanLifecycle.OVERDUE_D1);
+        restructuring.moveTo(com.navix.loan.domain.LoanLifecycle.RESTRUCTURE_PENDING);
+        when(loanRepository.findById(31L)).thenReturn(Optional.of(pending));
+        when(loanRepository.findById(32L)).thenReturn(Optional.of(disputed));
+        when(loanRepository.findById(33L)).thenReturn(Optional.of(restructuring));
+        when(loans.listCollectible(any())).thenReturn(List.of(loan(31L, 3), loan(32L, 3), loan(33L, 3), loan(34L, 3)));
+
+        sweep.sweep();
+
+        verify(debitService, never()).present(org.mockito.ArgumentMatchers.eq(31L), any(), any(), any());
+        verify(debitService, never()).present(org.mockito.ArgumentMatchers.eq(32L), any(), any(), any());
+        verify(debitService, never()).present(org.mockito.ArgumentMatchers.eq(33L), any(), any(), any());
+        verify(debitService).present(34L, null, Trigger.SCHEDULED, null);
     }
 }

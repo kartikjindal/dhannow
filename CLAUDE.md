@@ -39,8 +39,8 @@ All money is integer paise. All numbers come from versioned config (`pricing_con
 
 ## Status
 
-1. **Done:** wireframe and UI kit approved (2026-11-01). Phase 0: navix forked, scrubbed for the public repo, all baseline tests green. Phases 1–2 done (2026-11-01; `mvn verify` 1,848 unit and `mvn verify -Pit` 63 integration green): versioned `pricing_config`/`product_config` frozen on each offer and loan, `LoanMath` over a `PricingSnapshot` (₹1,000 → ₹742, repay ₹1,000), app-wide IST `Clock`, credit ladder (`CreditLevelService`, `GET /api/me/credit-level`), JaCoCo + ArchUnit gates.
-2. **Next:** Phase 3 (loan lifecycle and status machine), then the phases in order. The app (`app/`) has every wireframe screen built against a demo server (`core/api/api.dart`); each screen switches to the real API as its phase lands.
+1. **Done:** wireframe and UI kit approved (2026-11-01). Phase 0: navix forked, scrubbed for the public repo, all baseline tests green. Phases 1–2 done (2026-11-01; `mvn verify` 1,848 unit and `mvn verify -Pit` 63 integration green): versioned `pricing_config`/`product_config` frozen on each offer and loan, `LoanMath` over a `PricingSnapshot` (₹1,000 → ₹742, repay ₹1,000), app-wide IST `Clock`, credit ladder (`CreditLevelService`, `GET /api/me/credit-level`), JaCoCo + ArchUnit gates. Phase 3 done (2026-11-01; 1,863 unit, 69 integration): `lifecycle_status`/`hold_status`/`repayment_status` on `loan` (V97), `LoanLifecycle` state machine, 5-minute `LoanLifecycleScheduler` under a `scheduler_lock` lease (V98), dispute pause and fraud block.
+2. **Next:** Phase 4 (disbursal confirmation + maker-checker), then the phases in order. The app (`app/`) has every wireframe screen built against a demo server (`core/api/api.dart`); each screen switches to the real API as its phase lands.
 
 ## Decisions already made (do not re-ask)
 

@@ -106,6 +106,8 @@
                                 <include>com/navix/loan/service/CreditLevelService*</include>
                                 <include>com/navix/loan/domain/PricingSnapshot*</include>
                                 <include>com/navix/loan/domain/ProductSnapshot*</include>
+                                <include>com/navix/loan/domain/LoanLifecycle*</include>
+                                <include>com/navix/loan/service/LoanLifecycleService*</include>
                             </includes>
                             <rules>
                                 <rule>

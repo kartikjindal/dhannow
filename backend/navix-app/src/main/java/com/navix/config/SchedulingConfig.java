@@ -5,11 +5,10 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Enables Spring's {@code @Scheduled} support for the app (the notification module owns
- * {@code @EnableAsync}; the bootable app owns {@code @EnableScheduling}). Today this backs the daily
- * {@code PaymentReminderScheduler}.
+ * {@code @EnableAsync}; the bootable app owns {@code @EnableScheduling}).
  *
- * <p>Single-instance only: there is no distributed lock, so a multi-instance deploy would fan out
- * duplicate reminders — add ShedLock (or a Postgres advisory lock) before scaling out.
+ * <p>Safe on several instances: each sweep runs under a {@code SchedulerLock} lease (V98), and the
+ * lifecycle job also row-locks each loan it moves.
  */
 @Configuration
 @EnableScheduling

@@ -106,7 +106,11 @@ class ApplicationFlowIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.netDisbursedPaise").value(74200))
                 .andExpect(jsonPath("$.data.totalRepayablePaise").value(100000))
-                .andExpect(jsonPath("$.data.status").value("ACTIVE"));
+                .andExpect(jsonPath("$.data.status").value("ACTIVE"))
+                // PLAN Phase 3: the persisted lifecycle, hold and repayment state ride along additively.
+                .andExpect(jsonPath("$.data.lifecycleStatus").value("ACTIVE"))
+                .andExpect(jsonPath("$.data.holdStatus").value("NONE"))
+                .andExpect(jsonPath("$.data.repaymentStatus").value("UNPAID"));
         assertThat(jdbc.queryForMap("select l.pricing_version_id, l.upfront_interest_paise, l.tenure_days,"
                         + " a.pricing_version_id as app_pricing from loan l join loan_application a on a.loan_id = l.id"
                         + " where l.id = ?", loanId))

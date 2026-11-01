@@ -1,12 +1,17 @@
 package com.navix.loan.repository;
 
+import com.navix.loan.domain.LoanHold;
+import com.navix.loan.domain.LoanLifecycle;
 import com.navix.loan.domain.LoanStatus;
 import com.navix.loan.entity.Loan;
 import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -18,6 +23,22 @@ import org.springframework.stereotype.Repository;
 public interface LoanRepository extends JpaRepository<Loan, Long> {
 
     List<Loan> findByCustomerId(Long customerId);
+
+    /** Open loans in the given lifecycle states (the daily payment-reminder sweep). */
+    List<Loan> findByLifecycleStatusIn(Collection<LoanLifecycle> states);
+
+    /** Loans the lifecycle job may still move: in a timed state and due on or before {@code today}. */
+    @Query("select l.id from Loan l where l.lifecycleStatus in :states and l.dueDate <= :today order by l.id")
+    List<Long> findIdsForLifecycleSweep(@Param("states") Collection<LoanLifecycle> states,
+                                        @Param("today") LocalDate today);
+
+    /** The loan, row-locked until the transaction ends: one lifecycle move at a time (CC-14). */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select l from Loan l where l.id = :id")
+    Optional<Loan> findByIdForUpdate(@Param("id") Long id);
+
+    /** A FRAUD_REVIEW hold on any of the customer's loans blocks new applications. */
+    boolean existsByCustomerIdAndHoldStatus(Long customerId, LoanHold holdStatus);
 
     /** Every loan of the given customers — the paged Customers list hydrates one page's ids. */
     List<Loan> findByCustomerIdIn(Collection<Long> customerIds);

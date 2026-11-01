@@ -67,7 +67,11 @@ public final class LoanDtos {
             /** When the loan was settled in full (V50). Null while it is still running. */
             LocalDate closedOn,
             /** Penalty-free days after the due date this loan was written with (1 on legacy loans, V90). */
-            int graceDays) {
+            int graceDays,
+            /** DhanNow (V97), additive: lifecycle, hold and repayment state as persisted. */
+            com.navix.loan.domain.LoanLifecycle lifecycleStatus,
+            com.navix.loan.domain.LoanHold holdStatus,
+            com.navix.loan.domain.RepaymentStatus repaymentStatus) {
 
         public static LoanView of(Loan l) {
             return of(l, l.getOutstanding(), l.getStatus());
@@ -82,7 +86,8 @@ public final class LoanDtos {
             return new LoanView(l.getId(), l.getCustomerId(), l.getPrincipal(), l.getProcessingFee(),
                     l.getGst(), l.getNetDisbursed(), l.getDailyInterestRate(), l.getDisbursedOn(),
                     l.getDueDate(), l.getTotalRepayable(), outstandingPaise, status,
-                    l.getDisbursalTxnRef(), l.getClosedOn(), l.getGraceDays());
+                    l.getDisbursalTxnRef(), l.getClosedOn(), l.getGraceDays(),
+                    l.getLifecycleStatus(), l.getHoldStatus(), l.getRepaymentStatus());
         }
     }
 

@@ -217,6 +217,22 @@ class ApplicationFlowServiceTest {
                 .hasMessage("Your account is not eligible for new loans. Please contact support.");
     }
 
+    /** PLAN Phase 3: a FRAUD_REVIEW hold on any of the customer's loans blocks a new application. */
+    @Test
+    void fraudReviewHoldBlocksANewApplication() {
+        actor("7", "BORROWER");
+        when(loanRepository.existsByCustomerIdAndHoldStatus(7L, com.navix.loan.domain.LoanHold.FRAUD_REVIEW))
+                .thenReturn(true);
+
+        assertThatThrownBy(() -> flow.createDraft(7L))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "FRAUD_REVIEW");
+        assertThatThrownBy(() -> flow.reborrow())
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "FRAUD_REVIEW");
+        verify(applicationRepository, never()).save(any());
+    }
+
     @Test
     void creditToActiveHappyPath() {
         LoanApplication app = appAt(ApplicationStatus.KYC_PENDING);

@@ -1548,6 +1548,13 @@ public class ApplicationFlowService {
             throw new BusinessException("NOT_ELIGIBLE",
                     "Your account is not eligible for new loans. Please contact support.");
         }
+        // PLAN Phase 3: a FRAUD_REVIEW hold on any of the customer's loans blocks new applications.
+        if (customerId != null && loanRepository.existsByCustomerIdAndHoldStatus(customerId,
+                com.navix.loan.domain.LoanHold.FRAUD_REVIEW)) {
+            log.info("blocked application start customer={} fraud review hold", customerId);
+            throw new BusinessException("FRAUD_REVIEW",
+                    "Your account is under review, so we can't take a new application right now. Please contact support.");
+        }
         String mobile = latestProfileForCustomer(customerId).map(CustomerProfile::getMobile).orElse(null);
         if (mobile == null || mobile.isBlank()) {
             return;

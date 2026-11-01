@@ -31,7 +31,6 @@ class PaymentReminderSchedulerTest {
 
     @Mock private LoanRepository loanRepository;
     @Mock private RepaymentService repaymentService;
-    @Mock private com.navix.common.loan.LoanDirectory loanDirectory;
     @Mock private ApplicationEventPublisher events;
 
     /**
@@ -51,30 +50,34 @@ class PaymentReminderSchedulerTest {
     }
 
     private PaymentReminderScheduler scheduler() {
-        return new PaymentReminderScheduler(loanRepository, repaymentService, loanDirectory, events);
+        return new PaymentReminderScheduler(loanRepository, repaymentService, events,
+                java.time.Clock.system(IST), null);
     }
 
     /**
-     * The daily sweep is what moves a loan into collections now that opening a case no longer does
-     * (a case can be opened pre-emptively, before the due date). The DPD gate lives inside
-     * markInCollections, so the sweep calls it for every live loan and lets it decide.
+     * PLAN Phase 3: a DISPUTED hold pauses reminders. The sweep reads the persisted lifecycle and no
+     * longer moves loans into collections (the lifecycle job does, at OVERDUE_REVIEW).
      */
     @Test
-    void sweepsEveryLiveLoanIntoCollectionsOnceDue() {
-        Loan due = loan(1L, 7L, today.minusDays(2));
-        Loan notDue = loan(2L, 8L, today.plusDays(10));
-        when(loanRepository.findByStatusIn(any())).thenReturn(List.of(due, notDue));
-        when(repaymentService.outstandingAsOf(anyLong(), any())).thenReturn(1_270_000L);
+    void disputedLoanGetsNoReminder() {
+        Loan disputed = loan(1L, 7L, today.minusDays(2));
+        disputed.setHoldStatus(com.navix.loan.domain.LoanHold.DISPUTED);
+        Loan open = loan(2L, 8L, today.minusDays(2));
+        open.setGraceDays(0);
+        when(loanRepository.findByLifecycleStatusIn(any())).thenReturn(List.of(disputed, open));
+        when(repaymentService.outstandingAsOf(eq(2L), any())).thenReturn(100_000L);
 
         scheduler().sendDueAndOverdueReminders();
 
-        verify(loanDirectory).markInCollections(1L);
-        verify(loanDirectory).markInCollections(2L);
+        ArgumentCaptor<PaymentReminderEvent> ev = ArgumentCaptor.forClass(PaymentReminderEvent.class);
+        verify(events).publishEvent(ev.capture());
+        org.assertj.core.api.Assertions.assertThat(ev.getValue().loanId()).isEqualTo(2L);
+        verify(repaymentService, never()).outstandingAsOf(eq(1L), any());
     }
 
     @Test
     void publishesDueSoonReminderInsideTheWindow() {
-        when(loanRepository.findByStatusIn(any())).thenReturn(List.of(loan(1L, 100L, today.plusDays(3))));
+        when(loanRepository.findByLifecycleStatusIn(any())).thenReturn(List.of(loan(1L, 100L, today.plusDays(3))));
         when(repaymentService.outstandingAsOf(eq(1L), any())).thenReturn(500_000L);
 
         scheduler().sendDueAndOverdueReminders();
@@ -91,7 +94,7 @@ class PaymentReminderSchedulerTest {
     @Test
     void publishesOverdueReminderPastTheGraceDay() {
         // 4 days past due (past the 1-day grace) → overdue reminder, daysOverdue = 4.
-        when(loanRepository.findByStatusIn(any())).thenReturn(List.of(loan(2L, 200L, today.minusDays(4))));
+        when(loanRepository.findByLifecycleStatusIn(any())).thenReturn(List.of(loan(2L, 200L, today.minusDays(4))));
         when(repaymentService.outstandingAsOf(eq(2L), any())).thenReturn(750_000L);
 
         scheduler().sendDueAndOverdueReminders();
@@ -107,7 +110,7 @@ class PaymentReminderSchedulerTest {
         Loan legacy = loan(6L, 600L, today.minusDays(1));   // grace_days = 1 (entity default)
         Loan fresh = loan(7L, 700L, today.minusDays(1));
         fresh.setGraceDays(0);
-        when(loanRepository.findByStatusIn(any())).thenReturn(List.of(legacy, fresh));
+        when(loanRepository.findByLifecycleStatusIn(any())).thenReturn(List.of(legacy, fresh));
         when(repaymentService.outstandingAsOf(any(), any())).thenReturn(750_000L);
 
         scheduler().sendDueAndOverdueReminders();
@@ -123,7 +126,7 @@ class PaymentReminderSchedulerTest {
 
     @Test
     void skipsLoansThatAreFullyPaid() {
-        when(loanRepository.findByStatusIn(any())).thenReturn(List.of(loan(3L, 300L, today.plusDays(2))));
+        when(loanRepository.findByLifecycleStatusIn(any())).thenReturn(List.of(loan(3L, 300L, today.plusDays(2))));
         when(repaymentService.outstandingAsOf(eq(3L), any())).thenReturn(0L);
 
         scheduler().sendDueAndOverdueReminders();
@@ -134,7 +137,7 @@ class PaymentReminderSchedulerTest {
     @Test
     void skipsLoansOutsideBothWindows() {
         // 20 days away (before the 7-day window) and 20 days overdue (past the 7-day bucket).
-        when(loanRepository.findByStatusIn(any()))
+        when(loanRepository.findByLifecycleStatusIn(any()))
                 .thenReturn(List.of(loan(4L, 400L, today.plusDays(20)), loan(5L, 500L, today.minusDays(20))));
         when(repaymentService.outstandingAsOf(anyLong(), any())).thenReturn(100_000L);
 
@@ -145,7 +148,7 @@ class PaymentReminderSchedulerTest {
 
     @Test
     void sendsOneReminderEachForAMixOfLoans() {
-        when(loanRepository.findByStatusIn(any())).thenReturn(List.of(
+        when(loanRepository.findByLifecycleStatusIn(any())).thenReturn(List.of(
                 loan(1L, 100L, today.plusDays(7)),   // due-soon (edge of window)
                 loan(2L, 200L, today.minusDays(3)),  // overdue
                 loan(3L, 300L, today.plusDays(2)),   // paid → skipped

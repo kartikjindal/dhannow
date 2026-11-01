@@ -1,11 +1,13 @@
 package com.navix.scheduler;
 
 import com.navix.common.notification.event.PaymentReminderEvent;
-import com.navix.loan.domain.LoanStatus;
+import com.navix.loan.domain.LoanHold;
+import com.navix.loan.domain.LoanLifecycle;
 import com.navix.loan.entity.Loan;
-import com.navix.common.loan.LoanDirectory;
 import com.navix.loan.repository.LoanRepository;
 import com.navix.loan.service.RepaymentService;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -40,36 +42,45 @@ public class PaymentReminderScheduler {
     /** Keep nudging for this many days after the grace day, then collections owns it (T0–T7). */
     private static final int OVERDUE_BUCKET_DAYS = 7;
 
-    /** Dates are Indian calendar dates; the server clock is UTC in ECS. */
-    private static final java.time.ZoneId IST = java.time.ZoneId.of("Asia/Kolkata");
+    /** The bullet-repayment states (restructured EMI loans get their own reminders in Phase 6). */
+    private static final List<LoanLifecycle> OPEN = List.of(LoanLifecycle.ACTIVE, LoanLifecycle.DUE_TODAY,
+            LoanLifecycle.OVERDUE_D1, LoanLifecycle.OVERDUE_REVIEW);
 
     private final LoanRepository loanRepository;
     private final RepaymentService repaymentService;
-    private final LoanDirectory loanDirectory;
     private final ApplicationEventPublisher events;
+    private final Clock clock;
+    private final SchedulerLock locks;
 
     public PaymentReminderScheduler(LoanRepository loanRepository, RepaymentService repaymentService,
-                                    LoanDirectory loanDirectory, ApplicationEventPublisher events) {
+                                    ApplicationEventPublisher events, Clock clock, SchedulerLock locks) {
         this.loanRepository = loanRepository;
         this.repaymentService = repaymentService;
-        this.loanDirectory = loanDirectory;
         this.events = events;
+        this.clock = clock;
+        this.locks = locks;
     }
 
-    /** Runs daily at 09:00 (override with {@code navix.reminders.cron}). */
+    /**
+     * Runs daily at 09:00 (override with {@code navix.reminders.cron}), on one instance only: the
+     * lease is kept for an hour so a second instance firing late does not send the batch again.
+     */
     @Scheduled(cron = "${navix.reminders.cron:0 0 9 * * *}")
+    public void scheduledSweep() {
+        locks.runExclusive("payment-reminders", Duration.ofHours(1), Duration.ofHours(1),
+                this::sendDueAndOverdueReminders);
+    }
+
     public void sendDueAndOverdueReminders() {
-        LocalDate today = LocalDate.now(IST);
-        List<Loan> live = loanRepository.findByStatusIn(List.of(LoanStatus.ACTIVE, LoanStatus.OVERDUE));
+        LocalDate today = LocalDate.now(clock);
+        // DhanNow (PLAN Phase 3): the persisted lifecycle decides who is live, and the lifecycle job
+        // (not this sweep) moves a loan into collections, at OVERDUE_REVIEW.
+        List<Loan> live = loanRepository.findByLifecycleStatusIn(OPEN);
         int sent = 0;
         for (Loan loan : live) {
             try {
-                // Move a loan into collections the day it goes past due. Opening a case no longer
-                // does this: a case can now be opened pre-emptively, days before the due date, and
-                // flipping the status there would brand an on-time borrower delinquent. The gate
-                // lives inside markInCollections, so this call is a no-op until DPD > 0.
-                loanDirectory.markInCollections(loan.getId());
-                if (sendReminderFor(loan, today)) {
+                // A dispute pauses reminders until it is resolved.
+                if (loan.getHoldStatus() != LoanHold.DISPUTED && sendReminderFor(loan, today)) {
                     sent++;
                 }
             } catch (RuntimeException ex) {
