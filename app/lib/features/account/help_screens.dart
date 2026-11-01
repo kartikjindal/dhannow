@@ -18,7 +18,7 @@ const _faqs = [
   ('What does it cost?', 'Under the stated product structure, applicable processing fees, GST on the processing fee, and 14-day interest are deducted upfront. The final amounts applicable to your loan will be displayed in your approved offer and KFS before acceptance.'),
   ('How is interest charged?', 'Under the stated 14-day product structure, interest is calculated at 1% per day on the original principal for 14 calendar days, equivalent to 14% of the principal for the full 14-day period.'),
   ('When do I repay?', 'Your repayment due date will be communicated in your loan documents, KFS, repayment schedule, or applicable digital loan records. Customers should verify the exact due date and pay by the specified deadline.'),
-  ('Can I pay early?', 'Early repayment may be made through the available repayment facility, subject to the applicable loan terms and payment instructions.'),
+  ('Can I repay before the due date?', 'Yes. You can repay any day before the due date; the amount stays the same, the loan amount.'),
   ('What happens if I’m late?', 'Missing the due date may result in an overdue account and may affect your future borrowing eligibility. Any applicable overdue charges, collection procedures, or credit bureau reporting will be governed by your loan agreement and applicable law. Please contact customer support promptly if you anticipate difficulty making a payment.'),
   ('How do I make a payment?', 'Pay by UPI or bank transfer and submit the transaction reference. Our accounts team verifies it before your balance updates.'),
 ];

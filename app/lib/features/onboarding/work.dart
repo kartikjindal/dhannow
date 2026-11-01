@@ -62,7 +62,7 @@ class _EmploymentScreenState extends State<EmploymentScreen> with Busy {
 }
 
 /// Board A5. The board's "previous salary date" field is left out: the due date is always day 14
-/// from disbursal, never tied to a salary day.
+/// from disbursal, never tied to a payday.
 class EmployerScreen extends StatefulWidget {
   const EmployerScreen({super.key});
 
