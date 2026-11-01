@@ -1274,8 +1274,7 @@ Deviations:
 - **No officer name.** `pendingExtension` names no officer, so C12 says "our collections team".
 - **"Not now" on C12** only leaves the screen. It does not decline, because DECLINED is terminal.
 
-Not done (updated by 11b below):
-- **A1b onboarding-paused form.** The server wants the full Aadhaar number; the board asks for the last 4.
+Not done (updated by 11b and 11c below):
 - **B7 "Use my location".** Needs `geolocator`. The typed address works.
 - **Other phase items:**
   - FCM push (`PUT /api/devices/me` with a token);
@@ -1364,7 +1363,6 @@ Deviations:
 - **Address proof (A12) is uploaded but not filed.** `verify/documents` does not allow ELECTRICITY_BILL/GAS_BILL/RENT_AGREEMENT, as on the web.
 
 Not done:
-- **A1b onboarding-paused form.** The server wants the full Aadhaar number; the board asks for the last 4.
 - **B7 "Use my location".** Needs `geolocator`.
 - **Selfie liveness provider path** (`selfie/liveness/init`). v1 is manual review.
 - **Other phase items:** FCM push, Play Integrity, `local_auth`, riverpod, l10n, Crashlytics, the maintenance banner, referral code, document share.
@@ -1408,6 +1406,39 @@ Backend gaps: all closed on 2026-11-02, see below.
   - SMS and email links (credit question, resume step, mandate invite) are `<base>/app/open`, or `?to=repay|loans|support` (`AppLinks`).
   - The staff invite link and the emailed reset link are unchanged.
 
+**Status (2026-11-02): 11c done. The app uses the backend fixes above.** `flutter analyze` is clean and `flutter test` is green with 331 tests, up from 323: eight client tests are new. `tool/screens_test.dart` still renders all screens on the demo server. Nothing was built here.
+
+What changed in the app:
+- **B1 amounts:** the list comes from `GET …/offer/quotes`, one quote per ladder amount. Rates come from the server's `feeRateBps`, `gstRateBps` and `dailyRateBps`; the app no longer derives them. `quote(p)` takes the listed amount and falls back to `offer/summary`.
+- **`LoanView` fields:**
+  - `loanAccountNumber` is the account number shown (DNL…).
+  - `daysLeft` and the days late come from the server's IST count.
+  - The interest line is `upfrontInterestPaise`, so the client arithmetic is gone.
+  - Extension history shows `chargePaidPaise`, and C12 names `pendingExtension.offeredBy`.
+- **A1b onboarding-paused form:** posts `/api/onboarding-waitlist` with `aadhaarLast4`. A signed-in borrower with no application while `onboarding-paused` is ON opens A1b.
+- **S5/S6 forgot password:**
+  - `sendOtp(purpose: OtpFor.reset)` calls `forgot-password/otp {mobile, deviceId}`. The code is kept on the phone.
+  - `resetPassword` calls `forgot-password/reset {mobile, otp, password, deviceId, deviceName, appVersion}`, and the answer is a session.
+  - `INVALID_OTP` and `TOO_MANY_ATTEMPTS` map to the OTP errors, and `WEAK_PASSWORD` to its message.
+  - `OtpFor {signIn, consent, reset}` replaces the old `consent:` flag.
+- **A12 address proof:** filed through `verify/documents` as ELECTRICITY_BILL, GAS_BILL or RENT_AGREEMENT.
+- **C10 re-borrow:** a legacy PRE_APPROVED result is applied at the credit-level maximum. That makes it SANCTIONED, and it walks B1 → KFS → e-sign → account like any offer. `chooseAmount` always uses `offer/amount`.
+- **Uploads:**
+  - `UNSUPPORTED_FILE_TYPE`, `FILE_TOO_LARGE`, `UPLOAD_NOT_FOUND` and `UPLOAD_UNAVAILABLE` have their own messages.
+  - The enveloped presign is read, and a bare body is still accepted.
+- **A13 bureau question:** `JourneyView.bureauChallengePending` decides A13 on open and resume, replacing the summary probe.
+- **Accepted versions:** `verify/agreement {versions:[{key, version}]}` records the versions from app config `legal[].version`.
+  - A11 sends terms, consent and privacy.
+  - The KFS acknowledgement sends those three plus kfs-policy, because the server keeps only the last list.
+- **App links:**
+  - The autoVerify filter also takes `https://dhannow.com/app/open`.
+  - `MainActivity` keeps the link from the opening or resuming intent. Dart reads it once through the `dhannow/system` channel (`takeLink`), so no package was added.
+  - `?to=repay` opens C6, `loans` C8 and `support` D3; anything else goes to journey home.
+  - Support opens when signed out. Repay and loans open only past sign-up; otherwise the journey decides.
+  - Provider returns (`/app/cb/…`) are taken and ignored: the status read follows.
+
+Not done: as in 11b (B7 location, the selfie liveness provider, and push, Play Integrity and the other phase items). No new backend gaps.
+
 ## Phase 12: Testing strategy (continuous, gate per phase)
 
 | Layer | Tooling | What must pass |
@@ -1423,6 +1454,47 @@ Backend gaps: all closed on 2026-11-02, see below.
 | Security | OWASP ZAP baseline on staging, `dependency-check`, `flutter analyze`, `npm audit` | No high findings |
 
 Coverage gates: engine packages ≥ 80%, app `core/` ≥ 70%.
+
+**Status (2026-11-02): CI gates written as code; none has run on GitHub yet.** No Maven, Gradle, `next build`, Playwright, Flutter build or emulator was run here (another agent held Maven). What was checked locally:
+- Every workflow parses as YAML, and every third-party action is pinned to a commit SHA (`secrets.yml` checkout too).
+- `python site/check_all.py` is green.
+- The CI helper scripts pass hand tests: OpenAPI diff, lcov gate, APK size gate, app contract extraction (80 client calls) against a fake spec.
+- gitleaks finds nothing in the new files.
+- `npm audit` was run read-only (result below).
+
+Workflows (`.github/workflows/`):
+- **`backend.yml`** (push to main and PRs on `backend/**`):
+  - `unit`: `mvn verify` with ArchUnit and the JaCoCo 80% engine gate. The JaCoCo report is an artifact.
+  - `integration`: `mvn verify -Pit` on Testcontainers Postgres 16.
+  - `openapi`: builds the jar, starts `docker-compose.ci.yml` (Postgres 16 + the backend with every provider mocked and a random `AUTH_SECRET`), exports `/v3/api-docs` as an artifact, and diffs it against `docs/api/openapi.json` (`scripts/ci/openapi_diff.py`, servers ignored).
+- **`web.yml`**:
+  - `check`: `npm ci`, `tsc --noEmit`, `next lint`, vitest, `next build`.
+  - `audit`: `npm audit --audit-level=high --omit=dev`.
+  - `e2e`: Playwright, nightly and on demand, against the compose backend. The run seeds a random password onto the `@navix.example` demo staff in the throwaway CI database (`scripts/ci/seed_e2e_staff.py`), then runs `next start`.
+  - `deploy`: Vercel, on demand, behind environments `staff-console-<env>`.
+- **`app.yml`**:
+  - `check`: `flutter analyze`, `flutter test --coverage`, the `lib/core/` line coverage ≥ 70% gate (`scripts/ci/lcov_gate.py`), and the contract check (`scripts/ci/app_contract_check.py`). The contract check reads every `c.get|post|put|delete`, `send` and `_poll` path in `http_api.dart`/`client.dart` and requires each method + path to be in `docs/api/openapi.json`.
+  - `screens`: `tool/screens_test.dart` with `DEMO=true`; the PNGs are an artifact.
+  - `build`: release APKs split per ABI with a size gate under 12 MB each (`scripts/ci/apk_size_gate.py`, which also writes SHA256SUMS), and the AAB.
+- **`site.yml`**: `node site/calc.js`, `node site/parity/calc.test.js`, `python site/check_all.py`.
+- **`security.yml`**:
+  - OWASP dependency-check, through the Maven plugin from the command line (`dependency-check-maven:13.0.0:aggregate`, fails on CVSS ≥ 7, `NVD_API_KEY` optional), weekly and on demand.
+  - `npm audit`, weekly.
+  - OWASP ZAP baseline against staging's site, staff console and API, on demand. `.github/zap/rules.tsv` marks the high-risk passive rules FAIL.
+- **`load-test.yml`**: k6 `tools/k6/journey.js` on demand against staging. It runs 100 rps, 70% borrower home and journey reads and 30% staff dashboard reads, with thresholds p95 < 400 ms, errors < 1% and checks > 99%, and refuses a prod URL.
+
+Deviations:
+- **Contract check without generated Dart.** The app's client is hand-written (Phase 11), so "generated Dart" became a source check of the client's paths against the OpenAPI document.
+- **No `docs/api/openapi.json` committed.** It cannot be produced without running the backend. Until the first green `backend.yml` artifact is committed there, the OpenAPI diff and the app contract check warn instead of failing.
+- **dependency-check runs from the CLI**, not as a pom plugin (`backend/` was off limits), and weekly rather than on every PR (the NVD download is slow).
+- **App release signing in CI.** `app/android/app/build.gradle.kts` still signs release builds with the debug key (Phase 11). When the `ANDROID_KEYSTORE_*` secrets exist, `app.yml` re-signs the APKs (`apksigner`) and the AAB (`jarsigner`) with the upload key. Without them the artifacts are labelled debug-signed.
+- **Flutter version.** It is set by the repository variable `FLUTTER_VERSION`. The repo pins no exact SDK (pubspec needs ≥ 3.47.0).
+
+Not done:
+- The emulator `integration_test` job: there is no `app/integration_test/` yet.
+- The Playwright ₹1,000 sanction → UTR → confirm → ACTIVE spec (Verification 2; Phase 10b "Not done" 6). The e2e job runs the existing staff specs only, and has not been run locally.
+- No measured APK size or `core/` coverage yet. Either gate may be red on its first run.
+- **`npm audit` is red today:** 2 critical (`next` 15.1.12, `jspdf`) and 7 high in shipped dependencies. Upgrading `next` to ≥ 15.5 and `jspdf`/`jspdf-autotable` to their fixed majors is a web change, listed in `docs/GO_LIVE.md` E.
 
 ## Phase 13: Infra, CI/CD, go-live (weeks 11–13)
 
@@ -1440,6 +1512,69 @@ Coverage gates: engine packages ≥ 80%, app `core/` ≥ 70%.
   - grievance officer confirmation.
 
   The prod config guard enforces lender + grievance + DLT IDs.
+
+**Status (2026-11-02): infrastructure and deploy pipelines written as code; nothing applied, nothing created in any account.** Terraform is not installed on this machine, so `terraform fmt`/`validate` did not run. What was checked instead:
+- Every `.tf` file parses (python-hcl2).
+- Every resource, data, var and local reference resolves.
+- The env wiring matches the module's variables.
+- `=` and comment alignment follows `terraform fmt`'s rules.
+- The two CloudFront functions were run in node against sample requests.
+
+`.github/workflows/infra.yml` runs `terraform fmt -check` and `validate` for both environments with no backend and no credentials.
+
+Code:
+- **`infra/terraform/modules/stack`** (one module, one file per area), used by `envs/staging` and `envs/prod`. Each env has a `terraform.tfvars.example` with no real ids, `allowed_account_ids` as an account guard, and a commented `backend "s3"` block with instructions.
+  - **Network:** VPC; public, app and data subnets in 2 AZs; **one NAT gateway with one Elastic IP**, the static egress address for the Digitap allow-list and `NAVIX_STATIC_EGRESS_IP` (`prevent_destroy`); S3 gateway endpoint; security groups ALB → tasks:8080 → RDS:5432.
+  - **API:** ACM + ALB for `api.dhannow.com`. HTTP redirects to HTTPS, TLS 1.3 policy, idle timeout 120 s as application.yml assumes, access logs, `/actuator/*` other than health refused at the ALB, and `/v3/api-docs` and Swagger refused in prod.
+  - **ECS:** Fargate service behind the ALB with the circuit breaker and rollback, CPU target tracking, and an ECR repository with immutable tags, scan on push and KMS.
+    - The task definition carries the env Terraform knows (`NAVIX_ENV`, `NAVIX_SSM_IMPORT=aws-parameterstore:/dhannow/<env>/`, DB URL, buckets, KMS ids, egress IP, SES, CORS, app URLs). `DB_PASSWORD` comes from the RDS-managed Secrets Manager secret.
+    - The optional Google service-account JSON comes from SSM and is written to `/tmp` at start for `NAVIX_GOOGLE_SERVICE_ACCOUNT_PATH`.
+    - A separate **`migrate` task definition** runs the Flyway 10.20.1 CLI (the version Boot 3.4.1 manages) over the same scripts (`infra/docker/Dockerfile.migrate`).
+  - **RDS Postgres 16:** major version pinned; encrypted with the app key; `rds.force_ssl`; private; automated backups (7 days staging, 14 days prod) and a final snapshot; Multi-AZ and deletion protection in prod; Performance Insights.
+  - **S3:** documents (KMS, versioned, TLS-only, CORS for the console), site and downloads (private, read by CloudFront OAC), and logs.
+  - **CloudFront for `dhannow.com`:**
+    - The certificate is in us-east-1.
+    - A viewer-request function serves extensionless paths as `.html` (`/app/cb/digilocker`, `/app/open?to=…`), directories as `index.html`, and redirects www to the apex but never `/.well-known/*`.
+    - A viewer-response function sets `application/json` on `/.well-known/assetlinks.json`.
+    - `/downloads/*` serves the APK bucket.
+    - Security headers: HSTS, nosniff, DENY.
+  - **KMS:** an `app` key (S3 documents, RDS, SSM SecureStrings, ECR) and a `pii` key whose policy lets only the task role `kms:Decrypt` (`prevent_destroy`).
+  - **SSM:** an inventory of parameter **names only** under `/dhannow/<env>/`, each marked secure or plain and required always / prod / optional (`terraform output ssm_parameters`). There are no values; `infra/scripts/ssm_check.sh <env>` lists the missing ones, read-only.
+  - **SES:** domain identity with DKIM (optional per account); configuration set → SNS → SQS with raw delivery (matches `SesEventSqsListener`) and a DLQ.
+  - **CloudWatch:** metric filters + alarms on `OUTBOX_ALERT`, `RECONCILIATION_MISMATCH` and `NAVIX_ENV=prod` boot refusals; ALB 5xx, p95 > 400 ms and no healthy task; ECS memory; RDS CPU and free storage; the SES DLQ. All go to an SNS topic with e-mail subscriptions.
+  - **GitHub OIDC deploy role:** trusts only `repo:<owner>/<repo>:environment:<env>`, with least privilege. It may push this ECR repository, register task definitions, run the migrate family on this cluster, roll this service, pass the two task roles, sync the site and downloads buckets, and invalidate this distribution.
+- **`deploy-backend.yml`** (manual, environment `staging`/`prod`, OIDC, every id from `vars.`):
+  1. `mvn verify`, then the jar.
+  2. App and migrate images tagged with the commit SHA (reused if already in ECR).
+  3. Flyway as a one-off Fargate task; a non-zero exit stops the deploy and its log is printed.
+  4. A new revision of the service's task definition with the new image.
+  5. The ECS deploy waits for stability.
+  6. Health checks on `/actuator/health` and `/api/app/config`.
+- **`deploy-site.yml`** (manual):
+  1. `site/check_all.py`, with `--release` for prod.
+  2. `aws s3 sync site/` excluding `*.py`, `page_template.html`, `doc-versions.json` and `parity/`.
+  3. `assetlinks.json` uploaded as `application/json`.
+  4. Optionally the signed APKs of an `app.yml` run under `/downloads/app/<run>/`.
+  5. CloudFront invalidation.
+  6. A smoke check that includes the assetlinks content type.
+- **`infra/ENV.md`:** every env var and SSM name for the backend, staff console, app build and GitHub, with secrets, defaults, which defaults are still navix's (egress IP, DLT PE-ID/templates, `DHANBT`, `dhanboost_otp`, e-sign executer name), and what must not be set in prod.
+- **`docs/GO_LIVE.md`:** the external items above plus every placeholder, flag and key from the Phase Status paragraphs, the apply runbook and the Verification list.
+
+Deviations:
+- **Staff console on Vercel.** It is a Next.js server app (edge middleware, BFF routes), so S3/CloudFront cannot host it. Terraform makes only its DNS record; `web.yml` deploys it.
+- **One NAT gateway.** Providers allow-list one IP. A NAT outage cuts outbound provider calls; a second NAT would mean a second IP to allow-list.
+- **SSM values are never in Terraform.** The plan's "SSM `/dhannow/{staging,prod}/*`" is met by the name inventory, the IAM scope and the check script. The bootstrap admin is the two parameters from Phase 9.
+- **DB user.** The task connects as the RDS master user, whose password RDS keeps in Secrets Manager. A least-privilege application role is a go-live item.
+- **Migrations run twice by design.** The migrate task applies them before the rollout. The app's own Flyway then validates and finds nothing pending.
+- **SNS topics are not KMS-encrypted.** SES and CloudWatch cannot publish to topics under the AWS-managed SNS key. The SES queue uses SQS-managed SSE.
+- **`Dockerfile.backend` is not used.** It copies a `deploy/certs/` folder that is not in this repo. CI and deploys build the jar and use `Dockerfile.backend.runtime`.
+
+Not done:
+- Nothing has been applied, pushed or configured: no AWS resources, no GitHub environments, variables or secrets, no Vercel project, no DNS.
+- `terraform fmt`/`validate`/`plan` have not run; the first `infra.yml` run is the first real validation.
+- There is no S3 lifecycle rule for rejected uploads (11c) or for KYC files of purged accounts (CC-45). Both need the backend to tag or prefix the objects.
+- Not built: WAF, CloudFront access logs, VPC flow logs, and an automated RDS restore drill.
+- The `push-fcm` and `play-integrity` app work (Phase 11) is not done.
 
 ## Corner-case catalogue (each item = decided behaviour + a named test)
 

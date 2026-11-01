@@ -1,0 +1,24 @@
+# Copy to terraform.tfvars (gitignored) and fill in. No real ids belong in this example.
+allowed_account_ids = ["<staging-aws-account-id>"]
+github_repository   = "<github-owner>/<repo>"
+
+# false when prod (or another stack) already created token.actions.githubusercontent.com in this account:
+create_github_oidc_provider = true
+# github_oidc_provider_arn  = "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com"
+
+site_domain  = "staging.dhannow.com"
+api_domain   = "api.staging.dhannow.com"
+staff_domain = "staff.staging.dhannow.com"
+# staff_cname_target = "cname.vercel-dns.com"
+
+# Hosted zone for dhannow.com, if it is in Route 53 in this account. Blank = add the records from
+# `terraform output dns_records_to_create` at the DNS host while apply waits on ACM.
+route53_zone_id = ""
+
+# One SES identity per account+region: false here if prod shares this account and owns it.
+create_ses_identity = true
+
+# Relative name under /dhannow/staging/ of the Google service-account SecureString (FCM, Play Integrity).
+google_service_account_ssm_name = ""
+
+alarm_emails = ["<ops-alerts@example.com>"]

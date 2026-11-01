@@ -1,0 +1,156 @@
+# Deploy the backend to staging or prod (PLAN Phase 13). Manual only; the GitHub environment
+# (staging / prod) holds the variables below and its protection rules (required reviewers, branch
+# rules) gate the job. AWS access is OIDC: no keys are stored.
+#
+# Environment variables (all from `terraform output github_environment_variables`):
+#   AWS_REGION, AWS_DEPLOY_ROLE_ARN, ECR_REPOSITORY, ECS_CLUSTER, ECS_SERVICE, ECS_TASK_FAMILY,
+#   ECS_MIGRATE_TASK_FAMILY, ECS_SUBNETS (comma-separated), ECS_SECURITY_GROUP, API_BASE_URL
+#
+# Steps: unit tests → jar → app + migrate images tagged with the commit SHA → Flyway migrate as a
+# one-off task → new task definition revision → ECS rolling deploy (circuit breaker rolls back) →
+# health check.
+name: deploy-backend
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target
+        type: choice
+        options: [staging, prod]
+        required: true
+      skip_tests:
+        description: Skip mvn verify (only for a SHA that already passed backend.yml)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-backend-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.API_BASE_URL }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+      ECS_TASK_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+      ECS_MIGRATE_TASK_FAMILY: ${{ vars.ECS_MIGRATE_TASK_FAMILY }}
+      ECS_SUBNETS: ${{ vars.ECS_SUBNETS }}
+      ECS_SECURITY_GROUP: ${{ vars.ECS_SECURITY_GROUP }}
+      API_BASE_URL: ${{ vars.API_BASE_URL }}
+      SHA: ${{ github.sha }}
+    steps:
+      - name: Check the environment is configured
+        run: |
+          for v in AWS_REGION ECR_REPOSITORY ECS_CLUSTER ECS_SERVICE ECS_TASK_FAMILY ECS_MIGRATE_TASK_FAMILY ECS_SUBNETS ECS_SECURITY_GROUP API_BASE_URL; do
+            [ -n "$(printenv $v)" ] || { echo "::error::Environment variable $v is not set on '${{ inputs.environment }}'"; exit 1; }
+          done
+          [ -n "${{ vars.AWS_DEPLOY_ROLE_ARN }}" ] || { echo "::error::AWS_DEPLOY_ROLE_ARN is not set"; exit 1; }
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: backend/**/pom.xml
+      - name: mvn verify
+        if: ${{ !inputs.skip_tests }}
+        working-directory: backend
+        run: sh mvnw -B -ntp verify
+      - name: Package the bootable jar
+        working-directory: backend
+        run: sh mvnw -B -ntp -DskipTests -pl navix-app -am package
+
+      - uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: deploy-backend-${{ github.run_id }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076 # v2.0.1
+
+      - name: Build and push images (tag = commit SHA)
+        id: images
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          app="$REGISTRY/$ECR_REPOSITORY:$SHA"
+          mig="$REGISTRY/$ECR_REPOSITORY:migrate-$SHA"
+          # Tags are immutable: a re-deploy of the same SHA reuses the images.
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$SHA" >/dev/null 2>&1; then
+            echo "app image $SHA already in ECR"
+          else
+            docker build -f Dockerfile.backend.runtime -t "$app" --label org.opencontainers.image.revision="$SHA" .
+            docker push "$app"
+          fi
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="migrate-$SHA" >/dev/null 2>&1; then
+            echo "migrate image already in ECR"
+          else
+            docker build -f infra/docker/Dockerfile.migrate -t "$mig" --label org.opencontainers.image.revision="$SHA" .
+            docker push "$mig"
+          fi
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "migrate=$mig" >> "$GITHUB_OUTPUT"
+
+      - name: Flyway migrate (one-off task)
+        env:
+          MIGRATE_IMAGE: ${{ steps.images.outputs.migrate }}
+        run: |
+          set -euo pipefail
+          aws ecs describe-task-definition --task-definition "$ECS_MIGRATE_TASK_FAMILY" --query taskDefinition \
+            | jq --arg img "$MIGRATE_IMAGE" '.containerDefinitions[0].image = $img
+                | {family, taskRoleArn, executionRoleArn, networkMode, containerDefinitions, volumes,
+                   requiresCompatibilities, cpu, memory, runtimePlatform}
+                | with_entries(select(.value != null))' > migrate-td.json
+          td=$(aws ecs register-task-definition --cli-input-json file://migrate-td.json \
+                 --query taskDefinition.taskDefinitionArn --output text)
+          task=$(aws ecs run-task --cluster "$ECS_CLUSTER" --task-definition "$td" --launch-type FARGATE \
+                   --started-by "gh-${GITHUB_RUN_ID}" \
+                   --network-configuration "awsvpcConfiguration={subnets=[$ECS_SUBNETS],securityGroups=[$ECS_SECURITY_GROUP],assignPublicIp=DISABLED}" \
+                   --query 'tasks[0].taskArn' --output text)
+          echo "migration task $task"
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$task"
+          code=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task" --query 'tasks[0].containers[0].exitCode' --output text)
+          reason=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task" --query 'tasks[0].stoppedReason' --output text)
+          aws logs get-log-events --log-group-name "/ecs/$ECS_CLUSTER/migrate" \
+            --log-stream-name "migrate/migrate/${task##*/}" --query 'events[].message' --output text | tail -60 || true
+          if [ "$code" != "0" ]; then
+            echo "::error::Migration failed (exit $code, $reason). Nothing was deployed."
+            exit 1
+          fi
+
+      - name: Current task definition
+        run: |
+          aws ecs describe-task-definition --task-definition "$ECS_TASK_FAMILY" --query taskDefinition > task-definition.json
+      - id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@acd72bc11233ac43bac45ddb7b8e54ada737e6cd # v1.7.4
+        with:
+          task-definition: task-definition.json
+          container-name: backend
+          image: ${{ steps.images.outputs.app }}
+      - name: Roll the service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@f7b2b96b7fe1b20b452641919c0559bcc19ab8f9 # v2.3.3
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          wait-for-minutes: 20
+
+      - name: Health check
+        run: |
+          sh scripts/ci/wait_for_url.sh "$API_BASE_URL/actuator/health" 180 UP
+          curl -fsS "$API_BASE_URL/api/app/config" -o /dev/null
+          echo "Deployed $SHA to ${{ inputs.environment }}" >> "$GITHUB_STEP_SUMMARY"

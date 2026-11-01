@@ -1,0 +1,33 @@
+# Terraform hygiene only: fmt and validate both environments with no backend and no credentials.
+# Nothing here plans or applies; infra changes are applied by hand from infra/terraform/envs/<env>.
+name: infra
+on:
+  push:
+    branches: [main]
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+  pull_request:
+    paths: ["infra/**", ".github/workflows/infra.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: "1.9.8"
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive -diff infra/terraform
+      - name: terraform validate (staging, prod)
+        run: |
+          for env in staging prod; do
+            terraform -chdir=infra/terraform/envs/$env init -backend=false -input=false
+            terraform -chdir=infra/terraform/envs/$env validate
+          done
+      - name: shell scripts parse
+        run: bash -n infra/scripts/ssm_check.sh && sh -n scripts/ci/wait_for_url.sh
