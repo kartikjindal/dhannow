@@ -427,12 +427,11 @@ public class AuthController {
         captcha.verify(req.captchaToken(), ACTION_BORROWER_LOGIN); // ahead of the limiter — see staffLogin
         String limitKey = "pw:" + req.mobile().replaceAll("\\D", "");
         limiter.hit(limitKey, MAX_LOGIN_ATTEMPTS, LOGIN_WINDOW, LOGIN_COOLOFF, TOO_MANY_LOGINS);
-        // Read-only until the password matches: writing the mobile→id claim here, before any
-        // credential check, let an unauthenticated caller squat the id of a number they don't hold and
-        // lock its real owner out with CUSTOMER_ID_COLLISION. A collision with an existing claim is
-        // still refused up front, so a colliding number never gets to test this id's password.
-        long customerId = checkCustomerIdClaim(req.mobile());
-        BorrowerCredential cred = credentialRepository.findById(customerId).orElse(null);
+        // Read-only until the password matches: a number that has never signed in has no account, so nothing
+        // is registered here before a credential check.
+        Long existing = existingCustomerId(req.mobile());
+        long customerId = existing == null ? -1L : existing;
+        BorrowerCredential cred = existing == null ? null : credentialRepository.findById(customerId).orElse(null);
         if (cred == null) {
             log.warn("borrower password login failed reason=NO_PASSWORD_SET customerId={}", customerId);
             throw new BusinessException("NO_PASSWORD_SET",
@@ -443,7 +442,6 @@ public class AuthController {
             throw new BusinessException("INVALID_CREDENTIALS", "Invalid mobile or password");
         }
         limiter.clear(limitKey); // as on staff login: only wrong passwords count toward the three
-        claimCustomerId(req.mobile()); // first successful sign-in records the claim, as before
         String name = resolveBorrowerName(null, req.mobile());
         log.info("borrower password login ok customerId={}", customerId);
         return ApiResponse.ok(borrowerSession(customerId, name, req.deviceId(), req.deviceName(), req.appVersion()));
@@ -530,44 +528,35 @@ public class AuthController {
     }
 
     /**
-     * The caller's customer id, claiming it for this mobile the first time it is seen.
-     *
-     * <p>{@link #deriveCustomerId} keeps only the last 7 digits, so two different mobiles can derive
-     * the SAME id. Without this check the second borrower silently lands in the first one's account —
-     * their loans, their KYC, their repayments. The registry turns that into a loud failure.
-     *
-     * <p>ponytail: a read-then-insert race on a genuine collision surfaces as a PK violation (500)
-     * rather than this 422. Still loud, which is the entire point — a lock would buy a nicer error
-     * for a case that should not exist. The real fix is a surrogate customer id, not tighter locking.
+     * The caller's customer id (CC-24): the one already registered to this mobile, or a new server-generated id
+     * ({@code customer_id_seq}, shown as {@code DN0000001}) the first time the number signs in. The mobile is an
+     * attribute of the account, never the source of its id, so two numbers can no longer land in one account.
      */
     private long claimCustomerId(String mobile) {
-        long id = checkCustomerIdClaim(mobile);
-        if (mobileRepository.findById(id).isEmpty()) {
-            BorrowerMobile row = new BorrowerMobile();
-            row.setCustomerId(id);
-            row.setMobile(tenDigits(mobile));
-            mobileRepository.save(row);
+        String number = tenDigits(mobile);
+        Long existing = existingCustomerId(mobile);
+        if (existing != null) {
+            return existing;
         }
-        return id;
+        BorrowerMobile row = new BorrowerMobile();
+        row.setCustomerId(mobileRepository.nextCustomerId());
+        row.setMobile(number);
+        try {
+            return mobileRepository.saveAndFlush(row).getCustomerId();
+        } catch (org.springframework.dao.DataIntegrityViolationException race) {
+            // The same number's first two sign-ins at once: the other one registered it.
+            return mobileRepository.findByMobile(number).map(BorrowerMobile::getCustomerId).orElseThrow(() -> race);
+        }
     }
 
-    /**
-     * The derived id for {@code mobile}, refused with {@code CUSTOMER_ID_COLLISION} when another number
-     * already holds it. Writes nothing: callers that have not yet authenticated the caller use this,
-     * and {@link #claimCustomerId} adds the insert once they have.
-     */
-    private long checkCustomerIdClaim(String mobile) {
-        long id = deriveCustomerId(mobile);
-        String number = tenDigits(mobile);
-        BorrowerMobile claim = mobileRepository.findById(id).orElse(null);
-        if (claim != null && !claim.getMobile().equals(number)) {
-            // Only the id is logged: colliding numbers share their last 7 digits, so both masked
-            // forms are identical and printing them just looks like a bug. The id is the key ops
-            // needs — `select * from borrower_mobile where customer_id = <id>` has the claimant.
-            log.error("customerId collision customerId={} — two mobiles derive this id; "
-                    + "the claimant is in borrower_mobile", id);
-            throw new BusinessException("CUSTOMER_ID_COLLISION",
-                    "This number can't be used for sign-in right now. Please contact support.");
+    /** The customer id registered to this mobile, or null when the number has never signed in. Writes nothing. */
+    private Long existingCustomerId(String mobile) {
+        if (mobile == null || mobile.replaceAll("\\D", "").isEmpty()) {
+            throw new BusinessException("INVALID_MOBILE", "Mobile must contain digits");
+        }
+        Long id = mobileRepository.findByMobile(tenDigits(mobile)).map(BorrowerMobile::getCustomerId).orElse(null);
+        if (id != null && mobileRepository.deletionRequested(id)) {
+            throw new BusinessException("ACCOUNT_CLOSED", "This account has been closed at your request.");
         }
         return id;
     }
@@ -577,13 +566,4 @@ public class AuthController {
         return digits.length() > 10 ? digits.substring(digits.length() - 10) : digits;
     }
 
-    /** Stable demo customer id from a mobile: last 7 digits (mirrors the BFF's derivation). */
-    static long deriveCustomerId(String mobile) {
-        String digits = mobile.replaceAll("\\D", "");
-        if (digits.isEmpty()) {
-            throw new BusinessException("INVALID_MOBILE", "Mobile must contain digits");
-        }
-        String last7 = digits.length() > 7 ? digits.substring(digits.length() - 7) : digits;
-        return Long.parseLong(last7);
-    }
 }

@@ -87,7 +87,9 @@ describe("StaffPerformancePage", () => {
     // Mid-month, so "Today" is a different window from the default month (on the 1st they are equal).
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-15T12:00:00+05:30"));
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const perf = vi.spyOn(staffApi, "performance").mockResolvedValue({
       rows: [
         row({ daily: [{ date: "2026-10-01", actions: 3 }] }),

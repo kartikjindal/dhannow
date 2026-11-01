@@ -32,7 +32,8 @@ public class DsaLeadRejection {
     @Column(name = "dsa_staff_id", nullable = false)
     private Long dsaStaffId;
 
-    @Column(name = "pan", nullable = false, length = 10)
+    @Column(name = "pan", nullable = false)
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
     private String pan;
 
     /** OTHER_DSA | EXISTING_CUSTOMER */

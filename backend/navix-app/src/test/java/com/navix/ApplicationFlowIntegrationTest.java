@@ -1528,8 +1528,10 @@ class ApplicationFlowIntegrationTest {
         long draftOnly = createApplication(42L);
         long mine = createApplication(43L);
         for (long id : new long[] {submitted, draftOnly, mine}) {
-            jdbc.update("insert into customer_profile (application_id, full_name, aadhaar, created_at, created_by)"
-                    + " values (?, 'Dup Test', ?, now(), 'test')", id, aadhaar);
+            // Stored as the entity stores it (V111): encrypted, with its blind index.
+            jdbc.update("insert into customer_profile (application_id, full_name, aadhaar, aadhaar_hash, created_at,"
+                    + " created_by) values (?, 'Dup Test', ?, ?, now(), 'test')", id,
+                    com.navix.common.pii.PiiCipher.get().encrypt(aadhaar), com.navix.common.pii.PiiCipher.digitsIndex(aadhaar));
         }
 
         assertThat(profileRepository.findSubmittedApplicationIdsByAadhaarForOtherCustomers(aadhaar, 43L))

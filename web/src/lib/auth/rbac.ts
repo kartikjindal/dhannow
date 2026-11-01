@@ -234,8 +234,17 @@ export const WORKING_ROLES: Partial<Record<StaffRole, readonly StaffRole[]>> = {
   COLLECTION_HEAD: ["COLLECTION_HEAD", "COLLECTION_EXECUTIVE"],
 };
 
+/**
+ * The "Act as role" switcher is a non-prod convenience (PLAN Phase 9): on only when the build sets
+ * `NEXT_PUBLIC_ROLE_SWITCHER=true`. Off, every staffer works in their real role, and the backend ignores
+ * `X-Acting-Role` in prod anyway.
+ */
+export function roleSwitcherEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_ROLE_SWITCHER === "true";
+}
+
 export function workingRolesFor(real: StaffRole): readonly StaffRole[] {
-  return WORKING_ROLES[real] ?? [real];
+  return (roleSwitcherEnabled() && WORKING_ROLES[real]) || [real];
 }
 
 export function canWorkAs(real: StaffRole, r: StaffRole): boolean {

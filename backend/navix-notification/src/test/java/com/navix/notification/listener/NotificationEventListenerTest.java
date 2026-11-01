@@ -160,9 +160,17 @@ class NotificationEventListenerTest {
         assertThat(dispatched()).isEqualTo(NotificationType.LOAN_APPLIED_FAST_TRACK);
     }
 
+    /** PLAN Phase 9: disbursal and closure are dispatched by the outbox (retried), not by the after-commit listener. */
+    @Test
+    void disbursalAndClosureAreLeftToTheOutbox() {
+        listener.onApplicationTransitioned(transition("ACTIVATE", "ACTIVE"));
+        listener.onApplicationTransitioned(transition("REPAID", "CLOSED"));
+        verifyNoInteractions(dispatcher);
+    }
+
     @Test
     void mapsActivateToLoanDisbursedCarryingTheLoanId() {
-        listener.onApplicationTransitioned(transition("ACTIVATE", "ACTIVE"));
+        listener.notifyTransition(transition("ACTIVATE", "ACTIVE"));
 
         ArgumentCaptor<NotificationType> type = ArgumentCaptor.forClass(NotificationType.class);
         ArgumentCaptor<NotificationContext> ctx = ArgumentCaptor.forClass(NotificationContext.class);

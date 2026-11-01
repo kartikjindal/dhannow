@@ -108,6 +108,18 @@ public class Lead extends BaseAuditEntity {
      * {@code customer_profile.pan}, uppercase/trimmed), null for telecaller leads. A PAN may be
      * owned by at most one DSA lead ({@code uq_lead_dsa_pan}, V55).
      */
-    @Column(length = 10)
+    @Column
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
     private String pan;
+
+    /** Blind index of {@link #pan} (V111): the DSA uniqueness ({@code uq_lead_dsa_pan_hash}) and every PAN match. */
+    @Column(name = "pan_hash", length = 64)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    private String panHash;
+
+    @jakarta.persistence.PrePersist
+    @jakarta.persistence.PreUpdate
+    void indexPii() {
+        panHash = com.navix.common.pii.PiiCipher.panIndex(pan);
+    }
 }

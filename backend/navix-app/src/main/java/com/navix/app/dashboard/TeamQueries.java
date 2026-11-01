@@ -91,9 +91,9 @@ public class TeamQueries {
         String day = MetricSql.ist("ld.created_at");
         Map<Long, long[]> acc = new LinkedHashMap<>();
         metrics.jdbc().query("select ld.created_by_staff_id as staff, count(*) as leads,"
-                        + " count(*) filter (where ld.pan is not null and exists (select 1 from customer_profile cp"
+                        + " count(*) filter (where ld.pan_hash is not null and exists (select 1 from customer_profile cp"
                         + " join loan_application a on a.id = cp.application_id join loan l on l.id = a.loan_id"
-                        + " where cp.pan = ld.pan and l.disbursed_on >= " + day + ")) as converted,"
+                        + " where cp.pan_hash = ld.pan_hash and l.disbursed_on >= " + day + ")) as converted,"
                         + " count(*) filter (where ld.call_status = 'CONNECTED' or exists (select 1"
                         + " from customer_profile cp2 join loan_application a2 on a2.id = cp2.application_id"
                         + " join customer_call_log cl on cl.customer_id = a2.customer_id"

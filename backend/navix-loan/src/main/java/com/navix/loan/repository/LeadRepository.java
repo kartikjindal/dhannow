@@ -19,7 +19,12 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
      * The DSA-owned lead (any DSA) already holding {@code pan}, if one exists — the cross-DSA
      * duplicate guard at lead-creation time (backed by {@code uq_lead_dsa_pan}).
      */
-    Optional<Lead> findByPanAndOwnerDsaIdNotNull(String pan);
+    default Optional<Lead> findByPanAndOwnerDsaIdNotNull(String pan) {
+        return findByPanHashAndOwnerDsaIdNotNull(com.navix.common.pii.PiiCipher.panIndex(pan));
+    }
+
+    /** PAN is encrypted (V111): matched on its blind index. */
+    Optional<Lead> findByPanHashAndOwnerDsaIdNotNull(String panHash);
 
     /** A DSA's own leads, newest first — the hard ownership boundary for the DSA portal. */
     List<Lead> findByOwnerDsaIdOrderByIdDesc(Long ownerDsaId);
@@ -50,5 +55,10 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
     List<Lead> findByMobileIn(Collection<String> mobiles);
 
     /** Batch duplicate lookup for CSV import, PAN side. */
-    List<Lead> findByPanIn(Collection<String> pans);
+    default List<Lead> findByPanIn(Collection<String> pans) {
+        List<String> hashes = pans.stream().map(com.navix.common.pii.PiiCipher::panIndex).filter(java.util.Objects::nonNull).distinct().toList();
+        return hashes.isEmpty() ? List.of() : findByPanHashIn(hashes);
+    }
+
+    List<Lead> findByPanHashIn(Collection<String> panHashes);
 }

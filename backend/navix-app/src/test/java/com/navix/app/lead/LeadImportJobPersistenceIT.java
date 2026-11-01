@@ -88,7 +88,8 @@ class LeadImportJobPersistenceIT {
         Long id = repository.saveAndFlush(job).getId();
 
         assertThat(repository.findById(id)).get().satisfies(found ->
-                assertThat(found.getIssuesJson()).isEqualTo(issues));
+                // jsonb normalises the spacing, so compare the JSON, not the string.
+                assertThat(readTree(found.getIssuesJson())).isEqualTo(readTree(issues)));
         // Stored AS jsonb, not as a quoted string in a text column — the mapping is the point.
         assertThat(jdbc.queryForObject(
                 "select jsonb_typeof(issues_json) from lead_import_job where id = ?", String.class, id))
@@ -129,5 +130,13 @@ class LeadImportJobPersistenceIT {
         List<String> live = List.of(LeadImportJob.QUEUED, LeadImportJob.RUNNING);
         assertThat(repository.existsByUploadedByStaffIdAndStatusIn(7L, live)).isTrue();
         assertThat(repository.existsByUploadedByStaffIdAndStatusIn(8L, live)).isFalse();
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode readTree(String json) {
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().readTree(json);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 }

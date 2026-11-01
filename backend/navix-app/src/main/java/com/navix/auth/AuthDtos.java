@@ -79,6 +79,12 @@ public final class AuthDtos {
         public AuthResponse(String token, String id, String name, String role, Long customerId) {
             this(token, id, name, role, customerId, null, null, null);
         }
+
+        /** The customer id as the borrower sees it ({@code DN0000001}, CC-24). */
+        @com.fasterxml.jackson.annotation.JsonProperty("customerCode")
+        public String customerCode() {
+            return com.navix.common.util.CustomerIds.code(customerId);
+        }
     }
 
     /** Spend a refresh token for a new access + refresh pair. It is bound to the device it was issued to. */

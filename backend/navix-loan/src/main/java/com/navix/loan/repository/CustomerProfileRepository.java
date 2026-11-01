@@ -39,9 +39,15 @@ public interface CustomerProfileRepository extends JpaRepository<CustomerProfile
     // owning customerId, then excluding the queried customer. This lets the SAME customer
     // re-onboard through a new application (a second profile row carrying the same identity) while
     // still blocking a different person from reusing the PAN / mobile.
+    // PAN and Aadhaar are encrypted (V111): every equality goes through the blind index. The defaults keep the
+    // plain-value signatures for callers.
+    default boolean existsPanForOtherCustomer(String pan, Long customerId) {
+        return existsPanHashForOtherCustomer(com.navix.common.pii.PiiCipher.panIndex(pan), customerId);
+    }
+
     @Query("select (count(p) > 0) from CustomerProfile p, LoanApplication a "
-            + "where p.applicationId = a.id and p.pan = :pan and a.customerId <> :customerId")
-    boolean existsPanForOtherCustomer(@Param("pan") String pan, @Param("customerId") Long customerId);
+            + "where p.applicationId = a.id and p.panHash = :panHash and a.customerId <> :customerId")
+    boolean existsPanHashForOtherCustomer(@Param("panHash") String panHash, @Param("customerId") Long customerId);
 
     @Query("select (count(p) > 0) from CustomerProfile p, LoanApplication a "
             + "where p.applicationId = a.id and p.mobile = :mobile and a.customerId <> :customerId")
@@ -53,11 +59,15 @@ public interface CustomerProfileRepository extends JpaRepository<CustomerProfile
      * row for the credit team, never reported to the borrower — so the write path cannot be used to
      * probe which numbers we hold, and a genuine returning borrower on a new mobile is not refused.
      */
+    default java.util.List<Long> findOtherCustomerIdsByAadhaar(String aadhaar, Long customerId) {
+        return findOtherCustomerIdsByAadhaarHash(com.navix.common.pii.PiiCipher.digitsIndex(aadhaar), customerId);
+    }
+
     @Query("select distinct a.customerId from CustomerProfile p, LoanApplication a "
-            + "where p.applicationId = a.id and p.aadhaar = :aadhaar and a.customerId <> :customerId "
+            + "where p.applicationId = a.id and p.aadhaarHash = :aadhaarHash and a.customerId <> :customerId "
             + "order by a.customerId")
-    java.util.List<Long> findOtherCustomerIdsByAadhaar(@Param("aadhaar") String aadhaar,
-                                                       @Param("customerId") Long customerId);
+    java.util.List<Long> findOtherCustomerIdsByAadhaarHash(@Param("aadhaarHash") String aadhaarHash,
+                                                           @Param("customerId") Long customerId);
 
     /**
      * The OTHER customers' applications holding this Aadhaar number that were actually submitted (ever
@@ -66,15 +76,20 @@ public interface CustomerProfileRepository extends JpaRepository<CustomerProfile
      * number's real owner rejected later (those still raise the silent {@code AADHAAR_DUPLICATE} flag) —
      * and neither does a file itself rejected as {@code FRAUD_REJECTED}, whose identity documents disagreed.
      */
+    default java.util.List<Long> findSubmittedApplicationIdsByAadhaarForOtherCustomers(String aadhaar,
+                                                                                       Long customerId) {
+        return findSubmittedApplicationIdsByAadhaarHashForOtherCustomers(com.navix.common.pii.PiiCipher.digitsIndex(aadhaar), customerId);
+    }
+
     @Query("select a.id from CustomerProfile p, LoanApplication a "
-            + "where p.applicationId = a.id and p.aadhaar = :aadhaar and a.customerId <> :customerId "
+            + "where p.applicationId = a.id and p.aadhaarHash = :aadhaarHash and a.customerId <> :customerId "
             + "and exists (select e.id from ApplicationEvent e where e.applicationId = a.id "
             + "and e.toStatus = com.navix.loan.domain.ApplicationStatus.KYC_PENDING) "
             + "and not exists (select r.id from ApplicationRejection r where r.applicationId = a.id "
             + "and r.reasonCode = 'FRAUD_REJECTED') "
             + "order by a.id desc")
-    java.util.List<Long> findSubmittedApplicationIdsByAadhaarForOtherCustomers(
-            @Param("aadhaar") String aadhaar, @Param("customerId") Long customerId);
+    java.util.List<Long> findSubmittedApplicationIdsByAadhaarHashForOtherCustomers(
+            @Param("aadhaarHash") String aadhaarHash, @Param("customerId") Long customerId);
 
     /**
      * Every mobile this customer has on file across their applications, newest application first.
@@ -94,7 +109,11 @@ public interface CustomerProfileRepository extends JpaRepository<CustomerProfile
      * rejection (spec: a PAN belonging to an existing customer is rejected the same as a PAN
      * already held by another DSA's lead).
      */
-    boolean existsByPan(String pan);
+    default boolean existsByPan(String pan) {
+        return existsByPanHash(com.navix.common.pii.PiiCipher.panIndex(pan));
+    }
+
+    boolean existsByPanHash(String panHash);
 
     /**
      * The single earliest {@link com.navix.loan.entity.LoanApplication} created strictly after
@@ -102,11 +121,16 @@ public interface CustomerProfileRepository extends JpaRepository<CustomerProfile
      * Pinning to the earliest post-lead application (not the latest, and never a pre-existing
      * in-flight one) is what keeps a customer's repeat borrowing invisible to the DSA.
      */
+    default List<com.navix.loan.entity.LoanApplication> findApplicationsAfterByPan(String pan,
+                                                                                  java.time.Instant after) {
+        return findApplicationsAfterByPanHash(com.navix.common.pii.PiiCipher.panIndex(pan), after);
+    }
+
     @Query("select a from CustomerProfile p, LoanApplication a "
-            + "where p.applicationId = a.id and p.pan = :pan and a.createdAt > :after "
+            + "where p.applicationId = a.id and p.panHash = :panHash and a.createdAt > :after "
             + "order by a.createdAt asc, a.id asc")
-    List<com.navix.loan.entity.LoanApplication> findApplicationsAfterByPan(
-            @Param("pan") String pan, @Param("after") java.time.Instant after);
+    List<com.navix.loan.entity.LoanApplication> findApplicationsAfterByPanHash(
+            @Param("panHash") String panHash, @Param("after") java.time.Instant after);
 
     /**
      * Every application belonging to any of {@code pans}, oldest first — the BATCH form of
@@ -121,17 +145,29 @@ public interface CustomerProfileRepository extends JpaRepository<CustomerProfile
      * <p>Rows are {@code [pan, application]}. Bounded in practice by how many advances a PAN has
      * taken, which is small.
      */
+    default List<Object[]> findApplicationsByPanIn(Collection<String> pans) {
+        return pans.isEmpty() ? List.of() : findApplicationsByPanHashIn(hashes(pans));
+    }
+
     @Query("select p.pan, a from CustomerProfile p, LoanApplication a "
-            + "where p.applicationId = a.id and p.pan in :pans "
+            + "where p.applicationId = a.id and p.panHash in :hashes "
             + "order by a.createdAt asc, a.id asc")
-    List<Object[]> findApplicationsByPanIn(@Param("pans") Collection<String> pans);
+    List<Object[]> findApplicationsByPanHashIn(@Param("hashes") Collection<String> hashes);
 
     /**
      * Which of {@code pans} already belong to a customer — the CSV lead import's "already a
      * customer" check. Distinct, non-null values only.
      */
-    @Query("select distinct p.pan from CustomerProfile p where p.pan in :pans")
-    List<String> findPansIn(@Param("pans") Collection<String> pans);
+    default List<String> findPansIn(Collection<String> pans) {
+        return pans.isEmpty() ? List.of() : findPansByHashIn(hashes(pans)).stream().distinct().toList();
+    }
+
+    @Query("select p.pan from CustomerProfile p where p.panHash in :hashes")
+    List<String> findPansByHashIn(@Param("hashes") Collection<String> hashes);
+
+    private static List<String> hashes(Collection<String> pans) {
+        return pans.stream().map(com.navix.common.pii.PiiCipher::panIndex).filter(java.util.Objects::nonNull).distinct().toList();
+    }
 
     /** Same as {@link #findPansIn}, on mobile. */
     @Query("select distinct p.mobile from CustomerProfile p where p.mobile in :mobiles")
@@ -148,9 +184,15 @@ public interface CustomerProfileRepository extends JpaRepository<CustomerProfile
      * an option — hence one indexed query, capped by the caller's {@link Pageable}.
      */
     @Query("select p from CustomerProfile p "
-            + "where lower(p.fullName) like :needle or p.mobile like :needle or lower(p.pan) like :needle "
+            + "where lower(p.fullName) like :needle or p.mobile like :needle or p.panHash = :panHash "
             + "order by p.applicationId desc")
-    List<CustomerProfile> searchByNameMobileOrPan(@Param("needle") String needle, Pageable pageable);
+    List<CustomerProfile> searchByNameMobileOrPanHash(@Param("needle") String needle, @Param("panHash") String panHash,
+                                                      Pageable pageable);
+
+    /** {@code needle} is the lower-cased {@code %q%} pattern; {@code q} the raw term, matched as a full PAN. */
+    default List<CustomerProfile> searchByNameMobileOrPan(String needle, String q, Pageable pageable) {
+        return searchByNameMobileOrPanHash(needle, q == null ? null : com.navix.common.pii.PiiCipher.panIndex(q), pageable);
+    }
 
     /** Which applications hold stored bureau facts and when they were pulled - without the (large) JSON. */
     interface BriefMetaRow {

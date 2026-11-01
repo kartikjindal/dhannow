@@ -1277,7 +1277,7 @@ public class ApplicationFlowService {
             // Over-fetch: the executive scoping below is applied after the query, so a page of
             // matches that all belong to other executives must not starve the result.
             List<Long> appIds = profileRepository
-                    .searchByNameMobileOrPan("%" + trimmed.toLowerCase(Locale.ROOT) + "%",
+                    .searchByNameMobileOrPan("%" + trimmed.toLowerCase(Locale.ROOT) + "%", trimmed,
                             org.springframework.data.domain.PageRequest.of(0, Math.max(limit * 4, limit)))
                     .stream()
                     .map(CustomerProfile::getApplicationId)

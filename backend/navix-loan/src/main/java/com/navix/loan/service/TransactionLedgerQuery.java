@@ -159,7 +159,7 @@ public class TransactionLedgerQuery {
         return jdbc.query(sql, params, (rs, i) -> new TransactionView(
                 rs.getString("id"), rs.getString("type"), rs.getString("direction"),
                 nullableLong(rs, "loan_id"), nullableLong(rs, "customer_id"),
-                rs.getString("borrower_name"), rs.getString("pan"),
+                rs.getString("borrower_name"), com.navix.common.pii.PiiView.pan(rs.getString("pan")),
                 rs.getLong("amount_paise"), rs.getString("txn_ref"), rs.getString("status"),
                 rs.getObject("txn_date", LocalDate.class), rs.getString("proof_url"),
                 rs.getObject("due_date", LocalDate.class), rs.getInt("grace_days")));

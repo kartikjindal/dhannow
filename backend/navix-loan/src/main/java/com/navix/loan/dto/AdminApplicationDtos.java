@@ -1,5 +1,6 @@
 package com.navix.loan.dto;
 
+import com.navix.common.pii.PiiView;
 import com.navix.loan.domain.ApplicationStatus;
 import com.navix.loan.entity.CustomerProfile;
 import com.navix.loan.entity.LoanApplication;
@@ -44,8 +45,8 @@ public final class AdminApplicationDtos {
             return new RejectionView(r.getId(), r.getApplicationId(), r.getCustomerId(),
                     p == null ? null : p.getFullName(),
                     r.getMobile() != null ? r.getMobile() : (p == null ? null : p.getMobile()),
-                    p == null ? null : p.getPan(),
-                    p == null ? null : p.getSalaryAccountNumber(),
+                    p == null ? null : PiiView.pan(p.getPan()),
+                    p == null ? null : PiiView.account(p.getSalaryAccountNumber()),
                     p == null ? null : p.getSalaryIfsc(),
                     amountRequestedPaise,
                     p != null && p.getBureauScore() != null ? p.getBureauScore().intValue() : null,
@@ -112,7 +113,7 @@ public final class AdminApplicationDtos {
                     a.getSalaryCreditDay(), a.getAssignedExecutiveId(), a.getLoanId(),
                     p != null,
                     p != null ? p.getFullName() : null,
-                    p != null ? p.getPan() : null,
+                    p != null ? PiiView.pan(p.getPan()) : null,
                     p != null ? p.getMobile() : null,
                     p != null ? p.getEmail() : null,
                     p != null ? p.getDob() : null,
@@ -121,7 +122,7 @@ public final class AdminApplicationDtos {
                     p != null ? p.getEmploymentStatus() : null,
                     p != null ? p.getMonthlySalaryPaise() : null,
                     p != null ? p.getSalaryBank() : null,
-                    p != null ? p.getSalaryAccountNumber() : null,
+                    p != null ? PiiView.account(p.getSalaryAccountNumber()) : null,
                     p != null ? p.getSalaryIfsc() : null,
                     p != null && p.getBureauScore() != null ? p.getBureauScore().intValue() : null,
                     p != null && p.getCreditStarRating() != null ? p.getCreditStarRating().doubleValue() : null,

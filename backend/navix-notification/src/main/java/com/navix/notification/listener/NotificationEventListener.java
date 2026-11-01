@@ -74,10 +74,20 @@ public class NotificationEventListener {
         this.storage = storage;
     }
 
-    /** The application state-machine: one event per transition, mapped by {@code action} (§5). */
+    /**
+     * The application state-machine: one event per transition, mapped by {@code action} (§5). Disbursal and closure
+     * go through the outbox instead ({@link OutboxNotifications}, PLAN Phase 9), so they are retried.
+     */
     @Async("notificationExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onApplicationTransitioned(ApplicationTransitionedEvent e) {
+        if (!OutboxNotifications.viaOutbox(e)) {
+            notifyTransition(e);
+        }
+    }
+
+    /** Dispatch the notification for one transition (also the outbox's handler for disbursal and closure). */
+    public void notifyTransition(ApplicationTransitionedEvent e) {
         NotificationType type = mapAction(e);
         if (type == null) {
             return; // CREATE / AUTO_ROUTE / VALIDATE_SUCCESS are deliberate no-ops
@@ -404,8 +414,7 @@ public class NotificationEventListener {
                 .build());
     }
 
-    @Async("notificationExecutor")
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    /** Called by the outbox ({@link OutboxNotifications}): retried with backoff if it fails (EXT-22). */
     public void onExtensionActivated(com.navix.common.notification.event.ExtensionActivatedEvent e) {
         dispatcher.dispatch(NotificationType.EXTENSION_ACTIVATED, NotificationContext.builder()
                 .customerId(e.customerId()).loanId(e.loanId())

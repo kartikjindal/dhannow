@@ -10,13 +10,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-/**
- * {@link BorrowerIdentityAdapter} against the real {@code borrower_mobile} claim shape — the guard
- * an ADMIN mobile correction (navix-loan's {@code CustomerService}) relies on to catch a number that
- * collides with a DIFFERENT customer's login identity even when the two numbers are never
- * string-equal (login identity keeps only the last 7 digits — see
- * {@code AuthController.deriveCustomerId}).
- */
+/** {@link BorrowerIdentityAdapter} over the {@code borrower_mobile} sign-in registry (CC-24). */
 @ExtendWith(MockitoExtension.class)
 class BorrowerIdentityAdapterTest {
 
@@ -37,42 +31,37 @@ class BorrowerIdentityAdapterTest {
     }
 
     @Test
-    void noCollisionWhenTheDerivedIdIsUnclaimed() {
-        when(mobileRepository.findById(6543210L)).thenReturn(Optional.empty());
+    void noCollisionWhenTheMobileIsUnregistered() {
+        when(mobileRepository.findByMobile("9876543210")).thenReturn(Optional.empty());
 
         assertThat(adapter.wouldCollideWithAnotherCustomer("9876543210", 9000001L)).isFalse();
     }
 
     @Test
-    void noCollisionWhenTheClaimBelongsToTheSameCustomer() {
-        when(mobileRepository.findById(6543210L)).thenReturn(Optional.of(claim(9000001L, "9876543210")));
+    void noCollisionWhenTheMobileSignsInToTheSameCustomer() {
+        when(mobileRepository.findByMobile("9876543210")).thenReturn(Optional.of(claim(9000001L, "9876543210")));
 
         assertThat(adapter.wouldCollideWithAnotherCustomer("9876543210", 9000001L)).isFalse();
     }
 
     @Test
-    void collidesWhenTheClaimBelongsToADifferentCustomer() {
-        when(mobileRepository.findById(6543210L)).thenReturn(Optional.of(claim(4200002L, "9876543210")));
+    void collidesWhenTheMobileSignsInToADifferentCustomer() {
+        when(mobileRepository.findByMobile("9876543210")).thenReturn(Optional.of(claim(4200002L, "9876543210")));
 
         assertThat(adapter.wouldCollideWithAnotherCustomer("9876543210", 9000001L)).isTrue();
     }
 
-    /**
-     * The whole reason this port exists: TWO DIFFERENT 10-digit numbers sharing the same last 7
-     * digits derive the SAME login identity, so a collision must be detected even though the raw
-     * mobile strings are never equal — a plain string-uniqueness check would miss this entirely.
-     */
+    /** CC-24: numbers sharing their last seven digits are different people now; only the same number collides. */
     @Test
-    void collidesForADifferentNumberThatSharesTheSameLastSevenDigits() {
-        // "8006543210" and "9876543210" both end in the same last 7 digits, "6543210".
-        when(mobileRepository.findById(6543210L)).thenReturn(Optional.of(claim(4200002L, "9876543210")));
+    void cc24_aDifferentNumberWithTheSameLastSevenDigitsDoesNotCollide() {
+        when(mobileRepository.findByMobile("8006543210")).thenReturn(Optional.empty());
 
-        assertThat(adapter.wouldCollideWithAnotherCustomer("8006543210", 9000001L)).isTrue();
+        assertThat(adapter.wouldCollideWithAnotherCustomer("8006543210", 9000001L)).isFalse();
     }
 
     @Test
-    void stripsNonDigitCharactersBeforeDeriving() {
-        when(mobileRepository.findById(6543210L)).thenReturn(Optional.empty());
+    void stripsNonDigitCharactersAndTheCountryCode() {
+        when(mobileRepository.findByMobile("9876543210")).thenReturn(Optional.empty());
 
         assertThat(adapter.wouldCollideWithAnotherCustomer("+91 98765 43210", 9000001L)).isFalse();
     }

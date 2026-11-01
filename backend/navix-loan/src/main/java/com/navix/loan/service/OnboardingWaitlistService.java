@@ -1,5 +1,6 @@
 package com.navix.loan.service;
 
+import com.navix.common.pii.PiiView;
 import com.navix.common.exception.BusinessException;
 import com.navix.common.featureflag.FeatureFlag;
 import com.navix.common.featureflag.FeatureFlagRepository;
@@ -64,12 +65,12 @@ public class OnboardingWaitlistService {
         }
     }
 
-    /** The ADMIN list row — identifiers in full; this is the only surface that shows them. */
+    /** The ADMIN list row — identifiers in full for PII_VIEW (audited), masked otherwise (PLAN Phase 9). */
     public record WaitlistRow(Long id, Long customerId, String fullName, String email, String mobile,
                               String pan, String aadhaar, Instant createdAt) {
         static WaitlistRow of(OnboardingWaitlist w) {
             return new WaitlistRow(w.getId(), w.getCustomerId(), w.getFullName(), w.getEmail(),
-                    w.getMobile(), w.getPan(), w.getAadhaar(), w.getCreatedAt());
+                    w.getMobile(), PiiView.pan(w.getPan()), PiiView.aadhaar(w.getAadhaar()), w.getCreatedAt());
         }
     }
 

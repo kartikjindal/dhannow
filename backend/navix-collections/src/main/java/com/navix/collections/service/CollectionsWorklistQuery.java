@@ -67,7 +67,7 @@ public class CollectionsWorklistQuery {
                          when cast(:today as date) - l.due_date <= 90 then 'T60_T90'
                          else 'T90_PLUS'
                        end as bucket,
-                       p.full_name, p.pan, p.mobile, p.employer, p.monthly_salary_paise as salary,
+                       p.full_name, p.pan_hash, p.mobile, p.employer, p.monthly_salary_paise as salary,
                        cc.assigned_officer_id as officer_id, su.name as officer_name,
                        (select e.status from loan_extension e where e.loan_id = l.id
                         order by e.seq desc limit 1) as ext_state
@@ -249,8 +249,10 @@ public class CollectionsWorklistQuery {
         }
         if (f.needle() != null && !f.needle().isBlank()) {
             p.addValue("needle", "%" + escapeLike(f.needle().strip().toLowerCase(java.util.Locale.ROOT)) + "%");
+            // PAN is encrypted (V111): a full PAN matches its blind index.
+            p.addValue("panHash", com.navix.common.pii.PiiCipher.panIndex(f.needle().strip()));
             clauses.add("(lower(w.full_name) like :needle escape '\\'"
-                    + " or lower(w.pan) like :needle escape '\\'"
+                    + " or w.pan_hash = :panHash"
                     + " or w.mobile like :needle escape '\\'"
                     + " or lower(w.employer) like :needle escape '\\'"
                     + " or lower(w.officer_name) like :needle escape '\\'"

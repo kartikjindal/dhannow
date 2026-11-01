@@ -1,5 +1,6 @@
 package com.navix.loan.service;
 
+import com.navix.common.pii.PiiView;
 import com.navix.common.loan.LoanDirectory;
 import com.navix.common.loan.LoanDues;
 import com.navix.common.loan.LoanSummary;
@@ -131,9 +132,9 @@ public class LoanDirectoryAdapter implements LoanDirectory {
             }
             LoanApplication app = appByLoanId.get(loan.getId());
             CustomerProfile profile = app != null ? profileByAppId.get(app.getId()) : null;
-            String account = app != null && app.getDisbursalAccountNumber() != null
+            String account = PiiView.account(app != null && app.getDisbursalAccountNumber() != null
                     ? app.getDisbursalAccountNumber()
-                    : (profile != null ? profile.getSalaryAccountNumber() : null);
+                    : (profile != null ? profile.getSalaryAccountNumber() : null));
             String ifsc = app != null && app.getDisbursalIfsc() != null
                     ? app.getDisbursalIfsc()
                     : (profile != null ? profile.getSalaryIfsc() : null);
@@ -324,7 +325,7 @@ public class LoanDirectoryAdapter implements LoanDirectory {
                 loan.getDisbursedOn(),
                 loan.getDueDate(),
                 profile != null ? profile.getFullName() : null,
-                profile != null ? profile.getPan() : null,
+                profile != null ? PiiView.pan(profile.getPan()) : null,
                 profile != null ? profile.getMobile() : null,
                 profile != null ? profile.getEmployer() : null,
                 profile != null ? profile.getEmploymentStatus() : null,

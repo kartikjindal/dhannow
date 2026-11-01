@@ -64,12 +64,16 @@ class SecurityMatrixIT {
     private StaffUserRepository staffUserRepository;
     @Autowired
     private LoanRepository loanRepository;
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     @MockBean
     private ApplicationVerificationService verificationService;
 
     @BeforeEach
     void allowSubmitKyc() {
+        // V76 seeds onboarding-paused ON (prod's choice); these tests create applications.
+        jdbc.update("update feature_flag set enabled = false where flag_key = 'onboarding-paused'");
         when(verificationService.allRequiredPassed(anyLong())).thenReturn(true);
         when(verificationService.intakeCardsComplete(anyLong())).thenReturn(true);
     }
@@ -113,15 +117,14 @@ class SecurityMatrixIT {
      * route and was stopped only where a service checked — {@code InviteService.acceptInvite}
      * deliberately does not.
      *
-     * <p>401 rather than 403: the chain's {@code HttpStatusEntryPoint(UNAUTHORIZED)} answers the
-     * denial. Verified against the live ALB on 2026-07-26 — the borrower token is valid (it still
-     * gets 200 on {@code /api/payment-settings}), so this is the namespace gate rejecting it, not
-     * the token being unreadable.
+     * <p>403, not 401: the borrower token is valid (it still gets 200 on {@code /api/payment-settings}),
+     * so the caller is authenticated with the wrong audience — forbidden, not unauthenticated. 401 stays
+     * for a missing or invalid token (PLAN Phase 9).
      */
     @Test
     void borrowerBearer_onStaffNamespace_isRejected() throws Exception {
         mvc.perform(get("/api/staff/me").header("Authorization", bearer("21", "BORROWER")))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
     }
 
     /** The same borrower token still reaches the any-authed routes — the gate is scoped, not blanket. */
@@ -232,7 +235,7 @@ class SecurityMatrixIT {
     @Test
     void borrowerBearer_onDsaNamespace_isRejected() throws Exception {
         mvc.perform(get("/api/dsa/leads").header("Authorization", bearer("21", "BORROWER")))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
     }
 
     // ---- helpers -------------------------------------------------------------------

@@ -60,6 +60,10 @@ class AdminApplicationServiceTest {
 
     @BeforeEach
     void setUp() {
+        // A throwaway key: the search matches a full PAN on its blind index (PLAN Phase 9).
+        byte[] key = new byte[32];
+        new java.security.SecureRandom().nextBytes(key);
+        com.navix.common.pii.PiiCipher.install(new com.navix.common.pii.PiiCipher(key));
         service = new AdminApplicationService(applicationRepository, profileRepository, verification,
                 rejectionRepository, eventRepository, ownerRepository, bureauStateService, staffDirectory, trustSignals,
                 jdbc);

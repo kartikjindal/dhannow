@@ -9,7 +9,7 @@ import { Brand } from "@/components/site/brand";
 import { NotificationBell } from "@/components/notifications/notification-bell";
 import { GlobalSearch } from "@/components/staff/global-search";
 import { Toaster } from "@/components/ui/toast";
-import { can, STAFF_ROLE_LABELS, type StaffRole } from "@/lib/auth/rbac";
+import { can, roleSwitcherEnabled, STAFF_ROLE_LABELS, type StaffRole } from "@/lib/auth/rbac";
 import { collectionsApi, featureFlagsApi, type FeatureFlags } from "@/lib/api/applications";
 import { useStaffSession, signOutStaff } from "@/lib/auth/staff-session";
 import { RoleSwitcher } from "@/components/staff/role-switcher";
@@ -373,7 +373,9 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
                 <GlobalSearch realRole={session.realRole} role={session.role} staffId={session.id} flags={flags} />
               )}
               <NotificationBell scope="staff" />
-              <RoleSwitcher staffId={session.id} realRole={session.realRole} role={session.role} />
+              {roleSwitcherEnabled() && (
+                <RoleSwitcher staffId={session.id} realRole={session.realRole} role={session.role} />
+              )}
               <Link
                 href="/staff/profile"
                 title={`${session.name} · ${STAFF_ROLE_LABELS[session.realRole]}`}

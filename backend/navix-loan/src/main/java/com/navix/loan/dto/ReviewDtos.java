@@ -1,5 +1,6 @@
 package com.navix.loan.dto;
 
+import com.navix.common.pii.PiiView;
 import com.navix.loan.entity.CustomerProfile;
 import com.navix.loan.entity.ApplicationDocument;
 import jakarta.validation.constraints.NotBlank;
@@ -133,13 +134,13 @@ public final class ReviewDtos {
             Instant pepDeclaredAt,
             /** Optional EPFO UAN (12 digits, V66) — staff-visible, same as {@code employer}. */
             String uan,
-            /** The Aadhaar number typed at intake (V75), in FULL — staff and ADMIN read it unmasked by
-             *  product decision; the borrower sees their own. Null for files submitted before V75. */
+            /** The Aadhaar number typed at intake (V75): in full for the borrower and PII_VIEW roles, masked for other
+             *  staff (PLAN Phase 9). Null for files submitted before V75. */
             String aadhaar) {
 
         public static ProfileView of(CustomerProfile p) {
             return new ProfileView(
-                    p.getApplicationId(), p.getFullName(), p.getPan(),
+                    p.getApplicationId(), p.getFullName(), PiiView.pan(p.getPan()),
                     p.getMobile(), p.getDob(),
                     p.getAddress(), p.getEmployer(), p.getEmploymentStatus(),
                     p.getMonthlySalaryPaise(), p.getSalaryBank(),
@@ -153,10 +154,10 @@ public final class ReviewDtos {
                     p.getPersonalEmailVerified(), p.getOfficialEmailOtpVerified(),
                     p.getAddressVerified(), p.getPennyDropVerified(), p.getNameMatchScore(),
                     p.getCreditBriefSummary(), p.getCreditBriefGeneratedAt(),
-                    p.getOfficialEmail(), p.getSalaryAccountNumber(), p.getSalaryIfsc(),
+                    p.getOfficialEmail(), PiiView.account(p.getSalaryAccountNumber()), p.getSalaryIfsc(),
                     p.getSalaryAccountMobile(), p.getPreviousSalaryDate(),
                     p.getTermsVersion(), p.getTermsAcceptedAt(), p.getPepDeclaredAt(), p.getUan(),
-                    p.getAadhaar());
+                    PiiView.aadhaar(p.getAadhaar()));
         }
 
         /**

@@ -43,6 +43,8 @@ class PasswordResetServiceTest {
     private EmailClient emailClient;
     @Mock
     private EmailSuppressionService suppression;
+    @Mock
+    private BorrowerMobileRepository mobileRepository;
 
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private PasswordResetService service;
@@ -52,7 +54,7 @@ class PasswordResetServiceTest {
         EmailProperties emailProperties = new EmailProperties("log", true, null, null, null);
         service = new PasswordResetService(tokenRepository, credentialRepository, staffRepository,
                 profileRepository, passwordEncoder, emailClient, suppression, emailProperties,
-                "http://localhost:3000", new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"));
+                "http://localhost:3000", new com.navix.common.brand.BrandProperties("DhanNow", "www.dhannow.com", "9211331169", "support@dhannow.com"), mobileRepository);
     }
 
     private static StaffUser staff(long id, String email, StaffStatus status) {
@@ -115,6 +117,10 @@ class PasswordResetServiceTest {
     void borrowerResetSendsOnEmailMatch() {
         when(profileRepository.findFirstByEmailIgnoreCaseOrderByApplicationIdDesc("borrower@navix.test"))
                 .thenReturn(Optional.of(profile("borrower@navix.test", "9876543210")));
+        BorrowerMobile registered = new BorrowerMobile();
+        registered.setCustomerId(1L);
+        registered.setMobile("9876543210");
+        when(mobileRepository.findByMobile("9876543210")).thenReturn(Optional.of(registered));
         when(emailClient.send(any())).thenReturn(EmailResult.ok("ref"));
 
         service.requestBorrowerReset("borrower@navix.test");

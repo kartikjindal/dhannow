@@ -89,8 +89,9 @@ public class AdminApplicationService {
      * Columns the register's header panels may filter — SQL written as literals here, never built from a
      * request (see {@link FilterColumns}). Only stored columns: completeness is derived and stays a
      * separate param. Money is paise in the column and rupees on screen, hence the display scale of 100
-     * on the bound, not arithmetic on the column. Identity columns (PAN, account, mobile) are TEXT only —
-     * a checklist of thousands of them would be useless and a small enumeration oracle.
+     * on the bound, not arithmetic on the column. Identity columns (IFSC, mobile) are TEXT only — a checklist of
+     * thousands of them would be useless and a small enumeration oracle. PAN and account are encrypted (V111) and
+     * not filterable; a full PAN is found through {@code q}.
      */
     static final FilterColumns COLUMNS = FilterColumns.builder()
             .column("status", "a.status", Kind.IN)
@@ -98,8 +99,6 @@ public class AdminApplicationService {
             .column("creditScore", "p.bureau_score", Kind.NUM)
             .column("risk", "p.risk_category", Kind.IN)
             .column("name", "p.full_name", Kind.TEXT)
-            .column("pan", "p.pan", Kind.TEXT)
-            .column("account", "p.salary_account_number", Kind.TEXT)
             .column("ifsc", "p.salary_ifsc", Kind.TEXT)
             .column("mobile", "p.mobile", Kind.TEXT)
             .build();
@@ -136,12 +135,14 @@ public class AdminApplicationService {
     private List<Long> matchingIds(String q, FilterSpec spec) {
         MapSqlParameterSource params = new MapSqlParameterSource("needle", q == null || q.isBlank() ? "%"
                 : "%" + LikeEscape.escapeLike(q.trim().toLowerCase()) + "%");
+        // PAN is encrypted (V111): a full PAN matches its blind index.
+        params.addValue("panHash", q == null || q.isBlank() ? null : com.navix.common.pii.PiiCipher.panIndex(q));
         String sql = "select a.id from " + REGISTER_FROM + " where ("
                 + "cast(a.id as text) like :needle escape '\\'"
                 + " or cast(a.customer_id as text) like :needle escape '\\'"
                 + " or lower(replace(a.status, '_', ' ')) like :needle escape '\\'"
                 + " or lower(p.full_name) like :needle escape '\\'"
-                + " or lower(p.pan) like :needle escape '\\'"
+                + " or p.pan_hash = :panHash"
                 + " or p.mobile like :needle escape '\\'"
                 + " or lower(p.email) like :needle escape '\\')"
                 + SqlFilter.and(spec, COLUMNS, params)
@@ -284,7 +285,7 @@ public class AdminApplicationService {
                             p != null ? p.getFullName() : null,
                             p != null ? p.getMobile() : null,
                             p != null ? p.getEmail() : null,
-                            p != null ? p.getPan() : null,
+                            p != null ? com.navix.common.pii.PiiView.pan(p.getPan()) : null,
                             completed, required, ownerByCustomer.get(a.getCustomerId()), staleDays,
                             trustByCustomer.get(a.getCustomerId()), a.getJourneyStep());
                 })

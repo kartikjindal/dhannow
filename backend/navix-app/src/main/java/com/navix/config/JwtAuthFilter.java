@@ -38,6 +38,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
     private final StaffSessionRegistry staffSessionRegistry;
+    /** False in prod (PLAN Phase 9): the "Act as role" header is ignored, every request works in its real role. */
+    private final boolean actingRoleAllowed;
+    private final PiiAccessLog piiAccessLog;
 
     /** Roles that may only read: any request but GET/HEAD/OPTIONS outside {@code /api/auth/} is refused (403). */
     static final java.util.Set<String> READ_ONLY_ROLES = java.util.Set.of("COMPLIANCE");
@@ -50,8 +53,15 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     }
 
     public JwtAuthFilter(JwtService jwtService, StaffSessionRegistry staffSessionRegistry) {
+        this(jwtService, staffSessionRegistry, true, null);
+    }
+
+    public JwtAuthFilter(JwtService jwtService, StaffSessionRegistry staffSessionRegistry, boolean actingRoleAllowed,
+                         PiiAccessLog piiAccessLog) {
         this.jwtService = jwtService;
         this.staffSessionRegistry = staffSessionRegistry;
+        this.actingRoleAllowed = actingRoleAllowed;
+        this.piiAccessLog = piiAccessLog;
     }
 
     @Override
@@ -77,7 +87,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 } else if (principal.deviceId() != null) {
                     request.setAttribute(DEVICE_ID_ATTR, principal.deviceId());
                 }
-                String acting = JwtService.AUDIENCE_STAFF.equals(principal.audience())
+                String acting = actingRoleAllowed && JwtService.AUDIENCE_STAFF.equals(principal.audience())
                         ? ActingRole.normalize(principal.role(), request.getHeader(ActingRole.HEADER)) : null;
                 ActorContext.set(new CurrentActor(principal.id(), principal.name(), principal.role(), acting));
                 // Enrich the log MDC so every line for this request is attributable (id/role only —
@@ -108,7 +118,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 }
             }
             filterChain.doFilter(request, response);
+            java.util.Set<String> revealed = com.navix.common.pii.PiiView.drainRevealed();
+            if (!revealed.isEmpty() && piiAccessLog != null) {
+                piiAccessLog.record(ActorContext.get(), request.getMethod(), request.getRequestURI(), revealed);
+            }
         } finally {
+            com.navix.common.pii.PiiView.drainRevealed();
             // Thread-state must be cleared here; the actor MDC keys are cleared by RequestLoggingFilter
             // so they remain available for that filter's one-line access log after this returns.
             ActorContext.clear();

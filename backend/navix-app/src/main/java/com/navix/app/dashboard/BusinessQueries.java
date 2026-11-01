@@ -96,9 +96,9 @@ public class BusinessQueries {
     public Map<String, long[]> marketing(LocalDate from, LocalDate to) {
         String day = "cast(ld.created_at at time zone 'Asia/Kolkata' as date)";
         String sql = "select to_char(" + day + ", 'YYYY-MM') as month, count(*) as leads,"
-                + " count(*) filter (where ld.pan is not null and exists (select 1 from customer_profile cp"
+                + " count(*) filter (where ld.pan_hash is not null and exists (select 1 from customer_profile cp"
                 + " join loan_application a on a.id = cp.application_id join loan l on l.id = a.loan_id"
-                + " where cp.pan = ld.pan and l.disbursed_on >= " + day + ")) as converted"
+                + " where cp.pan_hash = ld.pan_hash and l.disbursed_on >= " + day + ")) as converted"
                 + " from lead ld where " + day + " between :from and :to group by 1";
         Map<String, long[]> out = new LinkedHashMap<>();
         metrics.jdbc().query(sql, new MapSqlParameterSource("from", from).addValue("to", to), rs -> {

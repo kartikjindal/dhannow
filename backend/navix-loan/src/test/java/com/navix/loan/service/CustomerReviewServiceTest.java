@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -95,27 +96,15 @@ class CustomerReviewServiceTest {
         return app;
     }
 
+    /** CC-24: no detail changes in v1; the borrower's self-edit is refused and nothing is touched. */
     @Test
-    void editOwnProfileInvalidatesChecksAndRecomputesEligibilityOnSalaryChange() {
-        CustomerProfile existing = new CustomerProfile();
-        existing.setApplicationId(APP_ID);
-        existing.setAddress("Old address");
-        existing.setMonthlySalaryPaise(5_000_000L);
-        when(applicationRepository.findById(APP_ID)).thenReturn(Optional.of(application()));
-        when(profileRepository.findByApplicationId(APP_ID)).thenReturn(Optional.of(existing));
-        when(profileRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-
-        // Change address + salary; identity fields are not part of EditProfileRequest (locked).
-        service.editOwnProfile(APP_ID, new EditProfileRequest(
-                "New address", null, null, 6_000_000L, null, null, "Mom", "9990001111", "Mother", null));
-
-        assertThat(existing.getAddress()).isEqualTo("New address");
-        assertThat(existing.getMonthlySalaryPaise()).isEqualTo(6_000_000L);
-        assertThat(existing.getEmergencyContactName()).isEqualTo("Mom");
-        // ADDRESS + SALARY checks reset; eligibility recomputed from the new salary.
-        verify(verificationInvalidation).invalidateForFields(eq(APP_ID),
-                argThat(s -> s.contains("address") && s.contains("monthlySalaryPaise")));
-        verify(eligibilityService).recomputeForCustomer(CUSTOMER_ID, 6_000_000L);
+    void cc24_theBorrowerCannotEditTheirDetails() {
+        assertThatThrownBy(() -> service.editOwnProfile(APP_ID, new EditProfileRequest(
+                "New address", null, null, 6_000_000L, null, null, "Mom", "9990001111", "Mother", null)))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "PROFILE_LOCKED");
+        verify(profileRepository, never()).save(any());
+        verify(eligibilityService, never()).recomputeForCustomer(any(), any());
     }
 
     @Test

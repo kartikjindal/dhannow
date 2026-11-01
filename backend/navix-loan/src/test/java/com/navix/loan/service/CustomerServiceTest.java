@@ -7,7 +7,9 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.navix.common.exception.BusinessException;
@@ -590,148 +592,18 @@ class CustomerServiceTest {
                 .hasMessageContaining("ADMIN");
     }
 
+    /** CC-24: the mobile is never changed in v1, not even by an ADMIN; no code is sent and nothing is written. */
     @Test
-    void requestMobileChangeOtpRejectsAnInvalidMobile() {
+    void cc24_anAdminCannotChangeAMobileNumber() {
         ActorContext.set(new CurrentActor("10", "Admin", "ADMIN"));
-        when(applicationRepository.findByCustomerId(9000001L)).thenReturn(List.of(app(2, 9000001L, ApplicationStatus.ACTIVE)));
-        when(profileRepository.findByApplicationId(2L)).thenReturn(Optional.of(profile(2, "Asha", "ABCDE1234F")));
-
-        assertThatThrownBy(() -> service.requestMobileChangeOtp(9000001L, "12345"))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("valid 10-digit");
-        verify(otpVerifier, org.mockito.Mockito.never()).request(anyString(), anyString());
-    }
-
-    @Test
-    void requestMobileChangeOtpSendsToTheNewNumber() {
-        ActorContext.set(new CurrentActor("10", "Admin", "ADMIN"));
-        when(applicationRepository.findByCustomerId(9000001L)).thenReturn(List.of(app(2, 9000001L, ApplicationStatus.ACTIVE)));
-        when(profileRepository.findByApplicationId(2L)).thenReturn(Optional.of(profile(2, "Asha", "ABCDE1234F")));
-        var expected = new com.navix.common.verification.OtpVerifierPort.OtpRequestResult(true, null, 300);
-        when(otpVerifier.request("9876543210", com.navix.common.verification.OtpVerifierPort.ADMIN_MOBILE_CHANGE))
-                .thenReturn(expected);
-
-        var result = service.requestMobileChangeOtp(9000001L, "9876543210");
-
-        assertThat(result.sent()).isTrue();
-        verify(otpVerifier).request("9876543210", com.navix.common.verification.OtpVerifierPort.ADMIN_MOBILE_CHANGE);
-    }
-
-    @Test
-    void confirmMobileChangeRejectsAnInvalidOtpAndLeavesTheProfileUntouched() {
-        ActorContext.set(new CurrentActor("10", "Admin", "ADMIN"));
-        CustomerProfile p = profile(2, "Asha", "ABCDE1234F");
-        p.setMobile("9000000000");
-        when(applicationRepository.findByCustomerId(9000001L)).thenReturn(List.of(app(2, 9000001L, ApplicationStatus.ACTIVE)));
-        when(profileRepository.findByApplicationId(2L)).thenReturn(Optional.of(p));
-        when(otpVerifier.verify(eq("9876543210"), anyString(),
-                eq(com.navix.common.verification.OtpVerifierPort.ADMIN_MOBILE_CHANGE))).thenReturn(false);
-
-        assertThatThrownBy(() -> service.confirmMobileChange(9000001L, "9876543210", "000000"))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("Invalid or expired");
-        assertThat(p.getMobile()).isEqualTo("9000000000"); // untouched
-        verify(profileRepository, org.mockito.Mockito.never()).save(any());
-    }
-
-    @Test
-    void confirmMobileChangeUpdatesTheProfileAndLogsTheChange() {
-        ActorContext.set(new CurrentActor("10", "Admin", "ADMIN"));
-        CustomerProfile p = profile(2, "Asha", "ABCDE1234F");
-        p.setMobile("9000000000");
-        when(applicationRepository.findByCustomerId(9000001L)).thenReturn(List.of(app(2, 9000001L, ApplicationStatus.ACTIVE)));
-        when(profileRepository.findByApplicationId(2L)).thenReturn(Optional.of(p));
-        when(profileRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-        when(otpVerifier.verify(eq("9876543210"), eq("123456"),
-                eq(com.navix.common.verification.OtpVerifierPort.ADMIN_MOBILE_CHANGE))).thenReturn(true);
-
-        service.confirmMobileChange(9000001L, "9876543210", "123456");
-
-        assertThat(p.getMobile()).isEqualTo("9876543210");
-        assertThat(p.getPan()).isEqualTo("ABCDE1234F"); // identity untouched
-        verify(changeLogRepository).save(any());
-    }
-
-    /** Mirrors CustomerReviewService's DUPLICATE_MOBILE rule — a number cannot land on two customers. */
-    @Test
-    void requestMobileChangeOtpRejectsANumberAlreadyOnAnotherCustomer() {
-        ActorContext.set(new CurrentActor("10", "Admin", "ADMIN"));
-        when(applicationRepository.findByCustomerId(9000001L)).thenReturn(List.of(app(2, 9000001L, ApplicationStatus.ACTIVE)));
-        when(profileRepository.findByApplicationId(2L)).thenReturn(Optional.of(profile(2, "Asha", "ABCDE1234F")));
-        when(profileRepository.existsMobileForOtherCustomer("9876543210", 9000001L)).thenReturn(true);
-
         assertThatThrownBy(() -> service.requestMobileChangeOtp(9000001L, "9876543210"))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("already registered with another customer");
-        verify(otpVerifier, org.mockito.Mockito.never()).request(anyString(), anyString());
-    }
-
-    @Test
-    void confirmMobileChangeRejectsANumberAlreadyOnAnotherCustomerEvenWithAValidOtp() {
-        ActorContext.set(new CurrentActor("10", "Admin", "ADMIN"));
-        CustomerProfile p = profile(2, "Asha", "ABCDE1234F");
-        p.setMobile("9000000000");
-        when(applicationRepository.findByCustomerId(9000001L)).thenReturn(List.of(app(2, 9000001L, ApplicationStatus.ACTIVE)));
-        when(profileRepository.findByApplicationId(2L)).thenReturn(Optional.of(p));
-        when(profileRepository.existsMobileForOtherCustomer("9876543210", 9000001L)).thenReturn(true);
-        lenient().when(otpVerifier.verify(eq("9876543210"), anyString(), anyString())).thenReturn(true);
-
+                .hasFieldOrPropertyWithValue("code", "PROFILE_LOCKED");
         assertThatThrownBy(() -> service.confirmMobileChange(9000001L, "9876543210", "123456"))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("already registered with another customer");
-        assertThat(p.getMobile()).isEqualTo("9000000000"); // untouched
-        verify(profileRepository, org.mockito.Mockito.never()).save(any());
-    }
-
-    /**
-     * Login identity keeps only the last 7 digits, so two DIFFERENT 10-digit numbers can derive the
-     * same identity even though they are never string-equal — the plain DUPLICATE_MOBILE check above
-     * cannot see this; only BorrowerIdentityPort's cross-module lookup against the real claim table
-     * can. This is the follow-up closing the gap the independent review flagged in commit 2765cb1.
-     */
-    @Test
-    void requestMobileChangeOtpRejectsANumberThatCollidesWithAnotherCustomersLoginIdentity() {
-        ActorContext.set(new CurrentActor("10", "Admin", "ADMIN"));
-        when(applicationRepository.findByCustomerId(9000001L)).thenReturn(List.of(app(2, 9000001L, ApplicationStatus.ACTIVE)));
-        when(profileRepository.findByApplicationId(2L)).thenReturn(Optional.of(profile(2, "Asha", "ABCDE1234F")));
-        when(profileRepository.existsMobileForOtherCustomer("9876543210", 9000001L)).thenReturn(false); // not a literal duplicate
-        when(borrowerIdentity.wouldCollideWithAnotherCustomer("9876543210", 9000001L)).thenReturn(true);
-
-        assertThatThrownBy(() -> service.requestMobileChangeOtp(9000001L, "9876543210"))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("login identity is already claimed");
-        verify(otpVerifier, org.mockito.Mockito.never()).request(anyString(), anyString());
-    }
-
-    @Test
-    void confirmMobileChangeRejectsAnIdentityCollisionEvenWithAValidOtp() {
-        ActorContext.set(new CurrentActor("10", "Admin", "ADMIN"));
-        CustomerProfile p = profile(2, "Asha", "ABCDE1234F");
-        p.setMobile("9000000000");
-        when(applicationRepository.findByCustomerId(9000001L)).thenReturn(List.of(app(2, 9000001L, ApplicationStatus.ACTIVE)));
-        when(profileRepository.findByApplicationId(2L)).thenReturn(Optional.of(p));
-        when(borrowerIdentity.wouldCollideWithAnotherCustomer("9876543210", 9000001L)).thenReturn(true);
-        lenient().when(otpVerifier.verify(eq("9876543210"), anyString(), anyString())).thenReturn(true);
-
-        assertThatThrownBy(() -> service.confirmMobileChange(9000001L, "9876543210", "123456"))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("login identity is already claimed");
-        assertThat(p.getMobile()).isEqualTo("9000000000"); // untouched
-        verify(profileRepository, org.mockito.Mockito.never()).save(any());
-    }
-
-    /** A number that collides with THIS SAME customer's own claimed identity is not an error. */
-    @Test
-    void requestMobileChangeOtpAllowsCorrectingToTheCustomersOwnClaimedIdentity() {
-        ActorContext.set(new CurrentActor("10", "Admin", "ADMIN"));
-        when(applicationRepository.findByCustomerId(9000001L)).thenReturn(List.of(app(2, 9000001L, ApplicationStatus.ACTIVE)));
-        when(profileRepository.findByApplicationId(2L)).thenReturn(Optional.of(profile(2, "Asha", "ABCDE1234F")));
-        when(borrowerIdentity.wouldCollideWithAnotherCustomer("9876543210", 9000001L)).thenReturn(false);
-        var expected = new com.navix.common.verification.OtpVerifierPort.OtpRequestResult(true, null, 300);
-        when(otpVerifier.request("9876543210", com.navix.common.verification.OtpVerifierPort.ADMIN_MOBILE_CHANGE))
-                .thenReturn(expected);
-
-        assertThat(service.requestMobileChangeOtp(9000001L, "9876543210").sent()).isTrue();
+                .hasFieldOrPropertyWithValue("code", "PROFILE_LOCKED");
+        verifyNoInteractions(otpVerifier);
+        verify(profileRepository, never()).save(any());
     }
 
     // ---------------------------------------------------------------- sanctioned-amount correction

@@ -9,9 +9,18 @@ public interface OnboardingWaitlistRepository extends JpaRepository<OnboardingWa
 
     Optional<OnboardingWaitlist> findByCustomerId(Long customerId);
 
-    boolean existsByPanAndCustomerIdNot(String pan, Long customerId);
+    // PAN and Aadhaar are encrypted (V111): matched on their blind indexes.
+    default boolean existsByPanAndCustomerIdNot(String pan, Long customerId) {
+        return existsByPanHashAndCustomerIdNot(com.navix.common.pii.PiiCipher.panIndex(pan), customerId);
+    }
 
-    boolean existsByAadhaarAndCustomerIdNot(String aadhaar, Long customerId);
+    default boolean existsByAadhaarAndCustomerIdNot(String aadhaar, Long customerId) {
+        return existsByAadhaarHashAndCustomerIdNot(com.navix.common.pii.PiiCipher.digitsIndex(aadhaar), customerId);
+    }
+
+    boolean existsByPanHashAndCustomerIdNot(String panHash, Long customerId);
+
+    boolean existsByAadhaarHashAndCustomerIdNot(String aadhaarHash, Long customerId);
 
     List<OnboardingWaitlist> findAllByOrderByCreatedAtDesc();
 }

@@ -11,12 +11,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * Records which mobile first claimed each mobile-derived {@code customerId} — the collision guard for
- * {@code AuthController.deriveCustomerId}, which keeps only the last 7 digits. Two mobiles sharing
- * those 7 digits derive the SAME id and would otherwise land silently in one account.
- *
- * <p>A guard, not a fix: the derivation is unchanged, and the second mobile fails loudly at login
- * instead of merging. The real fix is a surrogate customer id.
+ * The mobile → customer id registry (V40; CC-24 since V112). The id is server-generated from {@code customer_id_seq}
+ * the first time a number signs in ({@code DN0000001} on screen); the mobile is unique and only an attribute.
  *
  * <p>Distinct from {@code customer_profile.mobile}, which is deliberately non-unique (V23) because a
  * returning borrower has one profile row per application. The grain here is one row per BORROWER.

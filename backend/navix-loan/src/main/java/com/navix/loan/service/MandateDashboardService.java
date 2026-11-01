@@ -118,7 +118,7 @@ public class MandateDashboardService {
             byDay.put(day, new DayPoint(day, 0, 0));
         }
         jdbc.query("""
-                select coalesce(settlement_date, (updated_at at time zone 'Asia/Kolkata')::date) day,
+                select coalesce(settlement_date, (updated_at at time zone 'Asia/Kolkata')::date) as day,
                        sum(amount_paise) amt, count(*) n
                 from mandate_debit
                 where status = 'SUCCEEDED'

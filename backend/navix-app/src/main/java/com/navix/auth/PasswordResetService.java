@@ -55,6 +55,7 @@ public class PasswordResetService {
     private final EmailProperties emailProperties;
     private final String frontendBaseUrl;
     private final com.navix.common.brand.BrandProperties brand;
+    private final BorrowerMobileRepository mobileRepository;
     private final SecureRandom random = new SecureRandom();
 
     public PasswordResetService(PasswordResetTokenRepository tokenRepository,
@@ -66,8 +67,10 @@ public class PasswordResetService {
                                 EmailSuppressionService suppression,
                                 EmailProperties emailProperties,
                                 @Value("${navix.app.frontend-base-url:http://localhost:3000}") String frontendBaseUrl,
-                                com.navix.common.brand.BrandProperties brand) {
+                                com.navix.common.brand.BrandProperties brand,
+                                BorrowerMobileRepository mobileRepository) {
         this.brand = brand;
+        this.mobileRepository = mobileRepository;
         this.tokenRepository = tokenRepository;
         this.credentialRepository = credentialRepository;
         this.staffRepository = staffRepository;
@@ -107,7 +110,9 @@ public class PasswordResetService {
         profileRepository.findFirstByEmailIgnoreCaseOrderByApplicationIdDesc(normEmail)
                 .filter(p -> p.getMobile() != null && !p.getMobile().isBlank())
                 .ifPresentOrElse(
-                        p -> issueAndSend(BORROWER, AuthController.deriveCustomerId(p.getMobile()), normEmail),
+                        p -> mobileRepository.findByMobile(p.getMobile()).ifPresentOrElse(
+                                m -> issueAndSend(BORROWER, m.getCustomerId(), normEmail),
+                                () -> log.info("borrower forgot-password no account email={}", Masking.maskEmail(normEmail))),
                         () -> log.info("borrower forgot-password no match email={}", Masking.maskEmail(normEmail)));
     }
 

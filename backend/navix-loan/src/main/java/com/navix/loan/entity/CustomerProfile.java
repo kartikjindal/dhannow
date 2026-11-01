@@ -34,9 +34,15 @@ public class CustomerProfile extends BaseAuditEntity {
     @Column(name = "full_name", length = 160)
     private String fullName;
 
-    /** Stored in full; surfaced to staff masked. Unique across customers. */
-    @Column(name = "pan", length = 10)
+    /** Encrypted at rest (PLAN Phase 9); looked up by {@link #panHash}. Unique across customers. */
+    @Column(name = "pan")
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
     private String pan;
+
+    /** Blind index of {@link #pan} (V111), written on every save. */
+    @Column(name = "pan_hash", length = 64)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    private String panHash;
 
     /**
      * The 12-digit Aadhaar number the borrower types on the intake Aadhaar-card screen (V75). Stored
@@ -45,8 +51,14 @@ public class CustomerProfile extends BaseAuditEntity {
      * Aadhaar the PAN record and DigiLocker return, and a mismatch auto-rejects the application
      * ({@code ApplicationRejection.FRAUD_REJECTED}). Verhoeff-validated and unique across customers.
      */
-    @Column(name = "aadhaar", length = 12)
+    @Column(name = "aadhaar")
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
     private String aadhaar;
+
+    /** Blind index of {@link #aadhaar} (V111). */
+    @Column(name = "aadhaar_hash", length = 64)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    private String aadhaarHash;
 
     /** Borrower's mobile (normalised to 10 digits); surfaced masked. Unique across customers. */
     @Column(name = "mobile", length = 15)
@@ -102,7 +114,8 @@ public class CustomerProfile extends BaseAuditEntity {
     private String officialEmail;
 
     /** Salary account number, stored in full (revamp.md decision 16). Never logged, never exported. */
-    @Column(name = "salary_account_number", length = 32)
+    @Column(name = "salary_account_number")
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
     private String salaryAccountNumber;
 
     @Column(name = "salary_ifsc", length = 16)
@@ -225,4 +238,11 @@ public class CustomerProfile extends BaseAuditEntity {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "credit_brief_facts")
     private String creditBriefFacts;
+
+    @jakarta.persistence.PrePersist
+    @jakarta.persistence.PreUpdate
+    void indexPii() {
+        panHash = com.navix.common.pii.PiiCipher.panIndex(pan);
+        aadhaarHash = com.navix.common.pii.PiiCipher.digitsIndex(aadhaar);
+    }
 }

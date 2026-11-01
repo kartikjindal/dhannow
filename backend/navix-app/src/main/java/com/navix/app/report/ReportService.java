@@ -57,8 +57,19 @@ public class ReportService {
     private static final int PRICING_CHUNK = 2000;
     private static final long MAX_SPAN_DAYS = 3660;
 
-    /** PAN as {@code ABXXX1234X} — enough to recognise a borrower, not enough to reuse the number. */
-    private static final String MASKED_PAN = "case when length(%1$s) = 10 then substr(%1$s, 1, 2) || 'XXX' || substr(%1$s, 6, 4) || 'X' end";
+    /**
+     * PAN as {@code ABXXX1234X} — enough to recognise a borrower, not enough to reuse the number. In Java, not SQL:
+     * the column is encrypted (V111).
+     */
+    static String maskedPan(Object stored) {
+        String pan = stored == null ? null : com.navix.common.pii.PiiCipher.get().decrypt(stored.toString());
+        return pan != null && pan.length() == 10 ? pan.substring(0, 2) + "XXX" + pan.substring(5, 9) + "X" : null;
+    }
+
+    private static List<List<Object>> maskPanColumn(List<List<Object>> rows, int col) {
+        rows.forEach(r -> r.set(col, maskedPan(r.get(col))));
+        return rows;
+    }
 
     /** The newest application that carries a profile, per customer: who the customer is today. */
     private static final String PROF_CTE = """
@@ -495,8 +506,8 @@ public class ReportService {
                 left join staff_user su on su.id = o.owner_staff_id
                 where %s
                 order by f.signed_up desc
-                """.formatted(MASKED_PAN.formatted("pr.pan"), p.on(ist("f.signed_up")));
-        List<List<Object>> rows = query(sql, p.params());
+                """.formatted("pr.pan", p.on(ist("f.signed_up")));
+        List<List<Object>> rows = maskPanColumn(query(sql, p.params()), 3);
         long withLoans = rows.stream().filter(r -> ((Number) r.get(10)).longValue() > 0).count();
         return totalled(cols, rows, List.of(new Fact("Customers", (long) rows.size(), ColumnType.NUMBER),
                 new Fact("With at least one loan", withLoans, ColumnType.NUMBER)));
@@ -825,8 +836,8 @@ public class ReportService {
                 left join staff_user sb on sb.id = a.sanctioned_by
                 where %s
                 order by a.created_at desc, a.id desc
-                """.formatted(MASKED_PAN.formatted("p.pan"), p.on(ist("a.created_at")));
-        List<List<Object>> rows = query(sql, p.params());
+                """.formatted("p.pan", p.on(ist("a.created_at")));
+        List<List<Object>> rows = maskPanColumn(query(sql, p.params()), 4);
         long sanctioned = rows.stream().filter(r -> r.get(16) != null).count();
         return totalled(cols, rows, List.of(new Fact("Applications", (long) rows.size(), ColumnType.NUMBER),
                 new Fact("Sanctioned", sanctioned, ColumnType.NUMBER)));
@@ -1459,10 +1470,10 @@ public class ReportService {
                 with lp as (
                     select coalesce(nullif(trim(x.source), ''), 'Unknown') src, x.call_status,
                            exists (select 1 from customer_profile cp
-                                   where (x.pan is not null and upper(cp.pan) = upper(x.pan)) or cp.mobile = x.mobile) applied,
+                                   where (x.pan_hash is not null and cp.pan_hash = x.pan_hash) or cp.mobile = x.mobile) applied,
                            exists (select 1 from customer_profile cp join loan_application a on a.id = cp.application_id
                                    join loan l on l.customer_id = a.customer_id and l.disbursed_on is not null
-                                   where (x.pan is not null and upper(cp.pan) = upper(x.pan)) or cp.mobile = x.mobile) funded
+                                   where (x.pan_hash is not null and cp.pan_hash = x.pan_hash) or cp.mobile = x.mobile) funded
                     from lead x where %s)
                 select src, count(*), count(*) filter (where call_status <> 'NOT_CALLED'),
                        count(*) filter (where applied), count(*) filter (where funded),

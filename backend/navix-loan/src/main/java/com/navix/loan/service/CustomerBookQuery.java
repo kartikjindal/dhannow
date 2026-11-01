@@ -76,7 +76,7 @@ public class CustomerBookQuery {
                 from loan l
                 order by l.customer_id, l.id desc
             ), prof as (
-                select distinct on (a.customer_id) a.customer_id, p.full_name, p.pan, p.mobile
+                select distinct on (a.customer_id) a.customer_id, p.full_name, p.pan_hash, p.mobile
                 from customer_profile p
                 join loan_application a on a.id = p.application_id
                 order by a.customer_id, a.id desc
@@ -99,7 +99,7 @@ public class CustomerBookQuery {
                             select 1 from application_rejection r
                             where r.mobile = pr.mobile and r.blocked_until > now()) as blocked,
                        coalesce(s.at, la.created_at) as status_changed_at,
-                       pr.full_name, pr.pan, pr.mobile,
+                       pr.full_name, pr.pan_hash, pr.mobile,
                        case
                          when ll.loan_status in ('OVERDUE', 'IN_COLLECTIONS') then 'overdue'
                          when la.app_status in ('OVERDUE', 'DEFAULTED') then 'overdue'
@@ -144,7 +144,6 @@ public class CustomerBookQuery {
             "name", "lower(b.full_name)",
             "customerId", "b.customer_id",
             "mobile", "b.mobile",
-            "pan", "lower(b.pan)",
             "stage", "case b.segment when 'incomplete' then 1 when 'pending' then 2 when 'review' then 3"
                     + " when 'approved' then 4 when 'disbursementPending' then 5 when 'hold' then 6"
                     + " when 'active' then 7 when 'overdue' then 8 when 'closed' then 9 when 'rejected' then 10"
@@ -162,8 +161,8 @@ public class CustomerBookQuery {
      * would let a request argue with its own scope. Filters are ANDed after scope, so they can only
      * narrow anyway; keeping them out of the registry means they cannot even try.
      *
-     * <p>Text columns match the SQL value, the client matches the cell: {@code full_name}, {@code pan}
-     * and {@code mobile} are shown as stored, so the two agree. {@code stage} is a checklist of the
+     * <p>Text columns match the SQL value, the client matches the cell: {@code full_name} and {@code mobile}
+     * are shown as stored (PAN is encrypted since V111, so it is neither filtered nor sorted on), so the two agree. {@code stage} is a checklist of the
      * segment KEYS (the client maps them to the words on screen). Its TEXT kind exists only for the
      * client's "too many values, degrade to text" path, which a 11-value column can never reach.
      * Identity columns are never faceted — a name/PAN/mobile column is TEXT only, so there is no
@@ -172,7 +171,6 @@ public class CustomerBookQuery {
     public static final FilterColumns FILTER_COLUMNS = FilterColumns.builder()
             .column("name", "b.full_name", TEXT)
             .column("mobile", "b.mobile", TEXT)
-            .column("pan", "b.pan", TEXT)
             .column("date", "b.created_at", DAY)
             .column("stageDate", "b.status_changed_at", DAY)
             .column("stage", "b.segment", IN, TEXT)
@@ -269,8 +267,10 @@ public class CustomerBookQuery {
 
         if (f.needle() != null && !f.needle().isEmpty()) {
             p.addValue("needle", "%" + escapeLike(f.needle()) + "%");
+            // PAN is encrypted (V111): only a full PAN matches, on its blind index. No PAN sort or column filter.
+            p.addValue("panHash", com.navix.common.pii.PiiCipher.panIndex(f.needle()));
             clauses.add("(lower(b.full_name) like :needle escape '\\'"
-                    + " or lower(b.pan) like :needle escape '\\'"
+                    + " or b.pan_hash = :panHash"
                     + " or b.mobile like :needle escape '\\'"
                     + " or cast(b.customer_id as text) like :needle escape '\\'"
                     + " or exists (select 1 from loan_application a2 where a2.customer_id = b.customer_id"

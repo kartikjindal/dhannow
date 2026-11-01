@@ -97,6 +97,11 @@
             <groupId>io.awspring.cloud</groupId>
             <artifactId>spring-cloud-aws-starter-parameter-store</artifactId>
         </dependency>
+        <!-- PLAN Phase 9: unwraps the PII data key (envelope encryption). Version from the AWS SDK BOM. -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>kms</artifactId>
+        </dependency>
 
         <!-- Persistence / migrations -->
         <dependency>
@@ -216,6 +221,13 @@
                         <artifactId>maven-surefire-plugin</artifactId>
                         <configuration combine.self="override">
                             <groups>integration</groups>
+                            <!-- Surefire's default includes stop at *Test / *Tests / *TestCase, so the
+                                 *IT classes never ran (found in Phase 8). -->
+                            <includes>
+                                <include>**/*Test.java</include>
+                                <include>**/*Tests.java</include>
+                                <include>**/*IT.java</include>
+                            </includes>
                         </configuration>
                     </plugin>
                 </plugins>

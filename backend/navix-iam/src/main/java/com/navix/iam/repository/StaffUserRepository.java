@@ -15,6 +15,9 @@ public interface StaffUserRepository extends JpaRepository<StaffUser, Long> {
 
     Optional<StaffUser> findByEmail(String email);
 
+    /** Whether any staff member of {@code role} can sign in with a password (the bootstrap is then spent). */
+    boolean existsByRoleAndPasswordHashIsNotNull(com.navix.iam.domain.StaffRole role);
+
     List<StaffUser> findByRole(StaffRole role);
 
     /** Active-by-role lookup for assignee pickers (activation gating). */

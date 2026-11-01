@@ -24,6 +24,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import com.navix.common.pii.PiiCipher;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -69,8 +70,8 @@ public class LeadImportService {
 
     private static final String INSERT_LEAD = """
             insert into lead (name, mobile, pan, pincode, email, source, source_detail,
-                              call_status, created_by_staff_id, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              call_status, created_by_staff_id, created_at, pan_hash)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
     private final LeadRepository leadRepository;
@@ -260,7 +261,8 @@ public class LeadImportService {
                 NormalizedRow nr = rows.get(i);
                 ps.setString(1, nr.name());
                 ps.setString(2, nr.mobile());
-                setNullable(ps, 3, nr.pan());
+                // Plain JDBC skips the entity's converter: encrypt and index here (V111).
+                setNullable(ps, 3, nr.pan() == null ? null : PiiCipher.get().encrypt(nr.pan()));
                 setNullable(ps, 4, nr.pincode());
                 setNullable(ps, 5, nr.email());
                 ps.setString(6, "OTHER");
@@ -268,6 +270,7 @@ public class LeadImportService {
                 ps.setString(8, "NOT_CALLED");
                 ps.setLong(9, run.staffId);
                 ps.setTimestamp(10, now);
+                setNullable(ps, 11, nr.pan() == null ? null : PiiCipher.panIndex(nr.pan()));
             }
 
             @Override

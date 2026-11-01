@@ -14,6 +14,11 @@ navix:
   # And the complaint SLA sweep.
   complaints:
     sla-cron: "-"
+  # The outbox's first try runs after each commit; tests run the retry poller by hand.
+  outbox:
+    cron: "-"
+  account-deletion:
+    purge-cron: "-"
   esign:
     provider: mock
   # Digio mandates are real NPCI filings: never reach the provider from a test.

@@ -62,4 +62,13 @@ class BootstrapAdminRunnerTest {
         runner("admin@dhannow.com", "").bootstrap();
         verify(staffRepository, never()).findByEmail(any());
     }
+
+    /** PLAN Phase 9: one time only. Once an ADMIN can sign in, the secret creates nothing and changes nothing. */
+    @Test
+    void refusesToRunAgainOnceAnAdminCanSignIn() {
+        when(staffRepository.existsByRoleAndPasswordHashIsNotNull(StaffRole.ADMIN)).thenReturn(true);
+        runner("second@dhannow.com", "Boot@123").bootstrap();
+        verify(staffRepository, never()).findByEmail(any());
+        verify(staffRepository, never()).save(any());
+    }
 }

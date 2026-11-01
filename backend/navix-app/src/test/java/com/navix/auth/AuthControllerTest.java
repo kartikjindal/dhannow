@@ -245,68 +245,67 @@ class AuthControllerTest {
                 .isInstanceOf(BusinessException.class);
     }
 
+    /** CC-24: a number's first sign-in gets a server-generated id (DN + sequence), not one derived from the mobile. */
     @Test
-    void borrowerLogin_issuesBorrowerToken_derivingCustomerId() {
+    void cc24_theFirstSignInGetsAServerGeneratedCustomerId() {
         when(otpService.verify("98190 00001", "123456", OtpVerifierPort.LOGIN)).thenReturn(true);
-        when(mobileRepository.findById(9000001L)).thenReturn(Optional.empty());
+        when(mobileRepository.findByMobile("9819000001")).thenReturn(Optional.empty());
+        when(mobileRepository.nextCustomerId()).thenReturn(1L);
+        when(mobileRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
         var resp = controller.borrowerLogin(new BorrowerLoginRequest("98190 00001", "123456", "Asha"));
 
-        assertThat(resp.getData().customerId()).isEqualTo(9000001L); // last 7 digits
+        assertThat(resp.getData().customerId()).isEqualTo(1L);
+        assertThat(resp.getData().customerCode()).isEqualTo("DN0000001");
         JwtService.Principal p = jwt.verify(resp.getData().token());
         assertThat(p.role()).isEqualTo("BORROWER");
         assertThat(p.audience()).isEqualTo(JwtService.AUDIENCE_BORROWER);
-        assertThat(p.id()).isEqualTo("9000001");
+        assertThat(p.id()).isEqualTo("1");
     }
 
     /**
-     * The collision guard: 9819000001 and 9919000001 both derive customerId 9000001. Whichever
-     * mobile claimed it first keeps it; the other must fail loudly rather than land in that account.
+     * CC-24: 9819000001 and 9919000001 share their last seven digits. Each keeps the id it was given, so neither
+     * can land in the other's account and nobody is refused (no CUSTOMER_ID_COLLISION any more).
      */
     @Test
-    void borrowerLogin_rejectsMobileCollidingWithAClaimedCustomerId() {
+    void cc24_aReturningNumberKeepsItsIdAndALookAlikeNumberIsAnotherCustomer() {
         when(otpService.verify("9919000001", "123456", OtpVerifierPort.LOGIN)).thenReturn(true);
-        when(mobileRepository.findById(9000001L))
-                .thenReturn(Optional.of(claim(9000001L, "9819000001")));
+        when(mobileRepository.findByMobile("9919000001")).thenReturn(Optional.of(claim(42L, "9919000001")));
 
-        assertThatThrownBy(() ->
-                controller.borrowerLogin(new BorrowerLoginRequest("9919000001", "123456", null)))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("contact support");
+        var resp = controller.borrowerLogin(new BorrowerLoginRequest("9919000001", "123456", null));
+
+        assertThat(resp.getData().customerId()).isEqualTo(42L);
+        verify(mobileRepository, never()).saveAndFlush(any());
     }
 
-    /**
-     * Password login used to write the mobile→customerId claim before checking anything, so an
-     * unauthenticated caller could squat a number's id. The claim is now written only after the
-     * password matches.
-     */
+    /** Password sign-in never registers a number: only a registered number with a password can get in. */
     @Test
-    void borrowerPasswordLogin_writesNoClaimUntilThePasswordMatches() {
+    void borrowerPasswordLogin_writesNothingAndChecksThePassword() {
         BorrowerCredential cred = new BorrowerCredential();
         cred.setCustomerId(9000001L);
         cred.setPasswordHash(new BCryptPasswordEncoder().encode("right-password"));
-        when(mobileRepository.findById(9000001L)).thenReturn(Optional.empty());
+        when(mobileRepository.findByMobile("9819000001")).thenReturn(Optional.of(claim(9000001L, "9819000001")));
         when(credentialRepository.findById(9000001L)).thenReturn(Optional.of(cred));
 
         assertThatThrownBy(() -> controller.borrowerPasswordLogin(
                 new BorrowerPasswordLoginRequest("9819000001", "wrong-password", null)))
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", "INVALID_CREDENTIALS");
-        verify(mobileRepository, never()).save(any());
 
         var resp = controller.borrowerPasswordLogin(
                 new BorrowerPasswordLoginRequest("9819000001", "right-password", null));
         assertThat(resp.getData().customerId()).isEqualTo(9000001L);
-        verify(mobileRepository).save(any());
+        verify(mobileRepository, never()).saveAndFlush(any());
+        verify(mobileRepository, never()).save(any());
     }
 
     @Test
-    void borrowerPasswordLogin_refusesACollidingNumberBeforeCheckingThePassword() {
-        when(mobileRepository.findById(9000001L)).thenReturn(Optional.of(claim(9000001L, "9819000001")));
+    void borrowerPasswordLogin_anUnregisteredNumberHasNoPassword() {
+        when(mobileRepository.findByMobile("9919000001")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> controller.borrowerPasswordLogin(
                 new BorrowerPasswordLoginRequest("9919000001", "anything", null)))
                 .isInstanceOf(BusinessException.class)
-                .hasFieldOrPropertyWithValue("code", "CUSTOMER_ID_COLLISION");
+                .hasFieldOrPropertyWithValue("code", "NO_PASSWORD_SET");
         verify(credentialRepository, never()).findById(any());
     }
 
@@ -346,7 +345,7 @@ class AuthControllerTest {
     @Test
     void borrowerLogin_withADeviceIssuesAShortAccessTokenAndARefreshToken() {
         when(otpService.verify("9819000001", "123456", OtpVerifierPort.LOGIN)).thenReturn(true);
-        when(mobileRepository.findById(9000001L)).thenReturn(Optional.empty());
+        when(mobileRepository.findByMobile("9819000001")).thenReturn(Optional.of(claim(9000001L, "9819000001")));
         java.time.Instant until = java.time.Instant.now().plus(java.time.Duration.ofDays(30));
         when(refreshTokens.issue(9000001L, "device-0001")).thenReturn(new RefreshTokenService.Issued("rt-1", until));
 
@@ -366,7 +365,7 @@ class AuthControllerTest {
     @Test
     void borrowerLogin_withoutADeviceKeepsTheWebToken() {
         when(otpService.verify("9819000001", "123456", OtpVerifierPort.LOGIN)).thenReturn(true);
-        when(mobileRepository.findById(9000001L)).thenReturn(Optional.empty());
+        when(mobileRepository.findByMobile("9819000001")).thenReturn(Optional.of(claim(9000001L, "9819000001")));
 
         var resp = controller.borrowerLogin(new BorrowerLoginRequest("9819000001", "123456", null)).getData();
 

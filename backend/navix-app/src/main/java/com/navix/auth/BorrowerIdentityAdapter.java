@@ -5,10 +5,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
- * {@link BorrowerIdentityPort} backed by {@link BorrowerMobileRepository} — the same claim table
- * {@link AuthController#claimCustomerId} maintains at login. Lives in {@code com.navix.auth}
- * specifically so it can call the package-private {@link AuthController#deriveCustomerId} rather
- * than duplicating that hashing logic.
+ * {@link BorrowerIdentityPort} backed by {@link BorrowerMobileRepository}, the registry
+ * {@link AuthController} keeps at sign-in: a mobile collides when it already signs in to another customer.
  */
 @Component
 @RequiredArgsConstructor
@@ -18,8 +16,9 @@ class BorrowerIdentityAdapter implements BorrowerIdentityPort {
 
     @Override
     public boolean wouldCollideWithAnotherCustomer(String mobile, Long customerId) {
-        long derivedId = AuthController.deriveCustomerId(mobile);
-        return mobileRepository.findById(derivedId)
+        String digits = mobile == null ? "" : mobile.replaceAll("[^0-9]", "");
+        String number = digits.length() > 10 ? digits.substring(digits.length() - 10) : digits;
+        return mobileRepository.findByMobile(number)
                 .map(claim -> !claim.getCustomerId().equals(customerId))
                 .orElse(false);
     }

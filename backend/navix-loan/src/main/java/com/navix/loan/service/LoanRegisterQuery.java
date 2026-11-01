@@ -70,7 +70,7 @@ public class LoanRegisterQuery {
             with reg as (
                 select l.id as loan_id,
                        l.customer_id,
-                       p.full_name, p.pan, p.mobile,
+                       p.full_name, p.pan_hash, p.mobile,
                        l.principal, l.net_disbursed, l.total_repayable,
                        l.disbursed_on, l.due_date, l.closed_on, a.sanctioned_at,
                        cast(l.disbursed_on as timestamp) at time zone 'Asia/Kolkata' as disbursed_ts,
@@ -85,7 +85,7 @@ public class LoanRegisterQuery {
                 left join (select distinct on (loan_id) loan_id, id, sanctioned_at
                            from loan_application where loan_id is not null
                            order by loan_id, id) a on a.loan_id = l.id
-                left join (select distinct on (application_id) application_id, full_name, pan, mobile
+                left join (select distinct on (application_id) application_id, full_name, pan_hash, mobile
                            from customer_profile
                            order by application_id, id) p on p.application_id = a.id
             """;
@@ -224,10 +224,11 @@ public class LoanRegisterQuery {
     private static List<String> baseClauses(Filter f, boolean applySegment, MapSqlParameterSource p) {
         List<String> clauses = new ArrayList<>();
         if (f.needle() != null && !f.needle().isEmpty()) {
-            // The old Java match: name / PAN lower-cased, mobile and loan id as typed.
+            // The old Java match: name lower-cased, mobile and loan id as typed; PAN (encrypted, V111) in full.
             p.addValue("needle", "%" + escapeLike(f.needle()) + "%");
+            p.addValue("panHash", com.navix.common.pii.PiiCipher.panIndex(f.needle()));
             clauses.add("(lower(r.full_name) like :needle escape '\\'"
-                    + " or lower(r.pan) like :needle escape '\\'"
+                    + " or r.pan_hash = :panHash"
                     + " or r.mobile like :needle escape '\\'"
                     + " or cast(r.loan_id as text) like :needle escape '\\')");
         }

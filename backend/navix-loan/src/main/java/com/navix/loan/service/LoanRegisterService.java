@@ -1,5 +1,6 @@
 package com.navix.loan.service;
 
+import com.navix.common.pii.PiiView;
 import com.navix.common.collections.CollectionCaseDirectory;
 import com.navix.common.exception.BusinessException;
 import com.navix.common.query.ColumnFilter;
@@ -338,7 +339,7 @@ public class LoanRegisterService {
                     app != null ? app.getId() : null,
                     profile != null ? profile.getFullName() : null,
                     profile != null ? profile.getMobile() : null,
-                    profile != null ? profile.getPan() : null,
+                    profile != null ? PiiView.pan(profile.getPan()) : null,
                     cycleByLoanId.getOrDefault(loan.getId(), 1),
                     loan.getPrincipal(),
                     loan.getNetDisbursed(),

@@ -25,7 +25,8 @@ public class PennyDropAttempt extends BaseAuditEntity {
     @Column(name = "application_id")
     private Long applicationId;
 
-    @Column(name = "account_number", length = 32)
+    @Column(name = "account_number")
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
     private String accountNumber;
 
     @Column(name = "ifsc", length = 16)

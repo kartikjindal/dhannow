@@ -125,7 +125,8 @@ public class LoanApplication {
     // is where the borrower's salary lands and is what credit sanity-checked the file against —
     // overwriting that on a change would destroy the thing they verified.
 
-    @Column(name = "disbursal_account_number", length = 32)
+    @Column(name = "disbursal_account_number")
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
     private String disbursalAccountNumber;
 
     @Column(name = "disbursal_ifsc", length = 16)

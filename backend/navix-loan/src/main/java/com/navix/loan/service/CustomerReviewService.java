@@ -72,6 +72,9 @@ public class CustomerReviewService {
     /** Read-only here: decides whether the Aadhaar number is still editable (see {@link #saveProfile}). */
     private final ApplicationVerificationRepository verificationRepository;
 
+    /** CC-24: no detail changes in v1, by the borrower or by staff. The self-edit below stays for a later version. */
+    static final boolean DETAIL_CHANGES_ALLOWED = false;
+
     @Transactional
     public CustomerProfile saveProfile(Long appId, ProfileRequest req) {
         requireRole("BORROWER");
@@ -276,6 +279,10 @@ public class CustomerReviewService {
     @Transactional
     public CustomerProfile editOwnProfile(Long appId, EditProfileRequest req) {
         requireRole("BORROWER");
+        if (!DETAIL_CHANGES_ALLOWED) {
+            throw new BusinessException("PROFILE_LOCKED", "Your details can't be changed in the app. "
+                    + "Please contact support if something is wrong.");
+        }
         LoanApplication app = applicationRepository.findById(appId)
                 .orElseThrow(() -> new ResourceNotFoundException("LoanApplication", String.valueOf(appId)));
         // Edit the application's own profile snapshot (must exist — onboarding created it).

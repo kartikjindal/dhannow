@@ -218,7 +218,8 @@ class DsaServiceTest {
 
         DsaLeadView view = service().createLead(validRequest("ABCDE1234F"));
 
-        assertThat(view.pan()).isEqualTo("ABCDE1234F");
+        // PLAN Phase 9: a DSA holds no PII_VIEW, so even their own lead's PAN comes back masked.
+        assertThat(view.pan()).isEqualTo("ABXXXXX34F");
         assertThat(view.status()).isEqualTo(com.navix.loan.dto.DsaDtos.DsaLeadStatus.NOT_APPLIED);
     }
 

@@ -46,7 +46,10 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http, JwtService jwtService,
-            StaffSessionRegistry staffSessionRegistry) throws Exception {
+            StaffSessionRegistry staffSessionRegistry, PiiAccessLog piiAccessLog,
+            @org.springframework.beans.factory.annotation.Value("${NAVIX_ENV:dev}") String env) throws Exception {
+        // PLAN Phase 9: no "Act as role" in prod; the staff console hides the switcher there too.
+        boolean actingRoleAllowed = !"prod".equalsIgnoreCase(env);
         http
             .csrf(csrf -> csrf.disable())
             // PLAN Phase 8: the origin allowlist from WebConfig's CorsConfigurationSource; preflights skip the auth gate.
@@ -83,7 +86,7 @@ public class SecurityConfig {
                     .anyRequest().authenticated())
             .exceptionHandling(ex -> ex.authenticationEntryPoint(
                     new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
-            .addFilterBefore(new JwtAuthFilter(jwtService, staffSessionRegistry), UsernamePasswordAuthenticationFilter.class)
+            .addFilterBefore(new JwtAuthFilter(jwtService, staffSessionRegistry, actingRoleAllowed, piiAccessLog), UsernamePasswordAuthenticationFilter.class)
             // RequestLoggingFilter runs FIRST (before JwtAuthFilter) so the requestId MDC is set for
             // every request — including 401s — and it emits the one-line access log on the way out.
             .addFilterBefore(new RequestLoggingFilter(), JwtAuthFilter.class);

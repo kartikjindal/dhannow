@@ -82,14 +82,16 @@ class MobilePlatformIntegrationTest {
 
         JsonNode second = refresh(first.get("refreshToken").asText(), "device-cc39-aaaa");
         assertThat(second.get("refreshToken").asText()).isNotEqualTo(first.get("refreshToken").asText());
-        assertThat(second.get("customerId").asLong()).isEqualTo(1100001L);
+        long customerId = first.get("customerId").asLong();
+        assertThat(second.get("customerId").asLong()).isEqualTo(customerId);
+        assertThat(first.get("customerCode").asText()).isEqualTo(String.format("DN%07d", customerId)); // CC-24
         JsonNode third = refresh(second.get("refreshToken").asText(), "device-cc39-aaaa");
 
         // The first token again: theft. The family dies, so even the newest token is refused.
         expectCode(refreshRequest(first.get("refreshToken").asText(), "device-cc39-aaaa"), "REFRESH_REUSED");
         expectCode(refreshRequest(third.get("refreshToken").asText(), "device-cc39-aaaa"), "REFRESH_INVALID");
-        assertThat(jdbc.queryForObject("select count(*) from refresh_token where customer_id = 1100001"
-                + " and revoked_at is null", Long.class)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from refresh_token where customer_id = ?"
+                + " and revoked_at is null", Long.class, customerId)).isZero();
 
         // A token presented from another device is refused and its family revoked.
         JsonNode other = login("9811100001", "device-cc39-bbbb");
@@ -125,7 +127,9 @@ class MobilePlatformIntegrationTest {
         // A device can only register itself.
         expectCode(put("/api/devices/me").header("Authorization", bearerA).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"deviceId\":\"device-cc38-phone-b\",\"fcmToken\":\"x\"}"), "DEVICE_MISMATCH");
-        assertThat(deviceService.fcmTokens(1100003L)).containsExactly("fcm-token-phone-a");
+        long customerId = a.get("customerId").asLong();
+        assertThat(b.get("customerId").asLong()).isEqualTo(customerId);
+        assertThat(deviceService.fcmTokens(customerId)).containsExactly("fcm-token-phone-a");
 
         JsonNode list = data(mvc.perform(get("/api/devices/me").header("Authorization", bearerA)));
         assertThat(list).hasSize(2);
@@ -144,7 +148,7 @@ class MobilePlatformIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"allDevices\":true}"))
                 .andExpect(status().isOk());
         expectCode(refreshRequest(a.get("refreshToken").asText(), "device-cc38-phone-a"), "REFRESH_INVALID");
-        assertThat(deviceService.fcmTokens(1100003L)).isEmpty();
+        assertThat(deviceService.fcmTokens(customerId)).isEmpty();
 
         // Staff cannot use the borrower device API.
         expectCode(get("/api/devices/me").header("Authorization", "Bearer "

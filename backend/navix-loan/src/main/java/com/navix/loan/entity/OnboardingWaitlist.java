@@ -31,9 +31,27 @@ public class OnboardingWaitlist extends BaseAuditEntity {
     @Column(nullable = false, length = 200)
     private String email;
 
-    @Column(nullable = false, length = 10)
+    @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
     private String pan;
 
-    @Column(nullable = false, length = 12)
+    @Column(nullable = false)
+    @jakarta.persistence.Convert(converter = com.navix.common.pii.PiiConverter.class)
     private String aadhaar;
+
+    /** Blind indexes (V111). */
+    @Column(name = "pan_hash", length = 64)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    private String panHash;
+
+    @Column(name = "aadhaar_hash", length = 64)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    private String aadhaarHash;
+
+    @jakarta.persistence.PrePersist
+    @jakarta.persistence.PreUpdate
+    void indexPii() {
+        panHash = com.navix.common.pii.PiiCipher.panIndex(pan);
+        aadhaarHash = com.navix.common.pii.PiiCipher.digitsIndex(aadhaar);
+    }
 }

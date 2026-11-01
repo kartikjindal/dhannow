@@ -1,5 +1,6 @@
 package com.navix.loan.service;
 
+import com.navix.common.pii.PiiView;
 import com.navix.common.collections.CollectionActivityDirectory;
 import com.navix.common.collections.CollectionActivityDirectory.StaffActivity;
 import com.navix.common.collections.CollectionStaffStats;
@@ -541,7 +542,7 @@ public class DecisionHistoryService {
                 e.getApplicationId(),
                 customerIdByApp.get(e.getApplicationId()),
                 profile != null ? profile.getFullName() : null,
-                profile != null ? profile.getPan() : null,
+                profile != null ? PiiView.pan(profile.getPan()) : null,
                 e.getAction(),
                 e.getFromStatus() != null ? e.getFromStatus().name() : null,
                 e.getToStatus().name(),

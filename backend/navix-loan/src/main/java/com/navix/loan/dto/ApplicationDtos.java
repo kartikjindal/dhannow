@@ -1,5 +1,6 @@
 package com.navix.loan.dto;
 
+import com.navix.common.pii.PiiView;
 import com.navix.loan.domain.ApplicationStatus;
 import com.navix.loan.entity.CustomerProfile;
 import com.navix.loan.entity.ApplicationEvent;
@@ -164,15 +165,15 @@ public final class ApplicationDtos {
                     p != null ? p.getCreditRecommendation() : null,
                     p != null ? p.getFullName() : null,
                     p != null ? p.getMobile() : null,
-                    p != null ? p.getPan() : null,
-                    p != null ? p.getSalaryAccountNumber() : null,
+                    p != null ? PiiView.pan(p.getPan()) : null,
+                    p != null ? PiiView.account(p.getSalaryAccountNumber()) : null,
                     p != null ? p.getSalaryIfsc() : null,
                     loan != null ? loan.effectiveStatus(LocalDate.now()).name() : null,
                     loan != null ? loan.getDueDate() : null,
                     a.getSanctionedAmountPaise(), a.getApprovedRepaymentDate(), a.getSanctionTenureDays(),
                     a.getSanctionRemarks(), a.getSanctionedAt(),
                     a.getMarkedPendingAt(), a.getPendingReason(),
-                    a.getDisbursalAccountNumber(), a.getDisbursalIfsc(), a.getDisbursalHolderName(),
+                    PiiView.account(a.getDisbursalAccountNumber()), a.getDisbursalIfsc(), a.getDisbursalHolderName(),
                     a.getDisbursalBank(), a.getDisbursalAccountChanged(),
                     a.getDisbursalAccountVerified(), null, null, a.getCreatedAt(), null, null, null,
                     null, null, a.getJourneyStep());

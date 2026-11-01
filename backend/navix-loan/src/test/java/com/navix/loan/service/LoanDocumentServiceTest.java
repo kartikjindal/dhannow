@@ -89,6 +89,7 @@ class LoanDocumentServiceTest {
     private final ProductConfigRepository productRepo = mock(ProductConfigRepository.class);
     private final DocumentStoragePort storage = mock(DocumentStoragePort.class);
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
+    private final com.navix.common.outbox.Outbox outbox = mock(com.navix.common.outbox.Outbox.class);
 
     private final List<LoanDocument> rows = new ArrayList<>();
     private final Map<String, byte[]> stored = new HashMap<>();
@@ -110,7 +111,12 @@ class LoanDocumentServiceTest {
 
         service = new LoanDocumentService(documents, applications, loans, profiles, applicationDocuments, pricing,
                 new KfsPdfRenderer(), new SanctionLetterPdfRenderer(), new LoanAgreementPdfRenderer(), storage,
-                LENDER, BRAND, GRIEVANCE, jdbc, new ObjectMapper(), Clock.fixed(NOW, IST));
+                LENDER, BRAND, GRIEVANCE, jdbc, new ObjectMapper(), Clock.fixed(NOW, IST), outbox);
+        // The outbox's first try, straight away (its retry and locking are OutboxIntegrationTest's business).
+        org.mockito.Mockito.doAnswer(i -> {
+            service.handle(i.getArgument(0), i.getArgument(1));
+            return null;
+        }).when(outbox).enqueue(anyString(), anyString());
 
         app = new LoanApplication();
         app.setId(APP);
@@ -384,14 +390,16 @@ class LoanDocumentServiceTest {
                 "Single repayment of ₹1,000", "₹742");
     }
 
+    /** EXT-22 / PLAN Phase 9: a storage failure is thrown to the outbox, which keeps the row and retries it. */
     @Test
-    void aScheduleFailureNeverUndoesTheConfirmation() {
+    void aScheduleFailureIsLeftForTheOutboxToRetry() {
         Loan loan = activeLoan();
         org.mockito.Mockito.doThrow(new IllegalStateException("s3 down")).when(storage).store(anyString(), any(), anyString());
 
-        service.onLoanActivated(activated(loan.getId()));
-
+        assertThatThrownBy(() -> service.onLoanActivated(activated(loan.getId())))
+                .isInstanceOf(com.navix.common.exception.BusinessException.class);
         assertThat(rows).isEmpty();
+        verify(outbox).enqueue(LoanDocumentService.OUTBOX_SCHEDULE, "{\"loanId\":" + loan.getId() + "}");
     }
 
     // ---------------------------------------------------------------- closure receipt (Phase 6a)

@@ -53,9 +53,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.context.event.EventListener;
 
 /**
  * DhanNow loan documents (PLAN Phase 5): the KFS, the sanction letter + agreement signing pack, the
@@ -72,7 +71,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 @Service
 @Slf4j
 @RequiredArgsConstructor
-public class LoanDocumentService {
+public class LoanDocumentService implements com.navix.common.outbox.OutboxHandler {
 
     /** How long a document download link lives. */
     static final Duration URL_TTL = Duration.ofMinutes(5);
@@ -95,6 +94,7 @@ public class LoanDocumentService {
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     private final Clock clock;
+    private final com.navix.common.outbox.Outbox outbox;
 
     @Value("${navix.apr.method:IRR}")
     private AprCalculator.Method apr = AprCalculator.Method.IRR;
@@ -285,20 +285,14 @@ public class LoanDocumentService {
     // ---------------------------------------------------------------- schedule (CC-01)
 
     /**
-     * Issue the repayment schedule with the final due date once the disbursal is confirmed (CC-01).
-     * After the confirmation commits, in its own transaction: a storage failure is logged and never
-     * undoes the Accountant's confirmation.
+     * Queue the repayment schedule with the final due date once the disbursal is confirmed (CC-01). In the
+     * confirmation's transaction, through the outbox: issued right after the commit and retried with backoff if
+     * storage fails (PLAN Phase 9), never undoing the Accountant's confirmation.
      */
-    @TransactionalEventListener
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @EventListener
     public void onLoanActivated(ApplicationTransitionedEvent event) {
-        if (!"ACTIVATE".equals(event.action()) || event.loanId() == null) {
-            return;
-        }
-        try {
-            issueSchedule(event.loanId());
-        } catch (RuntimeException e) {
-            log.error("Repayment schedule not issued for loan {}: {}", event.loanId(), e.toString());
+        if ("ACTIVATE".equals(event.action()) && event.loanId() != null) {
+            outbox.enqueue(OUTBOX_SCHEDULE, "{\"loanId\":" + event.loanId() + "}");
         }
     }
 
@@ -317,20 +311,13 @@ public class LoanDocumentService {
     // ---------------------------------------------------------------- closure receipt (Phase 6a)
 
     /**
-     * Issue the closure receipt once the closure commits (the application's {@code REPAID} transition,
-     * which every closing path takes), in its own transaction: a storage failure is logged and never
-     * reopens the loan.
+     * Queue the closure receipt with the closure (the application's {@code REPAID} transition, which every closing
+     * path takes), through the outbox: a storage failure is retried and never reopens the loan.
      */
-    @TransactionalEventListener
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @EventListener
     public void onLoanClosed(ApplicationTransitionedEvent event) {
-        if (!"REPAID".equals(event.action()) || event.loanId() == null) {
-            return;
-        }
-        try {
-            issueClosureReceipt(event.loanId());
-        } catch (RuntimeException e) {
-            log.error("Closure receipt not issued for loan {}: {}", event.loanId(), e.toString());
+        if ("REPAID".equals(event.action()) && event.loanId() != null) {
+            outbox.enqueue(OUTBOX_CLOSURE, "{\"loanId\":" + event.loanId() + "}");
         }
     }
 
@@ -362,16 +349,50 @@ public class LoanDocumentService {
     // ---------------------------------------------------------------- extension addendum (Phase 6b)
 
     /**
-     * Issue the addendum once the activation commits, in its own transaction: a storage failure is logged
-     * and never undoes the extension (EXT-22). Version n is the n-th activated extension.
+     * Queue the addendum with the activation, through the outbox: retried with backoff, never undoing the extension
+     * (EXT-22). Version n is the n-th activated extension.
      */
-    @TransactionalEventListener
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @EventListener
     public void onExtensionActivated(com.navix.common.notification.event.ExtensionActivatedEvent event) {
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("extensionId", String.valueOf(event.extensionId()));
+        p.put("loanId", event.loanId());
+        p.put("extensionCount", event.extensionCount());
+        p.put("cap", event.cap());
+        p.put("oldDueDate", String.valueOf(event.oldDueDate()));
+        p.put("newDueDate", String.valueOf(event.newDueDate()));
+        outbox.enqueue(OUTBOX_ADDENDUM, toJson(p));
+    }
+
+    // ---------------------------------------------------------------- outbox (PLAN Phase 9)
+
+    static final String OUTBOX_SCHEDULE = "SCHEDULE_PDF";
+    static final String OUTBOX_CLOSURE = "CLOSURE_RECEIPT_PDF";
+    static final String OUTBOX_ADDENDUM = "EXTENSION_ADDENDUM_PDF";
+
+    @Override
+    public java.util.Set<String> kinds() {
+        return java.util.Set.of(OUTBOX_SCHEDULE, OUTBOX_CLOSURE, OUTBOX_ADDENDUM);
+    }
+
+    /** Each issue is idempotent (an existing document of that type or version is left alone). */
+    @Override
+    public void handle(String kind, String payloadJson) {
+        com.fasterxml.jackson.databind.JsonNode p;
         try {
-            issueExtensionAddendum(event);
-        } catch (RuntimeException e) {
-            log.error("Extension addendum not issued for loan {}: {}", event.loanId(), e.toString());
+            p = json.readTree(payloadJson);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Unreadable outbox payload", e);
+        }
+        Long loanId = p.path("loanId").asLong();
+        switch (kind) {
+            case OUTBOX_SCHEDULE -> issueSchedule(loanId);
+            case OUTBOX_CLOSURE -> issueClosureReceipt(loanId);
+            case OUTBOX_ADDENDUM -> issueExtensionAddendum(new com.navix.common.notification.event.ExtensionActivatedEvent(
+                    java.util.UUID.fromString(p.path("extensionId").asText()), loanId, null,
+                    p.path("extensionCount").asInt(), p.path("cap").asInt(), 0L,
+                    LocalDate.parse(p.path("oldDueDate").asText()), LocalDate.parse(p.path("newDueDate").asText()), null));
+            default -> throw new IllegalArgumentException("Not a document kind: " + kind);
         }
     }
 

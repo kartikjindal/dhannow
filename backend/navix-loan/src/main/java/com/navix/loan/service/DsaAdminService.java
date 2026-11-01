@@ -110,7 +110,8 @@ public class DsaAdminService {
             if (query != null) {
                 predicates.add(cb.or(
                         cb.like(cb.lower(root.get("name")), "%" + query.toLowerCase(Locale.ROOT) + "%"),
-                        cb.like(root.get("pan"), "%" + query.toUpperCase(Locale.ROOT) + "%"),
+                        // PAN is encrypted (V111): a full PAN matches its blind index.
+                        cb.equal(root.get("panHash"), com.navix.common.pii.PiiCipher.panIndex(query)),
                         cb.like(root.get("mobile"), "%" + query + "%")));
             }
             return cb.and(predicates.toArray(Predicate[]::new));

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { can, canWorkAs, effectivePermissions, hasPermission, workingRolesFor } from "./rbac";
 
 describe("working roles", () => {
@@ -17,6 +17,19 @@ describe("working roles", () => {
     expect(canWorkAs("ACCOUNTANT", "ACCOUNTANT")).toBe(true);
     expect(canWorkAs("DSA", "DSA")).toBe(true);
     expect(canWorkAs("ADMIN", "ADMIN")).toBe(true);
+  });
+});
+
+describe("role switcher off (prod, PLAN Phase 9)", () => {
+  it("every staffer works only in their real role", () => {
+    vi.stubEnv("NEXT_PUBLIC_ROLE_SWITCHER", "");
+    try {
+      expect(workingRolesFor("ADMIN")).toEqual(["ADMIN"]);
+      expect(canWorkAs("ADMIN", "CREDIT_HEAD")).toBe(false);
+      expect(canWorkAs("CREDIT_HEAD", "CREDIT_EXECUTIVE")).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

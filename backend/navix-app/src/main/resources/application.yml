@@ -230,6 +230,17 @@ navix:
       - { key: payment-refund-policy, title: Payment and refund policy, path: /payment-refund-policy.html }
       - { key: kfs-policy, title: Key fact statement policy, path: /kfs-policy.html }
 
+  # PII field encryption (PLAN Phase 9): Aadhaar, PAN and bank account numbers, AES-256-GCM. Cloud: the data key
+  # wrapped by KMS (aws kms generate-data-key --key-id <id> --key-spec AES_256 → CiphertextBlob, base64) plus the
+  # key id, from SSM /dhannow/<env>/navix/pii/{kms-key-id,wrapped-data-key}; prod refuses anything else. Local: any
+  # NAVIX_PII_DATA_KEY string, or none (a dev key derived from AUTH_SECRET). Never commit a key. view-roles = the
+  # roles with PII_VIEW (full values on staff screens, audited in pii_access_log); everyone else sees them masked.
+  pii:
+    data-key: ${NAVIX_PII_DATA_KEY:}
+    kms-key-id: ${NAVIX_PII_KMS_KEY_ID:}
+    wrapped-data-key: ${NAVIX_PII_WRAPPED_DATA_KEY:}
+    view-roles: ${NAVIX_PII_VIEW_ROLES:ADMIN,CREDIT_HEAD,CREDIT_EXECUTIVE,DISBURSEMENT_HEAD}
+
   # Staff two-step sign-in (TOTP, PLAN Phase 7). Required for these roles while enforce is on; prod refuses to boot
   # with enforce off or without a key. The key is base64 of 32 random bytes (openssl rand -base64 32), from SSM
   # /dhannow/<env>/navix/mfa/encryption-key; never commit one. Local runs without a key: NAVIX_STAFF_MFA_ENFORCE=false.

@@ -1,5 +1,6 @@
 package com.navix.loan.dto;
 
+import com.navix.common.pii.PiiView;
 import com.navix.loan.domain.DsaCommissionStatus;
 import com.navix.loan.entity.DsaCommission;
 import com.navix.loan.entity.Lead;
@@ -108,7 +109,7 @@ public final class DsaDtos {
         public static DsaLeadView of(Lead l, DsaLeadStatus status, Long netDisbursedPaise,
                 Long commissionPaise, String effectiveOutcome) {
             return new DsaLeadView(
-                    l.getId(), l.getPan(), l.getName(), l.getMobile(), l.getEmail(), l.getCity(),
+                    l.getId(), PiiView.pan(l.getPan()), l.getName(), l.getMobile(), l.getEmail(), l.getCity(),
                     l.getEmployer(), l.getMonthlySalaryPaise(), l.getLoanAmountInterestedPaise(),
                     l.getNotes(), status, netDisbursedPaise, commissionPaise,
                     effectiveOutcome, l.getDsaNote(), l.getOwnerDsaId() == null,
@@ -132,7 +133,7 @@ public final class DsaDtos {
 
         public static DsaCommissionView of(DsaCommission c, Lead l) {
             return new DsaCommissionView(
-                    c.getId(), c.getLeadId(), l != null ? l.getPan() : null,
+                    c.getId(), c.getLeadId(), l != null ? PiiView.pan(l.getPan()) : null,
                     l != null ? l.getName() : null, l != null ? l.getMobile() : null,
                     c.getNetDisbursedPaise(), c.getRateBps(), c.getAmountPaise(), c.getStatus(),
                     c.getAccruedAt(), c.getPayableAt(), c.getPaidAt());
@@ -189,7 +190,7 @@ public final class DsaDtos {
         public static AdminDsaLeadView of(Lead l, String ownerDsaName, String createdByStaffName,
                 String effectiveOutcome) {
             return new AdminDsaLeadView(
-                    l.getId(), l.getPan(), l.getName(), l.getMobile(), l.getEmail(), l.getCity(),
+                    l.getId(), PiiView.pan(l.getPan()), l.getName(), l.getMobile(), l.getEmail(), l.getCity(),
                     l.getEmployer(), l.getMonthlySalaryPaise(), l.getLoanAmountInterestedPaise(),
                     l.getNotes(), l.getOwnerDsaId(), ownerDsaName,
                     l.getCreatedByStaffId(), createdByStaffName, l.getOwnerDsaId() != null,

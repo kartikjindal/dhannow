@@ -78,8 +78,9 @@ class CustomerBookQueryFilterIntegrationTest {
         Long app = jdbc.queryForObject(
                 "insert into loan_application (customer_id, status, created_at) values (?, ?, ?) returning id",
                 Long.class, id, status, Timestamp.from(Instant.parse(createdAt)));
-        jdbc.update("insert into customer_profile (application_id, full_name, pan, mobile, created_at, created_by)"
-                + " values (?, ?, ?, ?, now(), 'test')", app, name, pan, mobile);
+        // As the entity stores it (V111): encrypted, with its blind index.
+        jdbc.update("insert into customer_profile (application_id, full_name, pan, pan_hash, mobile, created_at, created_by)"
+                + " values (?, ?, ?, ?, ?, now(), 'test')", app, name, com.navix.common.pii.PiiCipher.get().encrypt(pan), com.navix.common.pii.PiiCipher.panIndex(pan), mobile);
     }
 
     private void owner(long customerId, long staffId) {
@@ -113,7 +114,6 @@ class CustomerBookQueryFilterIntegrationTest {
                 spec("f.stage", "in:rejected"),
                 spec("f.stage", "in:rejected,active", "f.name", "text:starts:asha"),
                 spec("f.mobile", "text:eq:9000000003"),
-                spec("f.pan", "text:starts:bbb"),
                 spec("f.date", "date:2026-09-02..2026-09-03"),
                 spec("f.stageDate", "date:2026-09-04.."),
                 spec("f.name", "text:contains:zzz"))) {
@@ -123,7 +123,8 @@ class CustomerBookQueryFilterIntegrationTest {
         assertThat(ids(all(), spec("f.stage", "in:rejected"))).containsExactly(1L, 4L);
         assertThat(ids(all(), spec("f.stage", "in:rejected,active", "f.name", "text:starts:asha"))).containsExactly(1L, 4L);
         assertThat(ids(all(), spec("f.mobile", "text:eq:9000000003"))).containsExactly(3L);
-        assertThat(ids(all(), spec("f.pan", "text:starts:bbb"))).containsExactly(2L);
+        // PAN is encrypted (V111): no longer a filter column, so a PAN filter is ignored, like any unknown column.
+        assertThat(ids(all(), spec("f.pan", "text:starts:bbb"))).containsExactly(1L, 2L, 3L, 4L);
         assertThat(ids(all(), spec("f.date", "date:2026-09-02..2026-09-03"))).containsExactly(2L, 3L);
         assertThat(ids(all(), spec("f.name", "text:contains:zzz"))).isEmpty();
         // A LIKE metacharacter typed into a text filter is a literal.
@@ -137,8 +138,11 @@ class CustomerBookQueryFilterIntegrationTest {
         BookFilter rejectedChip = new BookFilter("", null, null, "rejected", null, false, null, TODAY);
         assertThat(ids(rejectedChip, spec("f.name", "text:contains:verma"))).containsExactly(4L);
         BookFilter searched = new BookFilter("asha", null, null, null, null, false, null, TODAY);
-        assertThat(ids(searched, spec("f.pan", "text:starts:ddd"))).containsExactly(4L);
-        assertThat(query.count(searched, spec("f.pan", "text:starts:ddd"))).isEqualTo(1);
+        assertThat(ids(searched, spec("f.mobile", "text:eq:9000000004"))).containsExactly(4L);
+        assertThat(query.count(searched, spec("f.mobile", "text:eq:9000000004"))).isEqualTo(1);
+        // A full PAN is searched on its blind index.
+        BookFilter byPan = new BookFilter("ddddd1111d", null, null, null, null, false, null, TODAY);
+        assertThat(ids(byPan, FilterSpec.empty())).containsExactly(4L);
     }
 
     @Test

@@ -107,9 +107,9 @@ class CustomerBookQueryIntegrationTest {
     }
 
     private void profile(long applicationId, String name, String pan, String mobile) {
-        jdbc.update("insert into customer_profile (application_id, full_name, pan, mobile, created_at, created_by)"
-                        + " values (?, ?, ?, ?, now(), 'test')",
-                applicationId, name, pan, mobile);
+        jdbc.update("insert into customer_profile (application_id, full_name, pan, pan_hash, mobile, created_at, created_by)"
+                        + " values (?, ?, ?, ?, ?, now(), 'test')",
+                applicationId, name, pan == null ? null : com.navix.common.pii.PiiCipher.get().encrypt(pan), com.navix.common.pii.PiiCipher.panIndex(pan), mobile);
     }
 
     private void transition(long applicationId, String from, String to, Instant at) {
@@ -220,7 +220,9 @@ class CustomerBookQueryIntegrationTest {
         application(8, "DRAFT", Instant.now());
 
         assertThat(query.pageIds(filter("asha", null), 0, 10)).containsExactly(7L);
-        assertThat(query.pageIds(filter("abcpr", null), 0, 10)).containsExactly(7L);
+        // PAN is encrypted (V111): only the full PAN matches, on its blind index.
+        assertThat(query.pageIds(filter("abcpr1234k", null), 0, 10)).containsExactly(7L);
+        assertThat(query.pageIds(filter("abcpr", null), 0, 10)).isEmpty();
         assertThat(query.pageIds(filter("98765", null), 0, 10)).containsExactly(7L);
         assertThat(query.pageIds(filter(String.valueOf(old), null), 0, 10)).contains(7L);
         assertThat(query.pageIds(filter("zzz", null), 0, 10)).isEmpty();

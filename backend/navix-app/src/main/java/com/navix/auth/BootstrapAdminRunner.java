@@ -14,10 +14,13 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Gives the first ADMIN a password on boot, so no password hash is ever committed in a migration (the
- * repo is public). Set {@code NAVIX_BOOTSTRAP_ADMIN_EMAIL} and {@code NAVIX_BOOTSTRAP_ADMIN_PASSWORD}
- * (SSM in cloud). The password is set only while that account has none, so a later boot never
- * overwrites a password the admin has since changed; the variables can be removed after first login.
+ * Creates the first ADMIN on boot from a one-time secret, so no password hash is ever committed in a migration (the
+ * repo is public). Set {@code NAVIX_BOOTSTRAP_ADMIN_EMAIL} and {@code NAVIX_BOOTSTRAP_ADMIN_PASSWORD} (cloud: SSM
+ * {@code /dhannow/<env>/navix/bootstrap/admin-email} and {@code admin-password}) for the first deploy only.
+ *
+ * <p>One time (PLAN Phase 9): once any ADMIN can sign in with a password, the runner refuses to run again, whatever
+ * the variables say, and logs a warning while they are still set. It never overwrites a password, so a leaked or
+ * stale secret cannot take over an account; remove the parameters after the first sign-in.
  */
 @Component
 @Slf4j
@@ -37,6 +40,11 @@ public class BootstrapAdminRunner {
     @Transactional
     public void bootstrap() {
         if (email.isBlank() || password.isBlank()) {
+            return;
+        }
+        if (staffRepository.existsByRoleAndPasswordHashIsNotNull(StaffRole.ADMIN)) {
+            log.warn("Bootstrap admin secret is still set but an ADMIN already exists; ignored. Remove "
+                    + "NAVIX_BOOTSTRAP_ADMIN_EMAIL / NAVIX_BOOTSTRAP_ADMIN_PASSWORD.");
             return;
         }
         StaffUser admin = staffRepository.findByEmail(email).orElseGet(() -> {

@@ -1,5 +1,6 @@
 package com.navix.loan.service;
 
+import com.navix.common.pii.PiiView;
 import com.navix.common.blocklist.BlocklistMirror;
 import com.navix.common.exception.BusinessException;
 import com.navix.common.exception.ResourceNotFoundException;
@@ -581,8 +582,8 @@ public class CustomerService {
             return m;
         }
         m.put("fullName", p.getFullName());
-        m.put("pan", p.getPan());
-        m.put("aadhaar", p.getAadhaar());
+        m.put("pan", PiiView.pan(p.getPan()));
+        m.put("aadhaar", PiiView.aadhaar(p.getAadhaar()));
         m.put("dob", p.getDob());
         m.put("mobile", p.getMobile());
         m.put("email", p.getEmail());
@@ -594,7 +595,7 @@ public class CustomerService {
         m.put("monthlySalaryPaise", p.getMonthlySalaryPaise());
         m.put("annualSalaryPaise", p.getAnnualSalaryPaise());
         m.put("salaryBank", p.getSalaryBank());
-        m.put("salaryAccountNumber", p.getSalaryAccountNumber());
+        m.put("salaryAccountNumber", PiiView.account(p.getSalaryAccountNumber()));
         m.put("salaryIfsc", p.getSalaryIfsc());
         m.put("salaryAccountMobile", p.getSalaryAccountMobile());
         m.put("previousSalaryDate", p.getPreviousSalaryDate());
@@ -630,7 +631,7 @@ public class CustomerService {
         m.put("sanctionedAmountPaise", a.getSanctionedAmountPaise());
         m.put("approvedRepaymentDate", a.getApprovedRepaymentDate());
         m.put("sanctionTenureDays", a.getSanctionTenureDays());
-        m.put("disbursalAccountNumber", a.getDisbursalAccountNumber());
+        m.put("disbursalAccountNumber", PiiView.account(a.getDisbursalAccountNumber()));
         m.put("disbursalIfsc", a.getDisbursalIfsc());
         m.put("disbursalHolderName", a.getDisbursalHolderName());
         m.put("disbursalBank", a.getDisbursalBank());
@@ -925,9 +926,9 @@ public class CustomerService {
             Instant latestCreatedAt = latestApp != null ? latestApp.getCreatedAt() : null;
             // Where THIS advance is paid, falling back to the salary account until the borrower
             // reaches the disbursal-account step.
-            String accountNumber = latestApp != null && latestApp.getDisbursalAccountNumber() != null
+            String accountNumber = PiiView.account(latestApp != null && latestApp.getDisbursalAccountNumber() != null
                     ? latestApp.getDisbursalAccountNumber()
-                    : (profile != null ? profile.getSalaryAccountNumber() : null);
+                    : (profile != null ? profile.getSalaryAccountNumber() : null));
             String ifsc = latestApp != null && latestApp.getDisbursalIfsc() != null
                     ? latestApp.getDisbursalIfsc()
                     : (profile != null ? profile.getSalaryIfsc() : null);
@@ -946,7 +947,7 @@ public class CustomerService {
             CustomerSummary cs = new CustomerSummary(
                     customerId,
                     profile != null ? profile.getFullName() : null,
-                    profile != null ? profile.getPan() : null,
+                    profile != null ? PiiView.pan(profile.getPan()) : null,
                     profile != null ? profile.getMobile() : null,
                     apps.size(),
                     loans.size(),
@@ -1401,6 +1402,7 @@ public class CustomerService {
      */
     public OtpVerifierPort.OtpRequestResult requestMobileChangeOtp(Long customerId, String newMobile) {
         requireAdmin();
+        requireDetailChangesAllowed();
         requireExistingProfile(customerId);
         String mobile = requireValidMobile(newMobile);
         requireMobileNotTaken(mobile, customerId);
@@ -1411,6 +1413,7 @@ public class CustomerService {
     @Transactional
     public ProfileView confirmMobileChange(Long customerId, String newMobile, String otp) {
         requireAdmin();
+        requireDetailChangesAllowed();
         CustomerProfile profile = requireExistingProfile(customerId);
         String mobile = requireValidMobile(newMobile);
         requireMobileNotTaken(mobile, customerId);
@@ -1551,6 +1554,16 @@ public class CustomerService {
             throw new ResourceNotFoundException("CustomerProfile", "customer:" + customerId);
         }
         return profile;
+    }
+
+    /** CC-24: no mobile change in v1, not even by an ADMIN; support can only block the account. */
+    static final boolean MOBILE_CHANGE_ALLOWED = false;
+
+    private static void requireDetailChangesAllowed() {
+        if (!MOBILE_CHANGE_ALLOWED) {
+            throw new BusinessException("PROFILE_LOCKED", "A customer's mobile number can't be changed. "
+                    + "Block the account instead.");
+        }
     }
 
     /** Bare 10-digit Indian mobile — same shape the borrower-facing OTP flows already require. */

@@ -95,24 +95,27 @@ class LeadOutcomeAndNotePersistenceIT {
     @Test
     void theVisibilityQueryReturnsOwnedAndUploadedButNotAnotherAgents() {
         Lead entered = lead("9811111111");
-        entered.setOwnerDsaId(7L);
+        entered.setCreatedByStaffId(77L);
+        entered.setOwnerDsaId(77L);
         entered.setPan("ABCDE1234F");
         repository.saveAndFlush(entered);
 
-        Lead uploaded = lead("9822222222");     // created_by_staff_id 7, owner null — an import
+        // Agent 77, so leads the other tests in this class leave behind (staff 7) stay out of it.
+        Lead uploaded = lead("9822222222");     // created_by_staff_id 77, owner null — an import
+        uploaded.setCreatedByStaffId(77L);
         repository.saveAndFlush(uploaded);
 
         Lead otherAgents = lead("9833333333");
-        otherAgents.setOwnerDsaId(8L);
-        otherAgents.setCreatedByStaffId(8L);
+        otherAgents.setOwnerDsaId(88L);
+        otherAgents.setCreatedByStaffId(88L);
         otherAgents.setPan("ZYXWV9876E");
         repository.saveAndFlush(otherAgents);
 
-        assertThat(repository.findByOwnerDsaIdOrCreatedByStaffIdOrderByIdDesc(7L, 7L))
+        assertThat(repository.findByOwnerDsaIdOrCreatedByStaffIdOrderByIdDesc(77L, 77L))
                 .extracting(Lead::getMobile)
                 .containsExactlyInAnyOrder("9811111111", "9822222222");
 
-        assertThat(repository.findVisibleToDsa(otherAgents.getId(), 7L)).isEmpty();
-        assertThat(repository.findVisibleToDsa(uploaded.getId(), 7L)).isPresent();
+        assertThat(repository.findVisibleToDsa(otherAgents.getId(), 77L)).isEmpty();
+        assertThat(repository.findVisibleToDsa(uploaded.getId(), 77L)).isPresent();
     }
 }
