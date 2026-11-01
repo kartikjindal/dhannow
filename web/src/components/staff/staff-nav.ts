@@ -36,6 +36,7 @@ import type { FeatureFlags } from "@/lib/api/applications";
 import { SEGMENTS, SEGMENT_LABEL, type CustomerSegment } from "@/lib/customers/segments";
 import {
   SEGMENTS as LOAN_SEGMENTS,
+  FOCUS_SEGMENTS as LOAN_FOCUS_SEGMENTS,
   SEGMENT_LABEL as LOAN_SEGMENT_LABEL,
   SEGMENT_TONE as LOAN_SEGMENT_TONE,
   type LoanSegment,
@@ -178,7 +179,7 @@ export const NAV: NavGroup[] = [
         perm: "loan:register",
         // No explicit "All" child — same convention as Customers: the parent label itself
         // (no `seg`) is the "all" view, so only the real segments get a chip.
-        sub: LOAN_SEGMENTS.map((seg) => ({ label: LOAN_SEGMENT_LABEL[seg], seg, tone: LOAN_SEGMENT_TONE[seg] })),
+        sub: [...LOAN_SEGMENTS, ...LOAN_FOCUS_SEGMENTS].map((seg) => ({ label: LOAN_SEGMENT_LABEL[seg], seg, tone: LOAN_SEGMENT_TONE[seg] })),
       },
       { label: "DPD buckets (all loans)", href: "/staff/collections", Icon: HandCoins, perm: ["collections:interact", "collections:manage", "collections:overview"], collectionBuckets: true, labelFor: { COLLECTION_EXECUTIVE: "My DPD cases" } },
       // Every eMandate and NACH debit across the book. loan:register is exactly COLLECTION_HEAD + ADMIN — the
@@ -215,7 +216,8 @@ export const NAV: NavGroup[] = [
         label: "Reports",
         href: "/staff/admin/reports",
         Icon: FileBarChart,
-        perm: "staff:manage",
+        // ADMIN all reports; FINANCE and COMPLIANCE their categories (the backend filters the catalog).
+        perm: ["staff:manage", "reports:view"],
         sub: REPORT_CATEGORIES.map(({ seg, label }) => ({ label, seg })),
       },
     ],

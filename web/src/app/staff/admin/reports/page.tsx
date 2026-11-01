@@ -90,7 +90,7 @@ function ReportsCentre() {
     return [...out.entries()];
   }, [catalog.data, search, category]);
 
-  if (me && !can("staff:manage")) return <NoAccessNotice message="Admin access only." />;
+  if (me && !can("staff:manage") && !can("reports:view")) return <NoAccessNotice message="Admin, Finance and Compliance only." />;
 
   const pill = (active: boolean) =>
     `rounded px-2.5 py-1 text-xs font-semibold transition-colors ${active ? "bg-navy text-white" : "text-muted hover:text-ink"}`;

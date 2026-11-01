@@ -17,7 +17,7 @@ import { Section } from "@/components/staff/detail-parts";
 import { ActionButton, DeskTable, istDate } from "@/components/staff/desk-kit";
 import { useCan } from "@/components/staff/pipeline/hooks";
 import { paiseToINR } from "@/lib/api/applications";
-import { emiApi, extensionsApi, holdsApi, type Extension } from "@/lib/api/staff-desks";
+import { emiApi, extensionsApi, holdsApi, loanDocumentsApi, type Extension, type StoredLoanDocument } from "@/lib/api/staff-desks";
 import { HOLD_LABEL, type LoanHold } from "@/lib/domain/loan";
 import { formatDate, formatDateTime } from "@/lib/utils";
 
@@ -240,6 +240,85 @@ export function EmiSection({ loanId }: { loanId: number }) {
           />
         )}
       </div>
+    </Section>
+  );
+}
+
+const DOC_LABEL: Record<string, string> = {
+  KFS: "Key fact statement",
+  SANCTION: "Sanction letter",
+  AGREEMENT: "Signed loan agreement",
+  SCHEDULE: "Repayment schedule",
+  CLOSURE_RECEIPT: "Closure receipt",
+  EXTENSION_ADDENDUM: "Extension addendum",
+};
+
+/** The stored KFS, sanction letter, agreement, schedule and receipts for a loan (PLAN Phase 10b): the exact PDFs
+ * the borrower saw, opened through a short-lived link (each open is audited). Figures on the staff screens come from
+ * the same frozen snapshot, so screen, PDF and ledger agree. */
+export function LoanDocumentsSection({ loanId }: { loanId: number }) {
+  const q = useQuery({ queryKey: ["loan-documents", loanId], queryFn: () => loanDocumentsApi.list(loanId) });
+  const [busy, setBusy] = React.useState<number | null>(null);
+  const open = async (d: StoredLoanDocument) => {
+    setBusy(d.id);
+    try {
+      const { url } = await loanDocumentsApi.url(loanId, d.id);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <Section title="Loan documents">
+      <DeskTable<StoredLoanDocument>
+        query={q}
+        rowKey={(d) => d.id}
+        empty="No documents stored for this loan yet."
+        columns={[
+          { label: "Document", render: (d) => `${DOC_LABEL[d.type] ?? lower(d.type)} v${d.version}` },
+          { label: "Issued", render: (d) => formatDateTime(d.createdAt) },
+          { label: "Accepted", render: (d) => (d.acceptedAt ? formatDateTime(d.acceptedAt) : "—") },
+          {
+            label: "",
+            render: (d) => (
+              <button type="button" className="btn btn-sm btn-outline" disabled={busy === d.id} onClick={() => void open(d)}>
+                Open PDF
+              </button>
+            ),
+          },
+        ]}
+      />
+    </Section>
+  );
+}
+
+/** G5: the loan's extensions on the Repayment tab, read-only — each one moved the due date by a tenure. */
+export function ExtensionHistory({ caseId, loan }: { caseId: string; loan: { extensionCount?: number; originalDueDate?: string | null; dueDate: string | null } }) {
+  const q = useQuery({ queryKey: ["extension-panel", caseId], queryFn: () => extensionsApi.panel(caseId) });
+  if (!loan.extensionCount && !(q.data?.history.length)) return null;
+  const done = (q.data?.history ?? []).filter((e) => e.status === "ACTIVE");
+  const charges = done.reduce((s, e) => s + e.feePaise + e.gstPaise + e.interestPaise, 0);
+  return (
+    <Section title={`Extensions · ${loan.extensionCount ?? done.length} of ${q.data?.cap ?? 3}`}>
+      <FieldGrid cols={3}>
+        <Field label="Current due date" keyLabel>{loan.dueDate ? formatDate(loan.dueDate) : null}</Field>
+        <Field label="Original due date">{loan.originalDueDate ? formatDate(loan.originalDueDate) : null}</Field>
+        <Field label="Extension charges (excl. late charge)" caption="never reduce principal">{paiseToINR(charges)}</Field>
+      </FieldGrid>
+      {done.length > 0 && (
+        <DeskTable<Extension>
+          rows={done}
+          rowKey={(e) => e.id}
+          empty=""
+          columns={[
+            { label: "#", render: (e) => e.seq },
+            { label: "Due", render: (e) => (e.oldDueDate && e.newDueDate ? `${formatDate(e.oldDueDate)} → ${formatDate(e.newDueDate)}` : "—") },
+            { label: "Charge", render: (e) => paiseToINR(e.feePaise + e.gstPaise + e.interestPaise) },
+            { label: "Borrower confirmed", render: (e) => (e.acceptedAt ? formatDateTime(e.acceptedAt) : "—") },
+            { label: "Activated", render: (e) => (e.activatedAt ? formatDateTime(e.activatedAt) : "—") },
+          ]}
+        />
+      )}
     </Section>
   );
 }

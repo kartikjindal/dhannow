@@ -17,7 +17,7 @@ const ALLOWED = [
   /^admin\/holidays(\/\d{4}-\d{2}-\d{2})?$/,
   /^admin\/staff\/\d+\/mfa\/reset$/,
   /^loans\/\d+\/(dispute(\/release)?|holds|documents(\/\d+\/url)?)$/,
-  /^loan\/\d+\/repayments\/\d+\/reverse$/,
+  /^loan\/\d+\/repayments\/\d+\/(reverse|treat-as-extension)$/,
 ];
 
 type Ctx = { params: Promise<{ path?: string[] }> };

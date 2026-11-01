@@ -28,8 +28,10 @@ import { BLANK } from "@/lib/staff/column-filter-match";
 import { retryUnlessClientError } from "@/lib/staff/admin-all-applications";
 import { useRegisterQuery } from "@/lib/staff/register-query";
 import { useServerRegister } from "@/lib/staff/use-server-register";
+import { HOLD_LABEL, LIFECYCLE_TONE, lifecycleLabel, type LoanHold, type LoanLifecycle } from "@/lib/domain/loan";
 import {
   SEGMENTS,
+  FOCUS_SEGMENTS,
   SEGMENT_LABEL,
   SEGMENT_TONE,
   segmentOf,
@@ -155,7 +157,8 @@ function LoansPageInner() {
   const pathname = usePathname();
 
   const segParam = (searchParams.get("seg") ?? "all") as LoanSegment;
-  const seg: LoanSegment = segParam === "all" || SEGMENTS.includes(segParam) ? segParam : "all";
+  const seg: LoanSegment =
+    segParam === "all" || ([...SEGMENTS, ...FOCUS_SEGMENTS] as string[]).includes(segParam) ? segParam : "all";
 
   // Deep link from the global-search palette: `?q=318&open=318` narrows the register to that loan
   // and opens its detail dialog, so a hit in the palette lands on the record itself. `?q=` is read
@@ -220,17 +223,19 @@ function LoansPageInner() {
       const window: Record<string, string> = {};
       if (range.from) window.from = range.from;
       if (range.to) window.to = range.to;
+      const chips = [...SEGMENTS, ...FOCUS_SEGMENTS];
       const totals = await Promise.all(
-        SEGMENTS.map((s) =>
+        chips.map((s) =>
           loansApi
             .page({ filters: query ? { q: query } : {}, extra: { ...window, seg: s }, page: 1, size: 1 })
             .then((r) => r.total),
         ),
       );
-      const out = { all: 0, active: 0, overdue: 0, closed: 0 } as Record<LoanSegment, number>;
-      SEGMENTS.forEach((s, i) => {
+      const out = { all: 0 } as Record<LoanSegment, number>;
+      chips.forEach((s, i) => {
         out[s] = totals[i];
-        out.all += totals[i];
+        // Every loan is in exactly one partition chip; the focus chips overlap them.
+        if ((SEGMENTS as string[]).includes(s)) out.all += totals[i];
       });
       return out;
     },
@@ -240,7 +245,7 @@ function LoansPageInner() {
     // "(0)" on every chip. No identity in this key.
     placeholderData: keepPreviousData,
   });
-  const counts = countsQ.data ?? { all: 0, active: 0, overdue: 0, closed: 0 };
+  const counts = countsQ.data ?? ({ all: 0 } as Record<LoanSegment, number>);
 
   // What each column offers. `raw` is the stored value behind the label; `facet: true` means the
   // checklist comes from the facets endpoint, not from the rows (which are one page). Status and
@@ -357,11 +362,16 @@ function LoansPageInner() {
             { header: "Due", value: (l) => (l.dueDate ? formatDate(l.dueDate) : "") },
             { header: "Closure date", value: (l) => (l.closedOn ? formatDate(l.closedOn) : "") },
             { header: "Principal (₹)", value: (l) => (l.principalPaise / 100).toFixed(2) },
+            { header: "Processing fee (₹)", value: (l) => ((l.processingFeePaise ?? 0) / 100).toFixed(2) },
+            { header: "GST (₹)", value: (l) => ((l.gstPaise ?? 0) / 100).toFixed(2) },
+            { header: "Interest, upfront (₹)", value: (l) => ((l.upfrontInterestPaise ?? 0) / 100).toFixed(2) },
             { header: "Net disbursed (₹)", value: (l) => (l.netDisbursedPaise / 100).toFixed(2) },
             { header: "Repayable (₹)", value: (l) => (l.totalRepayablePaise / 100).toFixed(2) },
             { header: "Outstanding (₹)", value: (l) => (l.outstandingPaise / 100).toFixed(2) },
             { header: "DPD", value: (l) => l.dpd },
-            { header: "Status", value: (l) => loanStatusLabel(l.status) },
+            { header: "Status", value: (l) => (l.lifecycleStatus ? lifecycleLabel(l.lifecycleStatus) : loanStatusLabel(l.status)) },
+            { header: "Hold", value: (l) => (l.holdStatus && l.holdStatus !== "NONE" ? l.holdStatus : "") },
+            { header: "Confirmed by", value: (l) => l.confirmedByName ?? "" },
             { header: "Officer", value: (l) => l.assignedOfficerName ?? "" },
             { header: "Disbursal ref", value: (l) => l.disbursalTxnRef ?? "" },
           ]}
@@ -396,7 +406,7 @@ function LoansPageInner() {
           <button type="button" className={`cal-preset${seg === "all" ? " on" : ""}`} onClick={() => setSeg("all")}>
             {SEGMENT_LABEL.all} ({counts.all})
           </button>
-          {SEGMENTS.map((s) => (
+          {[...SEGMENTS, ...FOCUS_SEGMENTS].map((s) => (
             <button
               key={s}
               type="button"
@@ -405,7 +415,7 @@ function LoansPageInner() {
               }`}
               onClick={() => setSeg(s)}
             >
-              {SEGMENT_LABEL[s]} ({counts[s]})
+              {SEGMENT_LABEL[s]} ({counts[s] ?? 0})
             </button>
           ))}
         </div>
@@ -511,7 +521,10 @@ function LoansPageInner() {
                                 </td>
                                 <td><TrustStars trust={l.trust} /></td>
                                 <td className="whitespace-nowrap text-muted">{l.sanctionedAt ? formatDate(l.sanctionedAt) : "—"}</td>
-                                <td className="whitespace-nowrap text-muted">{l.disbursedOn ? formatDate(l.disbursedOn) : "—"}</td>
+                                <td className="whitespace-nowrap text-muted">
+                                  {l.disbursedOn ? formatDate(l.disbursedOn) : "—"}
+                                  {l.confirmedByName && <span className="block text-[9px]">confirmed by {l.confirmedByName}</span>}
+                                </td>
                                 <td className="whitespace-nowrap">
                                   <span className={l.dpd > 0 ? "font-semibold text-error-700" : "text-ink"}>
                                     {l.dueDate ? formatDate(l.dueDate) : "—"}
@@ -520,14 +533,23 @@ function LoansPageInner() {
                                 <td className="whitespace-nowrap text-muted">{l.closedOn ? formatDate(l.closedOn) : "—"}</td>
                                 <td className="text-muted">{ordinal(l.loanCycle)}</td>
                                 <td className="num font-mono text-ink">{paiseToINR(l.principalPaise)}</td>
-                                <td className="num font-mono text-ink">{paiseToINR(l.netDisbursedPaise)}</td>
+                                <td className="num font-mono text-ink">
+                                  {paiseToINR(l.netDisbursedPaise)}
+                                  {l.upfrontInterestPaise != null && (
+                                    <span className="block text-[9px] text-muted">
+                                      fee {paiseToINR(l.processingFeePaise)} · GST {paiseToINR(l.gstPaise)} · interest {paiseToINR(l.upfrontInterestPaise)}
+                                    </span>
+                                  )}
+                                </td>
                                 <td className="num font-mono text-ink">{paiseToINR(l.totalRepayablePaise)}</td>
                                 <td className="num font-mono font-semibold text-ink">{paiseToINR(l.outstandingPaise)}</td>
                                 <DpdCell row={l} />
                                 <td>
-                                  <Badge variant={SEGMENT_TONE[segmentOf(l)]} size="sm">
-                                    {loanStatusLabel(l.status)}
+                                  <Badge variant={l.lifecycleStatus ? LIFECYCLE_TONE[l.lifecycleStatus as LoanLifecycle] ?? "neutral" : SEGMENT_TONE[segmentOf(l)]} size="sm">
+                                    {l.lifecycleStatus ? lifecycleLabel(l.lifecycleStatus) : loanStatusLabel(l.status)}
                                   </Badge>
+                                  {l.holdStatus && l.holdStatus !== "NONE" && <Badge variant="error" size="sm" className="ml-1">{HOLD_LABEL[l.holdStatus as LoanHold] ?? l.holdStatus}</Badge>}
+                                  {!!l.extensionCount && <span className="block text-[9px] text-muted">extended {l.extensionCount} of 3</span>}
                                 </td>
                                 <td className="staff-cell text-ink">{l.assignedOfficerName ?? <span className="text-muted">Unallocated</span>}</td>
                                 <td className="staff-sticky-actions text-right">

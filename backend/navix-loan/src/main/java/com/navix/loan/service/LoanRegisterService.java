@@ -318,6 +318,7 @@ public class LoanRegisterService {
         Map<Long, String> officerNameById = new HashMap<>();
         Map<Long, com.navix.common.loan.TrustSignals> trustByCustomer = trustSignals.forCustomers(
                 loans.stream().map(Loan::getCustomerId).filter(Objects::nonNull).distinct().toList());
+        Map<Long, String> confirmerByLoanId = registerQuery.confirmers(loanIds);
         List<LoanRegisterRow> rows = new ArrayList<>(loans.size());
         for (Loan loan : loans) {
             LoanApplication app = appByLoanId.get(loan.getId());
@@ -359,7 +360,12 @@ public class LoanRegisterService {
                     trustByCustomer.get(loan.getCustomerId()),
                     loan.getLifecycleStatus().name(),
                     loan.getHoldStatus().name(),
-                    loan.getRepaymentStatus().name()));
+                    loan.getRepaymentStatus().name(),
+                    loan.getProcessingFee(),
+                    loan.getGst(),
+                    loan.getUpfrontInterestPaise(),
+                    confirmerByLoanId.get(loan.getId()),
+                    loan.getExtensionCount()));
         }
         return rows;
     }

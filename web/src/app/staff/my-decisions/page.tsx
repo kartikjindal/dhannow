@@ -320,7 +320,7 @@ export default function MyDecisionsPage() {
                   <Th th={th} col="decisionLabel" />
                   <Th th={th} col="toStatus" />
                   <Th th={th} col="amountPaise" className="num text-right" />
-                  <th scope="col">Repayment date</th>
+                  <th scope="col">Due</th>
                   <Th th={th} col="assigneeName" />
                   <th scope="col">Txn ref</th>
                   <th scope="col">Remark</th>
@@ -364,7 +364,8 @@ export default function MyDecisionsPage() {
                       {r.amountPaise != null ? paiseToINR(r.amountPaise) : "—"}
                     </td>
                     <td className="whitespace-nowrap">
-                      {r.repaymentDate ? formatDate(r.repaymentDate) : "—"}
+                      {/* DhanNow: the sanction projects nothing; the due date is set when the Accountant confirms. */}
+                      {r.repaymentDate ? `${formatDate(r.repaymentDate)} (indicative)` : "14 days after confirmation"}
                     </td>
                     <td className="staff-cell">
                       {r.assigneeName ?? (r.assigneeId != null ? `#${r.assigneeId}` : "—")}

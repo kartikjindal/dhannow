@@ -16,6 +16,7 @@ import {
 } from "@/components/staff/customer-360/loan-card";
 import type { TabCtx } from "@/components/staff/customer-360/types";
 import { daysBetween } from "@/lib/calc/loan-math";
+import { LoanDocumentsSection } from "@/components/staff/customer-360/loan-desk-sections";
 import { HOLD_LABEL, LIFECYCLE_TONE, lifecycleLabel } from "@/lib/domain/loan";
 import { isoDayToLocalDate, istCalendarToday } from "@/lib/customers/customer-360";
 import { customerEarnings } from "@/lib/customers/customer-earnings";
@@ -191,6 +192,7 @@ function LoanFacts({ ctx, loanId }: { ctx: TabCtx; loanId: number }) {
         </Field>
         <Field label="Disbursed" tone="success">{loan.disbursedOn ? "✓ Yes" : "No"}</Field>
       </FieldGrid>
+      <LoanDocumentsSection loanId={loan.id} />
     </>
   );
 }

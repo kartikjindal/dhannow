@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/staff/staff-ui";
 import { NoAccessNotice } from "@/components/staff/live-pipeline";
 import { PeriodPicker } from "@/components/staff/period-picker";
 import { QueueStrip } from "@/components/staff/dashboard/queue-strip";
+import { DeskDashboard } from "@/components/staff/dashboard/desk-dashboard";
 import { RoleToggleStrip } from "@/components/staff/dashboard/role-toggle-strip";
 import { RecordsDrawer, useRecordsTarget } from "@/components/staff/dashboard/records-drawer";
 import {
@@ -83,10 +84,12 @@ function Dashboard() {
 
   // DSA is a firewalled portal role with no dashboard permission at all; the backend is the real guard.
   if (realRole === "DSA" || !view || !params) {
+    if (realRole === "DSA") return <NoAccessNotice message="DSAs use the leads and earnings pages — see the DSA menu." />;
     return (
-      <NoAccessNotice
-        message={realRole === "DSA" ? "DSAs use the leads and earnings pages — see the DSA menu." : "Your desks are in the menu on the left."}
-      />
+      <div>
+        <PageHeader title="Dashboard" subtitle="Your desks at a glance" />
+        <DeskDashboard role={realRole} />
+      </div>
     );
   }
 

@@ -37,6 +37,8 @@ export interface CustomerExportExtras {
   verifications: StepResult[];
   /** `staffApi.references` for the latest application. */
   references: ReferenceView[];
+  /** PLAN Phase 10b: the credit-ladder level (replaces the navix eligible limit). */
+  creditLevel?: { level: number; maxPaise: number } | null;
 }
 
 /** One titled block of the CSV / one table of the PDF. */
@@ -170,12 +172,13 @@ const PROFILE_FIELDS: [label: string, value: (p: ProfileView) => Cell][] = [
   ["Credit brief generated at", (p) => dateTime(p.creditBriefGeneratedAt)],
 ];
 
-function profileSection(detail: CustomerDetail): CustomerExportSection {
+function profileSection(detail: CustomerDetail, creditLevel?: CustomerExportExtras["creditLevel"]): CustomerExportSection {
   const p = detail.profile;
   const rows: Cell[][] = [
     ["Customer ID", detail.customerId],
     ["Owner", detail.ownerName ?? "Unallocated"],
-    ["Admin limit override (Rs.)", rupees(detail.limitOverridePaise)],
+    ["Credit level", creditLevel ? `Level ${creditLevel.level}` : ""],
+    ["Credit level maximum (Rs.)", rupees(creditLevel?.maxPaise)],
     ["Bureau state", humanise(detail.creditBrief?.bureauState)],
   ];
   if (p) for (const [label, value] of PROFILE_FIELDS) rows.push([label, value(p)]);
@@ -191,11 +194,9 @@ function applicationsSection(apps: ApplicationView[]): CustomerExportSection {
       "Created",
       "Stage entered",
       "Amount requested (Rs.)",
-      "Eligible limit (Rs.)",
       "Sanctioned amount (Rs.)",
       "Repayment date",
       "Tenure (days)",
-      "Salary credit day",
       "Purpose",
       "Journey step",
       "Assigned to",
@@ -212,11 +213,9 @@ function applicationsSection(apps: ApplicationView[]): CustomerExportSection {
       date(a.createdAt),
       dateTime(a.currentStageEnteredAt),
       rupees(a.amountRequestedPaise),
-      rupees(a.eligibleLimitPaise),
       rupees(a.sanctionedAmountPaise),
       date(a.approvedRepaymentDate),
       text(a.sanctionTenureDays),
-      text(a.salaryCreditDay),
       a.purpose,
       humanise(a.journeyStep),
       a.assignedExecutiveName,
@@ -322,7 +321,7 @@ function documentsSection(groups: ApplicationDocumentGroup[]): CustomerExportSec
 /** The sections of the full-profile export, in the order they appear in both the CSV and the PDF. */
 export function buildCustomerCsvSections(detail: CustomerDetail, extras: CustomerExportExtras): CustomerExportSection[] {
   return [
-    profileSection(detail),
+    profileSection(detail, extras.creditLevel),
     applicationsSection(detail.applications),
     loansSection(detail),
     repaymentsSection(detail.payments),

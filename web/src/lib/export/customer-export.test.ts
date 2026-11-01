@@ -103,7 +103,7 @@ const extras: CustomerExportExtras = {
   references: [{ slot: 1, fullName: "Rohan Verma", mobile: "9000000001", relation: "SIBLING" }],
 };
 
-const sectionsByTitle = () => Object.fromEntries(buildCustomerCsvSections(detail, extras).map((s) => [s.title, s]));
+const sectionsByTitle = () => Object.fromEntries(buildCustomerCsvSections(detail, { ...extras, creditLevel: { level: 3, maxPaise: 300_000 } }).map((s) => [s.title, s]));
 
 describe("buildCustomerCsvSections", () => {
   it("produces every section, in order", () => {
@@ -126,7 +126,9 @@ describe("buildCustomerCsvSections", () => {
     expect(byField["PAN"]).toBe("ABCDE1234F");
     expect(byField["Aadhaar"]).toBe("234567890123");
     expect(byField["Monthly salary (Rs.)"]).toBe("42000.00");
-    expect(byField["Admin limit override (Rs.)"]).toBe("75000.00");
+    expect(byField["Admin limit override (Rs.)"]).toBeUndefined();
+    expect(byField["Credit level"]).toBe("Level 3");
+    expect(byField["Credit level maximum (Rs.)"]).toBe("3000.00");
     expect(byField["Date of birth"]).toBe("12 Apr 1991");
     expect(byField["PAN verified"]).toBe("Yes");
     expect(byField["Penny drop verified"]).toBe("No");

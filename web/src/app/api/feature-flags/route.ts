@@ -1,5 +1,5 @@
 import { type NextRequest } from "next/server";
-import { getStaffSession, getBorrowerSession } from "@/lib/api/bff-session";
+import { getStaffSession } from "@/lib/api/bff-session";
 import { proxyToBackend, unauthorized } from "@/lib/api/bff-proxy";
 
 /**
@@ -16,13 +16,9 @@ async function staffToken(): Promise<string | null> {
   return s ? s.token : null;
 }
 
-async function borrowerToken(): Promise<string | null> {
-  const s = await getBorrowerSession();
-  return s ? s.token : null;
-}
 
 export async function GET(req: NextRequest) {
-  const token = (await staffToken()) ?? (await borrowerToken());
+  const token = await staffToken();
   if (!token) return unauthorized("Authentication required.");
   return proxyToBackend(req, "/api/feature-flags", token);
 }

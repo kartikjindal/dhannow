@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { creditLevelApi } from "@/lib/api/staff-desks";
 import { useQuery } from "@tanstack/react-query";
 import { Download, ChevronDown, FileText, FileSpreadsheet } from "lucide-react";
 import { useCan, useStaffMe, ROLE_LABEL } from "@/components/staff/pipeline/hooks";
@@ -47,6 +48,13 @@ export function CustomerExportMenu({ customerId, detail }: { customerId: number;
     retry: false,
   });
 
+  const levelQ = useQuery({
+    queryKey: ["credit-level", customerId],
+    queryFn: () => creditLevelApi.get(customerId),
+    enabled: wanted,
+    retry: false,
+  });
+
   if (!me || !can("customer:manage")) return null;
 
   const loading = wanted && (documentsQ.isLoading || verificationsQ.isLoading || referencesQ.isLoading);
@@ -57,6 +65,7 @@ export function CustomerExportMenu({ customerId, detail }: { customerId: number;
     documents: documentsQ.data ?? [],
     verifications: verificationsQ.data ?? [],
     references: referencesQ.data ?? [],
+    creditLevel: levelQ.data?.current ?? null,
   });
 
   const doCsv = () => {

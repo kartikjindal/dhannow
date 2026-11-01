@@ -1088,7 +1088,7 @@ The audit found about 120 places where staff screens, queries and exports encode
 **Guard test:** a repo-wide test fails the build if any staff or borrower source contains "per day for the days held", "salary day", "25% of", "pay early", "save interest" or "DhanBoost" outside an allow-listed legacy folder.
 - **Tests:** vitest for new components; Playwright e2e for borrower happy path + staff sanction → disburse → confirm → verify repayment, run in CI against docker-compose.
 
-**Status (2026-11-02): shared roots and revenue recognition done; per-surface work partly done.** Gates as in Phase 10 above.
+**Status (2026-11-02): done, with the gaps listed.** Second pass gates: `mvn verify` green (about 2,016 unit) and `mvn verify -Pit` green (151 integration); web `tsc --noEmit` and lint clean, 885 vitest green, `next build` passes on Next 15.5.28. No migration (V115 still free).
 
 Code:
 - **R4.** Every staff money figure is the backend's: `LoanBreakdown`, the loan card and the Repayment tab show interest as "prepaid at disbursal" (`upfrontInterestPaise` / `interestPrepaidPaise`) and owed = principal + late charge − paid.
@@ -1107,12 +1107,24 @@ Deviations:
 - **Pre-due window** is a constant (2 days), not a config value.
 - **Bucket names changed** on the wire (`T0_T7`… → `D2_7`…); nothing persists them (`collection_case.current_bucket` is unused).
 
-Not done (10b, in priority order):
-1. Loans register columns (fee, GST, interest, net, confirmed on/by, lifecycle, hold) and its new filters/segments (Due today, D1, Overdue review, Restructure, On hold); repayment-book columns on the pipeline; "My decisions" column change.
-2. Accounting transactions ledger row types (FEE income, GST payable, INTEREST income at confirmation, PENAL, REFUND) and a confirmation-status column; FINANCE/COMPLIANCE report categories (reports are still ADMIN-only on the backend).
-3. Finance views: GST payable register, net-disbursal reconciliation view, credit-ladder distribution (the income report covers fee, GST and upfront interest).
-4. Staff "View KFS / sanction / agreement" from the stored `loan_document` PDFs (the proxy path is allowlisted; no screen yet) and the screen/PDF/ledger equality test.
-5. Exports: ladder level in `customer-export.ts` and the `ExportMenu` columns; collections settlements copy.
+Second pass (2026-11-02):
+- **Loans register.** Rows carry `processingFeePaise`, `gstPaise`, `upfrontInterestPaise`, `confirmedByName` (the Accountant's `DISBURSAL_CONFIRM` event, `LoanRegisterQuery.confirmers`) and `extensionCount`; the table shows the deductions under net disbursed, "confirmed by" under the disbursal date, the lifecycle badge, the hold and "extended n of 3"; the export adds fee, GST, interest, hold and confirmer. Focus chips (overlays on the three partition chips, front and back): Awaiting confirmation, Due today, 1 day overdue, Overdue review, Restructure, On hold. My decisions: the column reads "Due" ("14 days after confirmation", an old projection is marked indicative).
+- **Accounting ledger.** `TransactionLedgerQuery` adds INTERNAL rows FEE_INCOME, GST_PAYABLE and INTEREST_INCOME on the confirmation day (unconfirmed loans book nothing), PENAL_INCOME per verified repayment's PENAL allocation by bank date, and OUTGOING REFUND rows; an unconfirmed disbursal shows status AWAITING_CONFIRMATION. The default view stays the cash ledger; the new rows are the "Income & GST bookings" tab (`direction=INTERNAL`).
+- **Reports.** FINANCE reads the Finance & tax reports and COMPLIANCE those plus Compliance & audit (`ReportService.allowed`; web `reports:view`). New: GST payable register (by confirmation month), net-disbursal reconciliation (difference column, breaks counted) and credit-ladder distribution; the fee/GST register adds the upfront interest and counts confirmed loans only.
+- **Stored PDFs.** The Loan tab lists the loan's stored documents (KFS, sanction, agreement, schedule, receipts, addenda) and opens each through the 5-minute link (audited). `ApplicationFlowIntegrationTest.revenue_…` now asserts the document facts, the staff loan view and the ledger's DISBURSAL / FEE_INCOME / GST_PAYABLE / INTEREST_INCOME rows carry the same figures (₹1,000: 742 / 100 / 18 / 140).
+- **Exports.** The customer export carries the credit level and its maximum; the eligible-limit, salary-day and limit-override fields are gone.
+- **Desk roles' dashboard.** SUPPORT, FINANCE and COMPLIANCE land on desk tiles (open complaints and SLA misses, refunds owed, pricing drafts to approve, adjustments today) linking to their desks.
+- **EXT-14.** `POST /api/loan/{loanId}/repayments/{paymentId}/treat-as-extension {extensionId}` (ACCOUNTANT, FINANCE, ADMIN): a pending repayment equal to the ACCEPTED extension's quote for its bank date is re-filed as that extension's payment (`RepaymentServiceTest.ext14_…`); the Repayment tab offers it. **G5:** the Repayment tab shows the extension block (current and original due date, charges, each activation).
+- **Complaints and MFA.** Assign to me, file for a caller, the assignee column; ADMIN "Reset MFA" on the staff list.
+- **Dead code.** Borrower-session helpers and their fallbacks in the feature-flags, payment-settings and storage proxies are gone; six marketing-only CSS sections removed (the rest of `globals.css` is still partly used).
+- **Dependencies.** `next` 15.1.12 → 15.5.28 (with `eslint-config-next`), `jspdf` 2 → 4.2.1 and `jspdf-autotable` 3 → 5.0.9 (a major bump, as asked; exports and their tests pass), next's bundled `postcss` overridden to 8.5.32, `nanoid` and `source-map-js` fixed by `npm audit fix`. `npm audit --omit=dev --audit-level=high` leaves one high: `zod` 3.x, fixed only in zod 4 (a major bump with API changes; left).
+
+Not done (10b):
+1. Repayment-book columns on the pipeline queues (the loans register focus chips cover the same states).
+2. EXT-18 "Re-open for this payment" (needs an EXPIRED/CANCELLED → ACCEPTED move in the extension state machine).
+3. Scorecards for the desk roles on Staff performance; a RECOVERY desk (no backend rights yet).
+4. Complaint attachments (upload category and staff presigned view).
+5. `zod` 4 upgrade; `next lint` is deprecated in Next 16 (move to the ESLint CLI then).
 6. Playwright: the ₹10,000 assertions per surface and the staff sanction → disburse → confirm → verify path (CI, Phase 12).
 
 ## Phase 11: Flutter app (`app/`, weeks 5–12, parallel from Phase 5)

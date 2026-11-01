@@ -1,5 +1,5 @@
 import { type NextRequest } from "next/server";
-import { getStaffSession, getBorrowerSession } from "@/lib/api/bff-session";
+import { getStaffSession } from "@/lib/api/bff-session";
 import { proxyToBackend, joinPath, unauthorized } from "@/lib/api/bff-proxy";
 
 /**
@@ -17,7 +17,7 @@ import { proxyToBackend, joinPath, unauthorized } from "@/lib/api/bff-proxy";
 type Ctx = { params: Promise<{ path?: string[] }> };
 
 async function handle(req: NextRequest, ctx: Ctx) {
-  const session = (await getStaffSession()) ?? (await getBorrowerSession());
+  const session = await getStaffSession();
   if (!session) return unauthorized("Authentication required.");
 
   const { path } = await ctx.params;

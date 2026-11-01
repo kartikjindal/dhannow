@@ -50,6 +50,10 @@ export const refundCasesApi = {
 export const reversePayment = (loanId: number, paymentId: number, reason: string) =>
   bff<unknown>(`${D}/loan/${loanId}/repayments/${paymentId}/reverse`, "POST", { reason });
 
+/** EXT-14: re-file a pending repayment as the loan's ACCEPTED extension payment (must equal the quote for its bank date). */
+export const treatAsExtensionPayment = (loanId: number, paymentId: number, extensionId: string) =>
+  bff<unknown>(`${D}/loan/${loanId}/repayments/${paymentId}/treat-as-extension`, "POST", { extensionId });
+
 // ---- Complaints (Phase 7) ---------------------------------------------------------------------------
 
 export const COMPLAINT_CATEGORIES = [
@@ -96,6 +100,7 @@ export const complaintsApi = {
     bff<Complaint>(`${D}/staff/complaints/${id}/resolve`, "POST", { note, version }),
   escalate: (id: number, version: number, note: string) =>
     bff<Complaint>(`${D}/staff/complaints/${id}/escalate`, "POST", { note, version }),
+  assign: (id: number, staffId: number) => bff<Complaint>(`${D}/staff/complaints/${id}/assign`, "POST", { staffId }),
 };
 
 // ---- Disputes / holds (Phase 7) ---------------------------------------------------------------------
@@ -298,4 +303,13 @@ export const mfaApi = {
   confirm: (email: string, password: string, code: string) => mfa<unknown>("confirm", { email, password, code }),
   /** ADMIN resets another staffer's authenticator (never their own). */
   reset: (staffId: number) => bff<unknown>(`${D}/admin/staff/${staffId}/mfa/reset`, "POST"),
+};
+
+// ---- Stored loan documents (Phase 5): the same PDFs the borrower saw, never re-rendered -------------
+
+export interface StoredLoanDocument { id: number; type: string; version: number; createdAt: string; acceptedAt: string | null; sha256: string | null }
+export const loanDocumentsApi = {
+  list: (loanId: number) => bff<StoredLoanDocument[]>(`${D}/loans/${loanId}/documents`, "GET"),
+  /** A 5-minute presigned link; each staff open is written to `loan_document_access`. */
+  url: (loanId: number, docId: number) => bff<{ documentId: number; url: string; expiresInSeconds: number }>(`${D}/loans/${loanId}/documents/${docId}/url`, "GET"),
 };

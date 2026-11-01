@@ -176,7 +176,13 @@ public class ReportService {
                     "Per collection officer: cases held, balance on them today, and money collected and loans closed in the period.", "Payment date"),
 
             new ReportDef("fee-income", FINANCE, "Processing fee and GST register",
-                    "Per loan paid out: processing fee earned and the GST collected on it, for tax filing.", "Disbursal date"),
+                    "Per confirmed loan: processing fee, GST payable and the interest deducted upfront.", "Confirmation date"),
+            new ReportDef("gst-payable", FINANCE, "GST payable register",
+                    "GST on the processing fee by month of disbursal confirmation, for the GST return.", "Confirmation date"),
+            new ReportDef("net-disbursal-reconciliation", FINANCE, "Net-disbursal reconciliation",
+                    "Per confirmed loan: principal against net disbursed + fee + GST + interest; any difference is a break.", "Confirmation date"),
+            new ReportDef("credit-ladder-distribution", FINANCE, "Credit-ladder distribution",
+                    "How many customers sit on each credit-ladder level today.", null),
             new ReportDef("income-realised", FINANCE, "Fee and interest income",
                     "Fee and upfront interest booked on the disbursal-confirmation date, GST payable, and late and extension charges received.", "Confirmation date"),
             new ReportDef("expenses", FINANCE, "Company expense register",
@@ -207,15 +213,18 @@ public class ReportService {
     }
 
     public List<ReportDef> catalog() {
-        requireAdmin();
-        return CATALOG;
+        String role = requireReportRole();
+        return CATALOG.stream().filter(d -> allowed(role, d)).toList();
     }
 
     /** Generate one report. {@code from}/{@code to} are an inclusive IST period; both null = all time. */
     public Report run(String key, LocalDate from, LocalDate to) {
-        requireAdmin();
+        String role = requireReportRole();
         ReportDef def = CATALOG.stream().filter(d -> d.key().equals(key)).findFirst()
                 .orElseThrow(() -> new BusinessException("REPORT_NOT_FOUND", "No report named " + key));
+        if (!allowed(role, def)) {
+            throw new BusinessException("FORBIDDEN_ROLE", "This report is not available to your role");
+        }
         Period p = def.dateBasis() == null ? Period.ALL : Period.of(from, to);
         Table t = switch (key) {
             case "platform-summary" -> platformSummary(p);
@@ -257,6 +266,9 @@ public class ReportService {
             case "staff-activity" -> staffActivity(p);
             case "expenses" -> expenses(p);
             case "fee-income" -> feeIncome(p);
+            case "gst-payable" -> gstPayable(p);
+            case "net-disbursal-reconciliation" -> netDisbursalReconciliation(p);
+            case "credit-ladder-distribution" -> creditLadderDistribution();
             case "leads" -> leads(p);
             case "dsa-commissions" -> dsaCommissions(p);
             case "referral-payouts" -> referralPayouts(p);
@@ -1001,18 +1013,72 @@ public class ReportService {
     private Table feeIncome(Period p) {
         List<Column> cols = List.of(Column.id("loanId", "Loan ID"), Column.text("name", "Customer"),
                 Column.date("disbursedOn", "Disbursed on"), Column.money("principal", "Principal (Rs.)"),
-                Column.money("fee", "Processing fee (Rs.)"), Column.money("gst", "GST on fee (Rs.)"),
+                Column.money("fee", "Processing fee (Rs.)"), Column.money("gst", "GST payable (Rs.)"),
+                Column.money("interest", "Interest, upfront (Rs.)"),
                 Column.money("deducted", "Total deducted (Rs.)"), Column.money("net", "Net disbursed (Rs.)"));
         String sql = "with " + PROF_CTE + """
                 select l.id, pr.full_name, l.disbursed_on, l.principal, coalesce(l.processing_fee, 0), coalesce(l.gst, 0),
-                       coalesce(l.processing_fee, 0) + coalesce(l.gst, 0), coalesce(l.net_disbursed, 0)
+                       coalesce(l.upfront_interest_paise, 0),
+                       coalesce(l.processing_fee, 0) + coalesce(l.gst, 0) + coalesce(l.upfront_interest_paise, 0),
+                       coalesce(l.net_disbursed, 0)
                 from loan l left join prof pr on pr.customer_id = l.customer_id
-                where l.disbursed_on is not null and %s
+                where l.disbursed_on is not null and l.lifecycle_status <> 'DISBURSEMENT_PENDING' and %s
                 order by l.disbursed_on desc, l.id desc
                 """.formatted(p.on("l.disbursed_on"));
         List<List<Object>> rows = query(sql, p.params());
         return totalled(cols, rows, List.of(new Fact("Fee earned", sum(rows, 4), ColumnType.MONEY),
-                new Fact("GST collected", sum(rows, 5), ColumnType.MONEY)));
+                new Fact("GST payable", sum(rows, 5), ColumnType.MONEY)));
+    }
+
+    /** GST payable by month of disbursal confirmation (PLAN Phase 10b finance view). */
+    private Table gstPayable(Period p) {
+        List<Column> cols = List.of(Column.text("month", "Month"), Column.number("loans", "Loans confirmed"),
+                Column.money("fee", "Processing fee (Rs.)"), Column.money("gst", "GST payable (Rs.)"));
+        String sql = """
+                select to_char(l.disbursed_on, 'YYYY-MM'), count(*), coalesce(sum(l.processing_fee), 0), coalesce(sum(l.gst), 0)
+                from loan l
+                where l.disbursed_on is not null and l.lifecycle_status <> 'DISBURSEMENT_PENDING' and %s
+                group by 1 order by 1 desc
+                """.formatted(p.on("l.disbursed_on"));
+        List<List<Object>> rows = query(sql, p.params());
+        return totalled(cols, rows, List.of(new Fact("GST payable", sum(rows, 3), ColumnType.MONEY)),
+                List.of("GST on the processing fee is collected for the government at disbursal; it is never income."));
+    }
+
+    /** Principal = net + fee + GST + upfront interest, per confirmed loan; any difference is a break (PLAN Phase 10b). */
+    private Table netDisbursalReconciliation(Period p) {
+        List<Column> cols = List.of(Column.id("loanId", "Loan ID"), Column.date("confirmedOn", "Confirmed on"),
+                Column.money("principal", "Principal (Rs.)"), Column.money("net", "Net disbursed (Rs.)"),
+                Column.money("fee", "Fee (Rs.)"), Column.money("gst", "GST (Rs.)"), Column.money("interest", "Interest (Rs.)"),
+                Column.money("difference", "Difference (Rs.)"), Column.text("utr", "Disbursal UTR"));
+        String sql = """
+                select l.id, l.disbursed_on, l.principal, coalesce(l.net_disbursed, 0), coalesce(l.processing_fee, 0),
+                       coalesce(l.gst, 0), coalesce(l.upfront_interest_paise, 0),
+                       l.principal - coalesce(l.net_disbursed, 0) - coalesce(l.processing_fee, 0) - coalesce(l.gst, 0)
+                           - coalesce(l.upfront_interest_paise, 0),
+                       l.disbursal_txn_ref
+                from loan l
+                where l.disbursed_on is not null and l.lifecycle_status <> 'DISBURSEMENT_PENDING' and %s
+                order by l.disbursed_on desc, l.id desc
+                """.formatted(p.on("l.disbursed_on"));
+        List<List<Object>> rows = query(sql, p.params());
+        long breaks = rows.stream().filter(r -> r.get(7) instanceof Number n && n.longValue() != 0).count();
+        return totalled(cols, rows, List.of(new Fact("Loans", (long) rows.size(), ColumnType.NUMBER),
+                        new Fact("Rows that do not reconcile", breaks, ColumnType.NUMBER),
+                        new Fact("Net disbursed", sum(rows, 3), ColumnType.MONEY)),
+                List.of("Every row should show a difference of 0. The nightly check logs RECONCILIATION_MISMATCH for any that does not."));
+    }
+
+    /** Customers per credit-ladder level today (PLAN Phase 10b finance view). */
+    private Table creditLadderDistribution() {
+        List<Column> cols = List.of(Column.number("level", "Level"), Column.money("max", "Up to (Rs.)"),
+                Column.number("customers", "Customers"));
+        String sql = """
+                select c.level, max(c.max_paise), count(*) from credit_level c group by c.level order by c.level
+                """;
+        List<List<Object>> rows = query(sql, new MapSqlParameterSource());
+        return new Table(cols, rows, List.of(new Fact("Customers on the ladder", sum(rows, 2), ColumnType.NUMBER)),
+                List.of("A full on-time repayment moves a customer up one level; any lateness or an extension keeps the level."));
     }
 
     // ---- growth -------------------------------------------------------------------------------
@@ -1669,10 +1735,22 @@ public class ReportService {
         return new Table(cols, rows, out, notes);
     }
 
-    private static void requireAdmin() {
+    /** ADMIN reads every report; FINANCE the Finance & tax ones; COMPLIANCE those and Compliance & audit (PLAN Phase 10b). */
+    private static String requireReportRole() {
         CurrentActor actor = ActorContext.get();
-        if (actor == null || !"ADMIN".equals(actor.role())) {
-            throw new BusinessException("FORBIDDEN_ROLE", "Reports are available to ADMIN only");
+        String role = actor == null ? null : actor.role();
+        if (!"ADMIN".equals(role) && !"FINANCE".equals(role) && !"COMPLIANCE".equals(role)) {
+            throw new BusinessException("FORBIDDEN_ROLE", "Reports are available to ADMIN, FINANCE and COMPLIANCE only");
         }
+        return role;
+    }
+
+    static boolean allowed(String role, ReportDef def) {
+        return switch (role) {
+            case "ADMIN" -> true;
+            case "FINANCE" -> FINANCE.equals(def.category());
+            case "COMPLIANCE" -> FINANCE.equals(def.category()) || COMPLIANCE.equals(def.category());
+            default -> false;
+        };
     }
 }

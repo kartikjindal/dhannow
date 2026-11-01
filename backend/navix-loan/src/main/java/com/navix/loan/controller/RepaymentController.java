@@ -112,6 +112,17 @@ public class RepaymentController {
     public record ReverseRequest(String reason) {
     }
 
+    public record TreatAsExtensionRequest(java.util.UUID extensionId) {
+    }
+
+    /** EXT-14: re-file a pending repayment as the loan's ACCEPTED extension payment (service checks roles and the quote). */
+    @PostMapping("/{paymentId}/treat-as-extension")
+    public ApiResponse<PaymentView> treatAsExtension(@PathVariable Long loanId, @PathVariable Long paymentId,
+                                                     @RequestBody TreatAsExtensionRequest request) {
+        requireRole("ACCOUNTANT", "FINANCE", "ADMIN");
+        return ApiResponse.ok(repaymentService.view(repaymentService.treatAsExtension(loanId, paymentId, request.extensionId())));
+    }
+
     @PostMapping("/{paymentId}/reverse")
     public ApiResponse<PaymentView> reverse(@PathVariable Long loanId, @PathVariable Long paymentId,
                                             @RequestBody ReverseRequest request) {

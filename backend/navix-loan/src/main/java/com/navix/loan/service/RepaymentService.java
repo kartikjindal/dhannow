@@ -682,6 +682,37 @@ public class RepaymentService {
     }
 
     /**
+     * EXT-14 "Treat as extension payment": the borrower sent the extension charge as a plain repayment. While it is
+     * still waiting for verification and equals the quote of the loan's ACCEPTED extension for its bank date, the
+     * Accountant re-files it as that extension's payment; verifying it then moves the due date as usual.
+     */
+    @Transactional
+    public Payment treatAsExtension(Long loanId, Long paymentId, java.util.UUID extensionId) {
+        var actor = ActorContext.get();
+        if (!java.util.Set.of("ACCOUNTANT", "FINANCE", "ADMIN").contains(actor.role())) {
+            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role ACCOUNTANT, FINANCE or ADMIN");
+        }
+        Payment payment = paymentRepository.findById(paymentId)
+                .filter(p -> p.getLoanId().equals(loanId))
+                .orElseThrow(() -> new ResourceNotFoundException("Payment", String.valueOf(paymentId)));
+        if (payment.getStatus() != PaymentStatus.PENDING_VERIFICATION || payment.isExtension()) {
+            throw new BusinessException("STALE_STATE", "Only a repayment waiting for verification can be re-filed");
+        }
+        extensionLedger.lock(loanId);
+        Loan loan = loanRepository.findById(loanId)
+                .orElseThrow(() -> new ResourceNotFoundException("Loan", String.valueOf(loanId)));
+        extensionLedger.requirePayable(loan, extensionId, payment.getAmount(), payment.getPaidOn());
+        payment.setPurpose(PaymentPurpose.EXTENSION);
+        payment.setExtensionId(extensionId);
+        payment.setPartial(false);
+        Payment saved = paymentRepository.saveAndFlush(payment);
+        extensionLedger.markPaymentPending(extensionId);
+        // The loan no longer has a repayment waiting on this money.
+        refreshRepaymentStatus(loan);
+        return saved;
+    }
+
+    /**
      * CC-10: a verified repayment found bounced or reversed by the bank. ACCOUNTANT or ADMIN, never the person
      * who recorded or verified it (maker-checker). The payment becomes REVERSED and stops counting; its split is
      * undone (an open refund case for it is cancelled); a closed loan reopens to the state its dates imply

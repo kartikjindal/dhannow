@@ -1247,6 +1247,32 @@ class RepaymentServiceTest {
         verify(ledger).markPaymentRejected(ext);
     }
 
+    /** EXT-14: a pending repayment that is exactly the extension quote is re-filed as that extension's payment. */
+    @Test
+    void ext14_aPendingRepaymentIsTreatedAsTheExtensionPayment() {
+        LoanExtensionLedger ledger = org.mockito.Mockito.mock(LoanExtensionLedger.class);
+        java.util.UUID ext = java.util.UUID.randomUUID();
+        Payment p = extensionPayment(null, PaymentStatus.PENDING_VERIFICATION);
+        p.setPurpose(com.navix.loan.domain.PaymentPurpose.REPAYMENT);
+        Loan loan = dhanNowLoan(today().minusDays(3));
+        when(paymentRepository.findById(5L)).thenReturn(Optional.of(p));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.saveAndFlush(any(Payment.class))).thenAnswer(i -> i.getArgument(0));
+        com.navix.common.security.ActorContext.set(new com.navix.common.security.CurrentActor("3", "Acc", "ACCOUNTANT"));
+        try {
+            Payment saved = withLedger(ledger).treatAsExtension(1L, 5L, ext);
+            assertThat(saved.getPurpose()).isEqualTo(com.navix.loan.domain.PaymentPurpose.EXTENSION);
+            assertThat(saved.getExtensionId()).isEqualTo(ext);
+            verify(ledger).requirePayable(loan, ext, 31_800L, today());
+            verify(ledger).markPaymentPending(ext);
+            com.navix.common.security.ActorContext.set(new com.navix.common.security.CurrentActor("9", "Sup", "SUPPORT"));
+            assertThatThrownBy(() -> withLedger(ledger).treatAsExtension(1L, 5L, ext))
+                    .hasFieldOrPropertyWithValue("code", "FORBIDDEN_ROLE");
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
+    }
+
     /** Only the Accountant's verification moves the due date; the extension charge never reaches the waterfall. */
     @Test
     void verifyingAnExtensionPaymentActivatesItAndLeavesPrincipalAlone() {

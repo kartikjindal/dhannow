@@ -12,7 +12,8 @@ import { Section } from "@/components/staff/detail-parts";
 import { AdminLogPaymentButton } from "@/components/staff/admin-log-payment";
 import { RejectDialog } from "@/components/staff/repayment-verify-queue";
 import { ActionButton } from "@/components/staff/desk-kit";
-import { reversePayment } from "@/lib/api/staff-desks";
+import { extensionsApi, reversePayment, treatAsExtensionPayment } from "@/lib/api/staff-desks";
+import { ExtensionHistory } from "@/components/staff/customer-360/loan-desk-sections";
 import { PostVerifyBlockDialog, type PostVerifyTarget } from "@/components/staff/post-verify-block-dialog";
 import {
   FinancialSummaryStrip,
@@ -105,6 +106,10 @@ function PaymentsPanel({ ctx, loan }: { ctx: TabCtx; loan: LoanView }) {
   const can = (p: Permission) => rbacCan(sess?.realRole, role, p);
   const canVerify = role != null && can("loan:activate");
   const canReverse = role != null && can("refunds:manage");
+  // EXT-14: the loan's ACCEPTED extension, if any, so a plain repayment of exactly its quote can be re-filed.
+  const caseId = useCollectionsCase(loan.id).case?.id ?? null;
+  const extPanel = useQuery({ queryKey: ["extension-panel", caseId], queryFn: () => extensionsApi.panel(caseId!), enabled: caseId != null && canVerify });
+  const accepted = extPanel.data?.current?.status === "ACCEPTED" ? extPanel.data.current : null;
   const canRecord = role != null && can("customer:manage");
   const [addOpen, setAddOpen] = React.useState(false);
   const [rejectTarget, setRejectTarget] = React.useState<PaymentView | null>(null);
@@ -204,6 +209,8 @@ function PaymentsPanel({ ctx, loan }: { ctx: TabCtx; loan: LoanView }) {
         <Field label="Tenure" tone="warning">{due && disbursed ? `${daysBetween(disbursed, due)} days` : null}</Field>
       </FieldGrid>
 
+      {caseId && <ExtensionHistory caseId={caseId} loan={loan} />}
+
       <Section title="Payments" pill={<Badge variant="info">{payments.length}</Badge>}>
         {actionError && (
           <p className="mb-2 text-xs text-error-700">{formatApiError(actionError, "Could not update the payment.")}</p>
@@ -266,6 +273,15 @@ function PaymentsPanel({ ctx, loan }: { ctx: TabCtx; loan: LoanView }) {
                               <X size={13} /> Reject
                             </button>
                           </div>
+                        )}
+                        {p.status === "PENDING_VERIFICATION" && p.purpose !== "EXTENSION" && canVerify && accepted && (
+                          <ActionButton
+                            label="Treat as extension payment"
+                            confirm={`Re-file this payment as extension ${accepted.seq}. It must equal the extension quote for its bank date; verifying it then moves the due date.`}
+                            run={() => treatAsExtensionPayment(loan.id, p.id, accepted.id)}
+                            invalidate={["staff-repayments"]}
+                            success="Re-filed as the extension payment"
+                          />
                         )}
                         {/* CC-10: a verified repayment that bounced is reversed (never by its recorder or verifier). */}
                         {p.status === "VERIFIED" && p.purpose !== "EXTENSION" && canReverse && (

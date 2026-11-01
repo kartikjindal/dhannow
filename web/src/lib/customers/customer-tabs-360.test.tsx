@@ -3,6 +3,7 @@
  *  - Audit Logs: filter chips derived from the event types present, client-side, "All" by default;
  *  - Loan Applications: the one-line exposure summary computed from the detail payload alone.
  */
+import { loanDocumentsApi } from "@/lib/api/staff-desks";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
@@ -125,6 +126,7 @@ describe("Loans exposure summary", () => {
   it("reads total principal, outstanding and last verified payment off the payload", async () => {
     vi.spyOn(customersApi, "documents").mockResolvedValue([]);
     vi.spyOn(customersApi, "mobileMatches").mockResolvedValue({ bureau: null, checked: [], matches: [] });
+    vi.spyOn(loanDocumentsApi, "list").mockResolvedValue([]);
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     renderTab(
       "loan",
@@ -142,7 +144,7 @@ describe("Loans exposure summary", () => {
     expect(line).toHaveTextContent("· Outstanding ₹21,000");
     // ICU spells the en-IN short month "Sep" or "Sept" depending on its version.
     expect(line).toHaveTextContent(/· Last verified payment 28 Sept? 2026/);
-    // Nothing here is fetched for the summary (documents is the manual-review badge's own read).
+    // Nothing here is fetched for the summary (documents and the stored loan PDFs are their own reads).
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

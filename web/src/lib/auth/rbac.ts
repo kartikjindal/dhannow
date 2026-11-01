@@ -135,7 +135,8 @@ export type Permission =
   | "config:manage"
   | "adjustments:view"
   | "holidays:manage"
-  | "finance:view";
+  | "finance:view"
+  | "reports:view";
 
 /** Static role -> permission mapping. TODO: confirm against backend authz. */
 const ROLE_PERMISSIONS: Record<StaffRole, Permission[]> = {
@@ -222,10 +223,10 @@ const ROLE_PERMISSIONS: Record<StaffRole, Permission[]> = {
   // RECOVERY has no backend rights of its own yet (Phase 7), so it only reads customers.
   RECOVERY: ["customer:view"],
   SUPPORT: ["customer:view", "customer:view:all", "complaints:view", "complaints:work", "holds:manage"],
-  FINANCE: ["customer:view", "refunds:view", "refunds:manage", "config:view", "config:manage", "adjustments:view", "finance:view"],
+  FINANCE: ["customer:view", "refunds:view", "refunds:manage", "config:view", "config:manage", "adjustments:view", "finance:view", "reports:view"],
   // Read-only: the backend refuses every write from this role (403 READ_ONLY_ROLE).
   // Read-only everywhere: the backend refuses every write with READ_ONLY_ROLE.
-  COMPLIANCE: ["customer:view", "customer:view:all", "complaints:view", "refunds:view", "config:view", "adjustments:view", "finance:view"],
+  COMPLIANCE: ["customer:view", "customer:view:all", "complaints:view", "refunds:view", "config:view", "adjustments:view", "finance:view", "reports:view"],
 };
 
 /** PLAN Phase 10 desks for the navix roles, added on top of the lists above. */

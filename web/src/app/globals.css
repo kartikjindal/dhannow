@@ -289,19 +289,6 @@ body.nav-open .nav-burger span::after { top: 0; transform: rotate(-45deg); }
 .steps-rail::before { content: ""; position: absolute; top: 24px; left: 10%; right: 10%; height: 2px; background: repeating-linear-gradient(90deg, var(--line) 0 8px, transparent 8px 16px); z-index: 0; }
 
 /* ==========================================================================
-   Image placeholder slots
-   ========================================================================== */
-.img-slot {
-  position: relative; background:
-    repeating-linear-gradient(135deg, #eceef1 0 14px, #f4f6f8 14px 28px);
-  border: 1px dashed #c2ccd6; border-radius: var(--radius);
-  display: grid; place-items: center; color: #8190a0; min-height: 220px; overflow: hidden;
-}
-.img-slot .slot-label { font-family: var(--sans); font-size: 0.608rem; letter-spacing: .04em; color: #6f8093; background: rgba(255,255,255,.82); border: 1px solid #d6dee6; padding: 5px 11px; border-radius: 999px; }
-.img-slot--tall { min-height: 320px; }
-.img-slot--ratio { aspect-ratio: 4 / 3; min-height: 0; }
-
-/* ==========================================================================
    Testimonials
    ========================================================================== */
 .testimonial { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 28px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column; }
@@ -311,15 +298,6 @@ body.nav-open .nav-burger span::after { top: 0; transform: rotate(-45deg); }
 .t-avatar { width: 42px; height: 42px; border-radius: 50%; background: var(--navy-tint); color: var(--navy); display: grid; place-items: center; font-weight: 700; font-family: var(--serif); flex-shrink: 0; }
 .t-meta b { display: block; font-size: 0.736rem; color: var(--ink); }
 .t-meta span { font-size: 0.64rem; color: var(--muted); }
-
-/* ==========================================================================
-   Partner / logo strip
-   ========================================================================== */
-.bureau-strip { display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; }
-.bureau-logo { height: 56px; min-width: 130px; padding: 0 20px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); display: grid; place-items: center; color: var(--muted); font-weight: 700; font-size: 0.72rem; letter-spacing: .02em; }
-.partner-card { display: flex; gap: 20px; align-items: flex-start; }
-.partner-card .p-logo { width: 96px; height: 96px; flex-shrink: 0; }
-.partner-card .img-slot { min-height: 96px; height: 96px; }
 
 /* ==========================================================================
    Tables
@@ -634,18 +612,6 @@ input[type="range"]::-moz-range-thumb { width: 22px; height: 22px; border-radius
 .calc-disclaimer { font-size: 0.656rem; color: var(--muted); margin-top: 14px; background: var(--warn-bg); border: 1px solid rgb(var(--c-warning-100)); border-radius: var(--radius); padding: 11px 14px; color: var(--warn); }
 
 /* ==========================================================================
-   Page hero (interior pages)
-   ========================================================================== */
-.page-hero { background: var(--navy); color: var(--on-dark); padding: 56px 0; position: relative; overflow: hidden; }
-.page-hero::after { content: ""; position: absolute; right: -100px; bottom: -150px; width: 360px; height: 360px; border-radius: 50%; background: radial-gradient(circle, rgb(var(--c-gold-500) / .12), transparent 65%); }
-.page-hero h1 { color: #fff; margin-bottom: .4rem; position: relative; }
-.page-hero p { color: var(--on-dark-muted); font-size: 0.88rem; max-width: 62ch; margin: 0; position: relative; }
-.breadcrumb { font-size: 0.656rem; color: var(--on-dark-muted); margin-bottom: 1rem; position: relative; }
-.breadcrumb a { color: var(--on-dark-muted); }
-.breadcrumb a:hover { color: #fff; }
-.breadcrumb span { margin: 0 .5rem; opacity: .5; }
-
-/* ==========================================================================
    Wizard / stepper (apply)
    ========================================================================== */
 .stepper { display: flex; align-items: center; gap: 0; margin-bottom: 2.4rem; }
@@ -676,41 +642,6 @@ input[type="range"]::-moz-range-thumb { width: 22px; height: 22px; border-radius
 .modal { background: var(--surface); border-radius: var(--r-xl); max-width: 460px; width: 100%; padding: 38px 34px; text-align: center; box-shadow: var(--shadow-md); max-height: calc(100dvh - 48px); overflow-y: auto; }
 .modal .check { width: 70px; height: 70px; border-radius: 50%; background: var(--ok-bg); color: var(--ok); display: grid; place-items: center; margin: 0 auto 1.4rem; }
 .modal .check svg { width: 36px; height: 36px; }
-
-/* ==========================================================================
-   Escalation tiers (grievance)
-   ========================================================================== */
-.tier { display: flex; gap: 22px; align-items: flex-start; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 26px; box-shadow: var(--shadow-sm); position: relative; }
-.tier .tier-level { flex-shrink: 0; width: 64px; text-align: center; }
-.tier .tier-level .lv-num { font-family: var(--serif); font-size: 1.6rem; font-weight: 700; color: var(--gold); line-height: 1; }
-.tier .tier-level .lv-tag { font-size: 0.544rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
-.tier .tier-body h3 { font-size: 0.896rem; margin-bottom: .3rem; }
-.tier .tier-body p { color: var(--muted); font-size: 0.736rem; margin-bottom: .5rem; }
-.tier .tier-meta { font-size: 0.704rem; }
-.tier .tier-meta b { color: var(--navy); }
-.sla-chip { display: inline-block; font-size: 0.608rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--ok-bg); color: var(--ok); }
-
-/* ==========================================================================
-   Policy cards
-   ========================================================================== */
-.policy-card { display: flex; gap: 16px; align-items: flex-start; }
-.policy-card .pol-icon { width: 44px; height: 44px; border-radius: var(--radius); background: var(--navy-tint); color: var(--navy); display: grid; place-items: center; flex-shrink: 0; }
-.policy-card .pol-icon svg { width: 22px; height: 22px; }
-.policy-card h3 { font-size: 0.816rem; margin-bottom: .25rem; }
-.policy-card p { font-size: 0.688rem; color: var(--muted); margin-bottom: .7rem; }
-.policy-card .doc-link { font-size: 0.672rem; font-weight: 600; color: var(--navy); display: inline-flex; align-items: center; gap: 6px; }
-.policy-card .doc-link svg { width: 14px; height: 14px; }
-
-/* ==========================================================================
-   Contact
-   ========================================================================== */
-.contact-detail { display: flex; gap: 16px; align-items: flex-start; padding: 18px 0; border-bottom: 1px solid var(--grey-200); }
-.contact-detail:last-child { border-bottom: 0; }
-.contact-detail .cd-icon { width: 44px; height: 44px; border-radius: var(--radius); background: var(--navy); color: #fff; display: grid; place-items: center; flex-shrink: 0; }
-.contact-detail .cd-icon svg { width: 22px; height: 22px; }
-.contact-detail h4 { margin: 0 0 .15rem; font-size: 0.8rem; }
-.contact-detail p { margin: 0; color: var(--muted); font-size: 0.736rem; }
-.contact-detail a { color: var(--navy); font-weight: 500; }
 
 /* ==========================================================================
    Footer

@@ -79,6 +79,7 @@ public class LoanRegisterQuery {
                        case when l.status = 'ACTIVE' and l.due_date is not null and l.due_date < :today
                             then 'OVERDUE' else l.status end as status,
                        greatest(0, coalesce(l.closed_on, :today) - l.due_date) as dpd,
+                       l.lifecycle_status, l.hold_status,
                        row_number() over (partition by l.customer_id
                                           order by l.disbursed_on asc nulls last, l.id) as loan_cycle
                 from loan l
@@ -238,9 +239,36 @@ public class LoanRegisterQuery {
                 case "overdue" -> clauses.add("r.status in ('OVERDUE', 'IN_COLLECTIONS')");
                 case "closed" -> clauses.add("r.status in ('REPAID', 'CLOSED')");
                 case "active" -> clauses.add("r.status not in ('OVERDUE', 'IN_COLLECTIONS', 'REPAID', 'CLOSED')");
+                // PLAN Phase 10b focus chips: overlays on the persisted DhanNow lifecycle and hold.
+                case "awaitingConfirmation" -> clauses.add("r.lifecycle_status = 'DISBURSEMENT_PENDING'");
+                case "dueToday" -> clauses.add("r.lifecycle_status = 'DUE_TODAY'");
+                case "d1" -> clauses.add("r.lifecycle_status = 'OVERDUE_D1'");
+                case "overdueReview" -> clauses.add("r.lifecycle_status = 'OVERDUE_REVIEW'");
+                case "restructure" -> clauses.add("r.lifecycle_status in ('RESTRUCTURE_PENDING', 'RESTRUCTURED')");
+                case "onHold" -> clauses.add("r.hold_status <> 'NONE'");
                 default -> { }
             }
         }
         return clauses;
+    }
+
+    /** Who confirmed each loan's disbursal (the Accountant's DISBURSAL_CONFIRM event), by loan id (PLAN Phase 10b). */
+    public Map<Long, String> confirmers(java.util.Collection<Long> loanIds) {
+        Map<Long, String> out = new java.util.HashMap<>();
+        if (loanIds.isEmpty()) {
+            return out;
+        }
+        jdbc.query("""
+                select a.loan_id, coalesce(su.name, e.actor_id) as who
+                from application_event e
+                join loan_application a on a.id = e.application_id
+                left join staff_user su on cast(su.id as text) = e.actor_id
+                where e.action = 'DISBURSAL_CONFIRM' and a.loan_id in (:ids)
+                order by e.at
+                """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("ids", loanIds),
+                rs -> {
+                    out.put(rs.getLong("loan_id"), rs.getString("who"));
+                });
+        return out;
     }
 }

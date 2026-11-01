@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+import { ActionButton } from "@/components/staff/desk-kit";
+import { mfaApi } from "@/lib/api/staff-desks";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, RefreshCw, UserPlus, UserX, UserCheck } from "lucide-react";
 import { EmptyState, ErrorState, Input, Select, Skeleton, toast } from "@/components/ui";
@@ -379,6 +381,14 @@ function StaffRow({ staff, index }: { staff: StaffResponse; index: number }) {
               >
                 <UserX size={13} /> {armed ? "Confirm disable" : "Disable"}
               </button>
+              {/* Staff MFA (Phase 7): a lost phone. The backend refuses an admin's own reset. */}
+              <ActionButton
+                label="Reset MFA"
+                confirm={`${staff.name} sets up an authenticator again at the next sign-in.`}
+                run={() => mfaApi.reset(staff.id)}
+                invalidate={["admin-staff"]}
+                success="Authenticator reset"
+              />
             </>
           )}
         </div>

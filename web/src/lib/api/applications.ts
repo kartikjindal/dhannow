@@ -4,7 +4,7 @@
  * IMPORTANT: these functions call the Next.js BFF proxies, NOT the Spring
  * backend directly. Staff actions/queues go through `/api/staff/applications/*`
  * (identity injected from the httpOnly `navix_staff` cookie); borrower actions
- * go through `/api/borrower/applications/*` (identity from `navix_borrower`).
+ * go through `/api/staff/*` (identity from the `navix_staff` cookie).
  * The two namespaces never share a session/cookie.
  *
  * Every backend response is an `ApiResponse<T>` envelope; the helpers below
@@ -507,8 +507,22 @@ export const REJECTION_REASON_LABEL: Record<RejectionReasonCode, string> = {
   OTHER: "Other",
 };
 
-export type TransactionType = "DISBURSAL" | "REPAYMENT";
-export type TransactionDirection = "OUTGOING" | "INCOMING";
+/** Phase 10b: income rows are booked at confirmation (fee, GST payable, upfront interest) or on receipt (late charge). */
+export type TransactionType =
+  | "DISBURSAL" | "REPAYMENT" | "EXTENSION" | "FEE_INCOME" | "GST_PAYABLE" | "INTEREST_INCOME" | "PENAL_INCOME" | "REFUND";
+/** INTERNAL rows move no cash (income and GST bookings). */
+export type TransactionDirection = "OUTGOING" | "INCOMING" | "INTERNAL";
+
+export const TRANSACTION_TYPE_LABEL: Record<TransactionType, string> = {
+  DISBURSAL: "Disbursal (net)",
+  REPAYMENT: "Repayment",
+  EXTENSION: "Extension charge",
+  FEE_INCOME: "Fee income",
+  GST_PAYABLE: "GST payable",
+  INTEREST_INCOME: "Interest income (upfront)",
+  PENAL_INCOME: "Late charge income",
+  REFUND: "Refund",
+};
 
 /** One row in the accountant's company-wide transactions ledger (mirrors backend TransactionView). */
 /** One page of the transactions ledger, with the period's totals (not the page's). */
@@ -2341,6 +2355,15 @@ export interface LoanRegisterRow {
   disbursalTxnRef: string | null;
   /** Bureau / UAN / work-email trust stars (staff list rows); null when not computed. */
   trust?: TrustSignals | null;
+  /** Phase 3 / 10b, additive: DhanNow state, the upfront deductions and the disbursal confirmer. */
+  lifecycleStatus?: string | null;
+  holdStatus?: string | null;
+  repaymentStatus?: string | null;
+  processingFeePaise?: number | null;
+  gstPaise?: number | null;
+  upfrontInterestPaise?: number | null;
+  confirmedByName?: string | null;
+  extensionCount?: number | null;
 }
 
 const LOANS_BASE = "/api/staff/loans";

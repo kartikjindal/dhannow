@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/staff/staff-ui";
 import { SearchBar } from "@/components/staff/search-bar";
 import { PermissionGate, NoAccessNotice, ROLE_LABEL, useStaffMe, useCan } from "@/components/staff/live-pipeline";
 import { ExportMenu } from "@/components/staff/export-menu";
-import { staffApi, paiseToINR, loanGraceDays, type TransactionDirection, type TransactionView } from "@/lib/api/applications";
+import { staffApi, paiseToINR, TRANSACTION_TYPE_LABEL, loanGraceDays, type TransactionDirection, type TransactionView } from "@/lib/api/applications";
 import { type FilterColumn } from "@/components/staff/column-filter";
 import { Th, thBag, describeRegister } from "@/lib/staff/register-th";
 import { useRegisterQuery } from "@/lib/staff/register-query";
@@ -24,6 +24,8 @@ const TABS: { key: "ALL" | TransactionDirection; label: string }[] = [
   { key: "ALL", label: "All" },
   { key: "INCOMING", label: "Incoming" },
   { key: "OUTGOING", label: "Outgoing" },
+  // PLAN Phase 10b: fee income, GST payable, upfront interest (at confirmation) and late charges (on receipt).
+  { key: "INTERNAL", label: "Income & GST bookings" },
 ];
 
 type Period = "DAY" | "WEEK" | "MONTH" | "QUARTER" | "YEAR" | "ALL";
@@ -49,7 +51,7 @@ const FILTER_COLUMNS: Array<FilterColumn<TransactionView>> = [
   { key: "date", kind: "date", value: (t) => (t.date ? formatDate(t.date) : "—"), date: (t) => t.date },
   { key: "repaymentDate", kind: "date", value: (t) => (t.repaymentDate ? formatDate(t.repaymentDate) : "—"), date: (t) => t.repaymentDate },
   { key: "borrower", kind: "text", value: (t) => t.borrowerName ?? "" },
-  { key: "type", facet: true, value: (t) => (t.type === "REPAYMENT" ? "Repayment" : "Disbursal"), raw: (t) => t.type },
+  { key: "type", facet: true, value: (t) => TRANSACTION_TYPE_LABEL[t.type] ?? t.type, raw: (t) => t.type },
   { key: "amount", kind: "num", value: (t) => paiseToINR(t.amountPaise), num: (t) => t.amountPaise / 100 },
   { key: "reference", kind: "text", value: (t) => t.txnRef ?? "" },
   { key: "status", kind: "text", value: (t) => t.status ?? "" },
@@ -68,7 +70,7 @@ const COLUMN_LABEL: Record<string, string> = {
 };
 /** The server's raw `type` values → the words the Type column shows. */
 const FACET_LABELS: Record<string, Record<string, string>> = {
-  type: { DISBURSAL: "Disbursal", REPAYMENT: "Repayment" },
+  type: TRANSACTION_TYPE_LABEL,
 };
 /** The server caps a page at 100 (`TransactionService.MAX_PAGE_SIZE`); "Download all" walks it. */
 const EXPORT_CHUNK = 100;
@@ -212,7 +214,7 @@ export default function TransactionsPage() {
   };
 
   const exportSubtitle = [
-    tab === "ALL" ? "All movements" : tab === "INCOMING" ? "Incoming" : "Outgoing",
+    tab === "ALL" ? "All movements" : tab === "INCOMING" ? "Incoming" : tab === "INTERNAL" ? "Income and GST bookings" : "Outgoing",
     query ? `Search: “${query}”` : "",
     describeRegister(th),
   ]
@@ -231,7 +233,7 @@ export default function TransactionsPage() {
             { header: "Repayment date", value: (t) => (t.repaymentDate ? formatDate(t.repaymentDate) : "") },
             { header: "Borrower", value: (t) => t.borrowerName ?? "" },
             { header: "PAN", value: (t) => t.pan ?? "" },
-            { header: "Type", value: (t) => (t.type === "REPAYMENT" ? "Repayment" : "Disbursal") },
+            { header: "Type", value: (t) => TRANSACTION_TYPE_LABEL[t.type] ?? t.type },
             { header: "Direction", value: (t) => t.direction },
             { header: "Amount (₹)", value: (t) => (t.amountPaise / 100).toFixed(2) },
             { header: "Reference", value: (t) => t.txnRef ?? "" },
@@ -438,13 +440,13 @@ function TxnRow({ t, sno, onOpen }: { t: TransactionView; sno: number; onOpen: (
       <td>
         <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${incoming ? "bg-success-50 text-success-700" : "bg-navy-tint text-navy"}`}>
           {incoming ? <ArrowDownLeft size={12} /> : <ArrowUpRight size={12} />}
-          {t.type === "REPAYMENT" ? "Repayment" : "Disbursal"}
+          {TRANSACTION_TYPE_LABEL[t.type] ?? t.type}
         </span>
       </td>
       {/* `num` right-aligns tabular figures (globals.css). The signed +/− stays, so direction is
           readable without relying on the colour alone. */}
       <td className={`num font-mono font-semibold ${incoming ? "text-success-700" : "text-ink"}`}>
-        {incoming ? "+" : "−"}{paiseToINR(t.amountPaise)}
+        {t.direction === "INTERNAL" ? "" : incoming ? "+" : "−"}{paiseToINR(t.amountPaise)}
       </td>
       <td className="staff-cell text-muted" title={t.txnRef || undefined}>{t.txnRef || "—"}</td>
       {/* A disbursal row can never carry a payment proof, so printing "—" there made the column
@@ -462,7 +464,11 @@ function TxnRow({ t, sno, onOpen }: { t: TransactionView; sno: number; onOpen: (
           LoanStatus, a repayment row's is a PaymentStatus. Keying StatusBadge on `t.type` keeps
           them visually distinct instead of printing raw enum names side by side. */}
       <td>
-        <StatusBadge kind={t.type === "REPAYMENT" ? "payment" : "application"} value={t.status} />
+        {t.status === "BOOKED" || t.status === "AWAITING_CONFIRMATION" || t.type === "REFUND" ? (
+          <span className="text-xs text-muted">{t.status === "AWAITING_CONFIRMATION" ? "Awaiting confirmation" : (t.status ?? "").toLowerCase()}</span>
+        ) : (
+          <StatusBadge kind={t.type === "REPAYMENT" || t.type === "EXTENSION" ? "payment" : "application"} value={t.status} />
+        )}
       </td>
       <td className="text-muted">{t.loanId != null ? `#${t.loanId}` : "—"}</td>
     </tr>

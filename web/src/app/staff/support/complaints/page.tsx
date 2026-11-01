@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/staff/staff-ui";
 import { NoAccessNotice } from "@/components/staff/pipeline/actions";
-import { useCan } from "@/components/staff/pipeline/hooks";
+import { useCan, useStaffMe } from "@/components/staff/pipeline/hooks";
 import { ActionButton, DeskTable } from "@/components/staff/desk-kit";
 import { Badge } from "@/components/ui";
 import { complaintsApi, COMPLAINT_CATEGORIES, type Complaint } from "@/lib/api/staff-desks";
@@ -32,6 +32,7 @@ function Sla({ c }: { c: Complaint }) {
  */
 export default function ComplaintsPage() {
   const can = useCan();
+  const me = useStaffMe().data;
   const [status, setStatus] = React.useState("");
   const [category, setCategory] = React.useState("");
   const [breached, setBreached] = React.useState(false);
@@ -44,7 +45,30 @@ export default function ComplaintsPage() {
   const work = can("complaints:work");
   return (
     <div className="space-y-5">
-      <PageHeader title="Complaints" subtitle="Grievance tickets with their reply-by dates" />
+      <PageHeader title="Complaints" subtitle="Grievance tickets with their reply-by dates">
+        {work && (
+          <ActionButton
+            label="File for a caller"
+            variant="gold"
+            fields={[
+              { name: "customerId", label: "Customer number", type: "number", required: true },
+              { name: "category", label: `Category (${COMPLAINT_CATEGORIES.join(", ")})`, required: true, placeholder: "PAYMENT" },
+              { name: "body", label: "What the customer said", required: true },
+              { name: "loanId", label: "Loan number (if about a loan)", type: "number" },
+            ]}
+            run={(v) =>
+              complaintsApi.file({
+                customerId: Number(v.customerId),
+                category: v.category.trim().toUpperCase(),
+                body: v.body,
+                loanId: v.loanId ? Number(v.loanId) : undefined,
+              })
+            }
+            invalidate={["complaints"]}
+            success="Complaint filed; the customer is told the ticket number"
+          />
+        )}
+      </PageHeader>
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <select className="field" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
           <option value="">All statuses</option>
@@ -67,6 +91,7 @@ export default function ComplaintsPage() {
           { label: "Customer", render: (c) => <Link href={`/staff/customers/${c.customerId}`}>#{c.customerId}</Link> },
           { label: "Loan", render: (c) => (c.loanId ? `#${c.loanId}` : "—") },
           { label: "Category", render: (c) => label(c.category) },
+          { label: "Assigned", render: (c) => (c.assignedTo ? `#${c.assignedTo}` : "—") },
           { label: "Complaint", render: (c) => <span className="line-clamp-3 max-w-xs">{c.body}</span> },
           { label: "Status", render: (c) => <Badge variant={c.status === "RESOLVED" ? "success" : c.status === "ESCALATED" ? "error" : "info"}>{label(c.status)}</Badge> },
           { label: "Filed", render: (c) => formatDateTime(c.createdAt) },
@@ -76,6 +101,9 @@ export default function ComplaintsPage() {
             render: (c) =>
               !work || c.status === "RESOLVED" ? null : (
                 <div className="flex flex-wrap gap-1">
+                  {me && c.assignedTo !== Number(me.id) && (
+                    <ActionButton label="Assign to me" run={() => complaintsApi.assign(c.id, Number(me.id))} invalidate={["complaints"]} success={`${c.ticketNo} is yours`} />
+                  )}
                   {c.status === "OPEN" && (
                     <ActionButton label="Acknowledge" run={() => complaintsApi.acknowledge(c.id, c.version)} invalidate={["complaints"]} success={`${c.ticketNo} acknowledged`} />
                   )}

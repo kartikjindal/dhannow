@@ -64,10 +64,46 @@ public class TransactionLedgerQuery {
                 select 'D-' || l.id as id, 'DISBURSAL' as type, 'OUTGOING' as direction, l.id as row_id,
                        l.id as loan_id, l.customer_id, pr.full_name as borrower_name, pr.pan, pr.mobile,
                        coalesce(l.net_disbursed, 0) as amount_paise, l.disbursal_txn_ref as txn_ref,
-                       cast(l.status as text) as status, l.disbursed_on as txn_date,
+                       case when l.lifecycle_status = 'DISBURSEMENT_PENDING' then 'AWAITING_CONFIRMATION'
+                            else cast(l.status as text) end as status, l.disbursed_on as txn_date,
                        cast(null as text) as proof_url, l.due_date as due_date, l.grace_days as grace_days
                 from loan l
                 left join prof pr on pr.loan_id = l.id
+                union all
+                -- PLAN Phase 10b: fee income, GST payable and upfront interest income are booked on the
+                -- disbursal-confirmation day (an unconfirmed loan books nothing). INTERNAL rows move no cash.
+                select k.prefix || l.id, k.type, 'INTERNAL', l.id,
+                       l.id, l.customer_id, pr.full_name, pr.pan, pr.mobile,
+                       case k.type when 'FEE_INCOME' then coalesce(l.processing_fee, 0) when 'GST_PAYABLE' then coalesce(l.gst, 0)
+                            else coalesce(l.upfront_interest_paise, 0) end,
+                       l.disbursal_txn_ref, 'BOOKED', l.disbursed_on,
+                       cast(null as text), l.due_date, l.grace_days
+                from loan l
+                cross join (values ('F-', 'FEE_INCOME'), ('G-', 'GST_PAYABLE'), ('I-', 'INTEREST_INCOME')) as k(prefix, type)
+                left join prof pr on pr.loan_id = l.id
+                where l.disbursed_on is not null and l.lifecycle_status <> 'DISBURSEMENT_PENDING'
+                  and (k.type <> 'INTEREST_INCOME' or l.upfront_interest_paise is not null)
+                union all
+                -- Late charges are income when received: the PENAL part of each verified repayment.
+                select 'L-' || p.id, 'PENAL_INCOME', 'INTERNAL', p.id,
+                       p.loan_id, l.customer_id, pr.full_name, pr.pan, pr.mobile,
+                       pa.amount_paise, p.txn_ref, 'BOOKED', p.paid_on,
+                       cast(null as text), l.due_date, coalesce(l.grace_days, 1)
+                from payment_allocation pa
+                join payment p on p.id = pa.payment_id
+                left join loan l on l.id = p.loan_id
+                left join prof pr on pr.loan_id = p.loan_id
+                where pa.component = 'PENAL' and p.status = 'VERIFIED' and p.purpose = 'REPAYMENT'
+                union all
+                -- Money paid back to a borrower (refund cases marked refunded).
+                select 'R-' || rc.id, 'REFUND', 'OUTGOING', rc.id,
+                       rc.loan_id, rc.customer_id, pr.full_name, pr.pan, pr.mobile,
+                       rc.amount_paise, rc.refund_utr, cast(rc.status as text), rc.refunded_on,
+                       cast(null as text), l.due_date, coalesce(l.grace_days, 1)
+                from refund_case rc
+                left join loan l on l.id = rc.loan_id
+                left join prof pr on pr.loan_id = rc.loan_id
+                where rc.status = 'REFUNDED'
                 union all
                 select 'P-' || p.id, case when p.purpose = 'EXTENSION' then 'EXTENSION' else 'REPAYMENT' end,
                        'INCOMING', p.id,
@@ -206,9 +242,12 @@ public class TransactionLedgerQuery {
 
     private static List<String> baseClauses(LedgerFilter f, MapSqlParameterSource p) {
         List<String> clauses = new ArrayList<>();
-        if ("INCOMING".equals(f.direction()) || "OUTGOING".equals(f.direction())) {
+        if ("INCOMING".equals(f.direction()) || "OUTGOING".equals(f.direction()) || "INTERNAL".equals(f.direction())) {
             p.addValue("direction", f.direction());
             clauses.add("t.direction = :direction");
+        } else {
+            // The cash ledger by default; the income and GST bookings (PLAN Phase 10b) are their own view.
+            clauses.add("t.direction <> 'INTERNAL'");
         }
         // Inclusive on both ends; a bound also drops a row with no date, as the old windowed finders did.
         if (f.from() != null) {

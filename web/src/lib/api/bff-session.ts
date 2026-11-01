@@ -1,9 +1,6 @@
 /**
- * Server-side helpers for the BFF auth namespaces. SEPARATE staff and borrower
- * sessions: each lives in its own httpOnly cookie and is never shared.
- *
- *   - staff    -> cookie `navix_staff`    = { token, id, name, role }
- *   - borrower -> cookie `navix_borrower` = { token, id, customerId, name, mobile }
+ * Server-side helpers for the staff BFF session (the borrower web is gone, PLAN Phase 10):
+ * cookie `navix_staff` = { token, id, name, role }.
  *
  * The `token` is the backend-issued JWT. The proxy route handlers read it and
  * forward it as `Authorization: Bearer <token>`; it is never exposed to the
@@ -14,7 +11,6 @@ import { cookies } from "next/headers";
 import type { StaffRole } from "@/lib/auth/rbac";
 
 export const STAFF_COOKIE = "navix_staff";
-export const BORROWER_COOKIE = "navix_borrower";
 
 export interface StaffBffSession {
   /** Backend-issued JWT (forwarded as a bearer; never sent to the browser). */
@@ -22,15 +18,6 @@ export interface StaffBffSession {
   id: string;
   name: string;
   role: StaffRole;
-}
-
-export interface BorrowerBffSession {
-  /** Backend-issued JWT (forwarded as a bearer; never sent to the browser). */
-  token: string;
-  id: string;
-  customerId: number;
-  name: string;
-  mobile: string;
 }
 
 const COOKIE_OPTS = {
@@ -41,10 +28,6 @@ const COOKIE_OPTS = {
   secure: process.env.NODE_ENV === "production",
   maxAge: 60 * 60 * 24, // 1 day (staff)
 };
-
-// Borrowers get a 7-day "remember me" window (matches the backend borrower JWT TTL) so a returning,
-// KYC-verified borrower skips the OTP for a week. Staff keep the shorter 1-day session.
-const BORROWER_MAX_AGE = 60 * 60 * 24 * 7;
 
 // ---------------------------------------------------------------------------
 // Staff
@@ -66,31 +49,6 @@ export async function getStaffSession(): Promise<StaffBffSession | null> {
   if (!raw) return null;
   try {
     return JSON.parse(raw) as StaffBffSession;
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Borrower
-// ---------------------------------------------------------------------------
-
-export async function setBorrowerSession(session: BorrowerBffSession): Promise<void> {
-  const store = await cookies();
-  store.set(BORROWER_COOKIE, JSON.stringify(session), { ...COOKIE_OPTS, maxAge: BORROWER_MAX_AGE });
-}
-
-export async function clearBorrowerSession(): Promise<void> {
-  const store = await cookies();
-  store.set(BORROWER_COOKIE, "", { ...COOKIE_OPTS, maxAge: 0 });
-}
-
-export async function getBorrowerSession(): Promise<BorrowerBffSession | null> {
-  const store = await cookies();
-  const raw = store.get(BORROWER_COOKIE)?.value;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as BorrowerBffSession;
   } catch {
     return null;
   }

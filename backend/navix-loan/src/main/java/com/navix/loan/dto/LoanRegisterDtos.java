@@ -79,6 +79,12 @@ public final class LoanRegisterDtos {
             /** DhanNow (V97), additive: the persisted lifecycle, hold and repayment state. */
             String lifecycleStatus,
             String holdStatus,
-            String repaymentStatus) {
+            String repaymentStatus,
+            /** Phase 10b, additive: the upfront deductions (net = principal − fee − GST − interest) and who confirmed the disbursal. */
+            Long processingFeePaise,
+            Long gstPaise,
+            Long upfrontInterestPaise,
+            String confirmedByName,
+            Integer extensionCount) {
     }
 }

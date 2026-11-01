@@ -159,6 +159,12 @@ class ApplicationFlowIntegrationTest {
 
     @Autowired
     private com.navix.scheduler.ReconciliationCheck reconciliation;
+    @Autowired
+    private com.navix.loan.repository.LoanRepository loanRepository;
+    @Autowired
+    private com.navix.loan.repository.LoanApplicationRepository applicationRepository;
+    @Autowired
+    private com.navix.loan.service.LoanDocumentService documents;
 
     /**
      * PLAN Phase 10b revenue recognition: fee and upfront interest are booked on the disbursal-confirmation day,
@@ -172,6 +178,32 @@ class ApplicationFlowIntegrationTest {
         assertThat(loan).containsEntry("principal", 100000L).containsEntry("net_disbursed", 74200L)
                 .containsEntry("processing_fee", 10000L).containsEntry("gst", 1800L).containsEntry("upfront_interest_paise", 14000L);
         assertThat(reconciliation.check()).isEmpty();
+
+        // Screen, PDF and ledger agree (PLAN Phase 10b): the staff loan view, the document facts the PDFs are
+        // rendered from, and the ledger's income rows all carry the same figures.
+        var loanEntity = loanRepository.findById(loanId).orElseThrow();
+        var app = applicationRepository.findByLoanIdIn(java.util.List.of(loanId)).get(0);
+        var facts = documents.facts(app, loanEntity);
+        assertThat(java.util.List.of(facts.principalPaise(), facts.processingFeePaise(), facts.gstPaise(),
+                facts.interestPaise(), facts.netDisbursedPaise(), facts.totalRepayablePaise()))
+                .containsExactly(100000L, 10000L, 1800L, 14000L, 74200L, 100000L);
+        mvc.perform(get("/api/loan/{id}", loanId).header("Authorization", bearer("1", "ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.processingFeePaise").value(facts.processingFeePaise()))
+                .andExpect(jsonPath("$.data.gstPaise").value(facts.gstPaise()))
+                .andExpect(jsonPath("$.data.upfrontInterestPaise").value(facts.interestPaise()))
+                .andExpect(jsonPath("$.data.netDisbursedPaise").value(facts.netDisbursedPaise()))
+                .andExpect(jsonPath("$.data.totalRepayablePaise").value(facts.totalRepayablePaise()));
+        mvc.perform(get("/api/loan/transactions").param("q", String.valueOf(loanId)).param("size", "100")
+                        .header("Authorization", bearer("3", "ACCOUNTANT")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rows[?(@.type == 'DISBURSAL' && @.loanId == " + loanId + ")].amountPaise").value(org.hamcrest.Matchers.hasItem((int) facts.netDisbursedPaise())));
+        mvc.perform(get("/api/loan/transactions").param("q", String.valueOf(loanId)).param("direction", "INTERNAL").param("size", "100")
+                        .header("Authorization", bearer("3", "ACCOUNTANT")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rows[?(@.type == 'FEE_INCOME' && @.loanId == " + loanId + ")].amountPaise").value(org.hamcrest.Matchers.hasItem((int) facts.processingFeePaise())))
+                .andExpect(jsonPath("$.data.rows[?(@.type == 'GST_PAYABLE' && @.loanId == " + loanId + ")].amountPaise").value(org.hamcrest.Matchers.hasItem((int) facts.gstPaise())))
+                .andExpect(jsonPath("$.data.rows[?(@.type == 'INTEREST_INCOME' && @.loanId == " + loanId + ")].amountPaise").value(org.hamcrest.Matchers.hasItem((int) facts.interestPaise())));
 
         String day = loan.get("disbursed_on").toString();
         Long fee = jdbc.queryForObject("select sum(processing_fee) from loan where disbursed_on = cast(? as date)"
