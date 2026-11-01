@@ -103,10 +103,12 @@ public class CreditLevelService {
         int from = levelOf(customerId);
         Instant dueAt = loan.getDueAt() != null ? loan.getDueAt()
                 : LoanMath.dueAt(loan.getDueDate(), pricing.product(loan.getProductVersionId()));
-        boolean onTime = !settled && !closedAt.isAfter(dueAt);
+        boolean extended = loan.getExtensionCount() > 0;
+        boolean onTime = !settled && !extended && !closedAt.isAfter(dueAt);
         int to = onTime ? Math.min(from + 1, ladder().size()) : from;
         set(customerId, to, from,
-                onTime ? CreditLevelReason.ON_TIME_REPAID : CreditLevelReason.LATE_REPAID_NO_CHANGE,
+                onTime ? CreditLevelReason.ON_TIME_REPAID
+                        : extended ? CreditLevelReason.EXTENDED_NO_CHANGE : CreditLevelReason.LATE_REPAID_NO_CHANGE,
                 loan.getId(), null, settled ? "SETTLED" : null);
     }
 

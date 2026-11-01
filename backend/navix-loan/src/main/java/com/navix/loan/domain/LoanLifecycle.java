@@ -17,6 +17,7 @@ import java.util.Set;
  * <pre>
  *  DISBURSEMENT_PENDING → ACTIVE → DUE_TODAY → OVERDUE_D1 → OVERDUE_REVIEW
  *  OVERDUE_* → RESTRUCTURE_PENDING → RESTRUCTURED (Phase 6)
+ *  DUE_TODAY / OVERDUE_* → ACTIVE when an extension activates (Phase 6b)
  *  any disbursed state → CLOSED (outstanding 0 after verified reconciliation)
  * </pre>
  *
@@ -39,9 +40,10 @@ public enum LoanLifecycle {
         // Phase 4: the accountant's confirmation of the disbursal starts day 0.
         TRANSITIONS.put(DISBURSEMENT_PENDING, EnumSet.of(ACTIVE));
         TRANSITIONS.put(ACTIVE, EnumSet.of(DUE_TODAY, CLOSED));
-        TRANSITIONS.put(DUE_TODAY, EnumSet.of(OVERDUE_D1, CLOSED));
-        TRANSITIONS.put(OVERDUE_D1, EnumSet.of(OVERDUE_REVIEW, RESTRUCTURE_PENDING, CLOSED));
-        TRANSITIONS.put(OVERDUE_REVIEW, EnumSet.of(RESTRUCTURE_PENDING, CLOSED));
+        // Phase 6b: an activated extension moves the due date and puts the loan back to ACTIVE.
+        TRANSITIONS.put(DUE_TODAY, EnumSet.of(OVERDUE_D1, ACTIVE, CLOSED));
+        TRANSITIONS.put(OVERDUE_D1, EnumSet.of(OVERDUE_REVIEW, RESTRUCTURE_PENDING, ACTIVE, CLOSED));
+        TRANSITIONS.put(OVERDUE_REVIEW, EnumSet.of(RESTRUCTURE_PENDING, ACTIVE, CLOSED));
         TRANSITIONS.put(RESTRUCTURE_PENDING, EnumSet.of(RESTRUCTURED, CLOSED));
         TRANSITIONS.put(RESTRUCTURED, EnumSet.of(CLOSED));
         TRANSITIONS.put(CLOSED, EnumSet.noneOf(LoanLifecycle.class));

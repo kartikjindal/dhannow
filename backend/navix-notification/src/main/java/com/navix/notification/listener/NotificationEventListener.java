@@ -382,6 +382,57 @@ public class NotificationEventListener {
                         .build());
     }
 
+    // ---- loan extension (PLAN Phase 6b) ----
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onExtensionOffered(com.navix.common.notification.event.ExtensionOfferedEvent e) {
+        dispatcher.dispatch(NotificationType.EXTENSION_TO_APPROVE, NotificationContext.builder()
+                .customerId(e.customerId()).loanId(e.loanId()).caseId(e.caseId())
+                .put("charge", NotificationFormat.inr(e.chargePaise()))
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onExtensionApproved(com.navix.common.notification.event.ExtensionApprovedEvent e) {
+        dispatcher.dispatch(NotificationType.EXTENSION_OFFERED, NotificationContext.builder()
+                .customerId(e.customerId()).loanId(e.loanId()).caseId(e.caseId())
+                .put("charge", NotificationFormat.inr(e.chargePaise()))
+                .put("payBy", String.valueOf(e.payBy()))
+                .put("newDueDate", String.valueOf(e.newDueDate()))
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onExtensionActivated(com.navix.common.notification.event.ExtensionActivatedEvent e) {
+        dispatcher.dispatch(NotificationType.EXTENSION_ACTIVATED, NotificationContext.builder()
+                .customerId(e.customerId()).loanId(e.loanId())
+                .put("paid", NotificationFormat.inr(e.paidPaise()))
+                .put("count", e.extensionCount())
+                .put("cap", e.cap())
+                .put("newDueDate", String.valueOf(e.newDueDate()))
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onExtensionExpired(com.navix.common.notification.event.ExtensionExpiredEvent e) {
+        dispatcher.dispatch(NotificationType.EXTENSION_EXPIRED, NotificationContext.builder()
+                .assignedExecutiveId(e.officerId()).loanId(e.loanId()).caseId(e.caseId())
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onExtensionDeclined(com.navix.common.notification.event.ExtensionDeclinedEvent e) {
+        dispatcher.dispatch(NotificationType.EXTENSION_DECLINED, NotificationContext.builder()
+                .assignedExecutiveId(e.officerId()).loanId(e.loanId()).caseId(e.caseId())
+                .put("reason", "DID_NOT_ASK".equals(e.reason()) ? "says they did not ask" : "not now")
+                .build());
+    }
+
     /**
      * A borrower's bank cannot do an API eMandate — page the Disbursement Heads, who are the ones the
      * borrower's "our team will be in touch" promises.

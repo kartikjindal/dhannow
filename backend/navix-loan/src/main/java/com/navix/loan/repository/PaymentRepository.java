@@ -27,9 +27,9 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     /** CC-07: a (normalised) UTR is unique across every loan, rejected payments aside. */
     Optional<Payment> findFirstByTxnRefAndStatusNot(String txnRef, PaymentStatus status);
 
-    /** Total paid against a loan in a given status (paise); 0 when none. */
-    @Query("select coalesce(sum(p.amount), 0) from Payment p "
-            + "where p.loanId = :loanId and p.status = :status")
+    /** Total REPAYMENT money against a loan in a given status (paise); 0 when none. Extension charges never count. */
+    @Query("select coalesce(sum(p.amount), 0) from Payment p where p.loanId = :loanId and p.status = :status"
+            + " and p.purpose = com.navix.loan.domain.PaymentPurpose.REPAYMENT")
     long sumAmountByLoanIdAndStatus(@Param("loanId") Long loanId, @Param("status") PaymentStatus status);
 
     /**
@@ -39,7 +39,8 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
      * in {@code status} is simply absent from the result (no zero row) — callers default-to-zero on lookup.
      */
     @Query("select p.loanId as loanId, sum(p.amount) as total from Payment p "
-            + "where p.loanId in :loanIds and p.status = :status group by p.loanId")
+            + "where p.loanId in :loanIds and p.status = :status"
+            + " and p.purpose = com.navix.loan.domain.PaymentPurpose.REPAYMENT group by p.loanId")
     List<LoanAmount> sumAmountByLoanIdInAndStatus(
             @Param("loanIds") Collection<Long> loanIds, @Param("status") PaymentStatus status);
 

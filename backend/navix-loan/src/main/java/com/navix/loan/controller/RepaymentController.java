@@ -50,7 +50,7 @@ public class RepaymentController {
         requireOwnProofKey(request.proofUrl());
         return ApiResponse.ok(repaymentService.view(repaymentService.submitPayment(idempotencyKey,
                 loanId, request.amountPaise(), request.method(), request.txnRef(),
-                request.proofUrl(), request.paidOn())));
+                request.proofUrl(), request.paidOn(), request.purpose(), request.extensionId())));
     }
 
     /**

@@ -22,6 +22,7 @@ import com.navix.loan.entity.CustomerProfile;
 import com.navix.loan.entity.Loan;
 import com.navix.loan.entity.LoanApplication;
 import com.navix.loan.entity.LoanDocument;
+import com.navix.loan.pdf.AddendumFacts;
 import com.navix.loan.pdf.ClosureFacts;
 import com.navix.loan.pdf.DocumentFacts;
 import com.navix.loan.pdf.KfsPdfRenderer;
@@ -340,12 +341,15 @@ public class LoanDocumentService {
         Loan loan = loans.findById(loanId).orElseThrow(() -> new ResourceNotFoundException("Loan", String.valueOf(loanId)));
         LoanApplication app = applications.findByLoanId(loanId)
                 .orElseThrow(() -> new ResourceNotFoundException("LoanApplication", "loan " + loanId));
+        // Repayments only: extension charges are on their own addenda (Phase 6b).
         List<ClosureFacts.PaidLine> paid = jdbc.query(
-                "select paid_on, txn_ref, amount from payment where loan_id = ? and status = 'VERIFIED' order by paid_on, id",
+                "select paid_on, txn_ref, amount from payment where loan_id = ? and status = 'VERIFIED'"
+                        + " and purpose = 'REPAYMENT' order by paid_on, id",
                 (rs, i) -> new ClosureFacts.PaidLine(rs.getObject("paid_on", LocalDate.class), rs.getString("txn_ref"),
                         rs.getLong("amount")), loanId);
         Map<String, Long> split = new java.util.HashMap<>();
-        jdbc.query("select component, sum(amount_paise) from payment_allocation where loan_id = ? group by component",
+        jdbc.query("select a.component, sum(a.amount_paise) from payment_allocation a join payment p on p.id = a.payment_id"
+                        + " where a.loan_id = ? and p.purpose = 'REPAYMENT' group by a.component",
                 (org.springframework.jdbc.core.RowCallbackHandler) rs -> split.put(rs.getString(1), rs.getLong(2)), loanId);
         long principalPaid = split.getOrDefault("PRINCIPAL", 0L);
         ClosureFacts c = new ClosureFacts(loan.getClosedOn(), paid, split.getOrDefault("PENAL", 0L), principalPaid,
@@ -353,6 +357,46 @@ public class LoanDocumentService {
         int version = nextVersion(app.getId(), LoanDocumentType.CLOSURE_RECEIPT);
         DocumentFacts f = facts(app, loan).withVersion(version);
         save(app, LoanDocumentType.CLOSURE_RECEIPT, version, kfsRenderer.renderClosureReceipt(f, c), f);
+    }
+
+    // ---------------------------------------------------------------- extension addendum (Phase 6b)
+
+    /**
+     * Issue the addendum once the activation commits, in its own transaction: a storage failure is logged
+     * and never undoes the extension (EXT-22). Version n is the n-th activated extension.
+     */
+    @TransactionalEventListener
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onExtensionActivated(com.navix.common.notification.event.ExtensionActivatedEvent event) {
+        try {
+            issueExtensionAddendum(event);
+        } catch (RuntimeException e) {
+            log.error("Extension addendum not issued for loan {}: {}", event.loanId(), e.toString());
+        }
+    }
+
+    void issueExtensionAddendum(com.navix.common.notification.event.ExtensionActivatedEvent e) {
+        Loan loan = loans.findById(e.loanId())
+                .orElseThrow(() -> new ResourceNotFoundException("Loan", String.valueOf(e.loanId())));
+        LoanApplication app = applications.findByLoanId(e.loanId())
+                .orElseThrow(() -> new ResourceNotFoundException("LoanApplication", "loan " + e.loanId()));
+        int version = e.extensionCount();
+        if (latest(app.getId(), LoanDocumentType.EXTENSION_ADDENDUM).map(d -> d.getVersion() >= version).orElse(false)) {
+            return;
+        }
+        Map<String, Long> split = new java.util.HashMap<>();
+        LocalDate[] paidOn = {null};
+        jdbc.query("select a.component, a.amount_paise, p.paid_on from payment_allocation a join payment p"
+                        + " on p.id = a.payment_id where p.extension_id = ? and p.status = 'VERIFIED'",
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+                    split.put(rs.getString(1), rs.getLong(2));
+                    paidOn[0] = rs.getObject(3, LocalDate.class);
+                }, e.extensionId());
+        AddendumFacts a = new AddendumFacts(version, e.cap(), e.oldDueDate(), e.newDueDate(), paidOn[0],
+                split.getOrDefault("EXT_FEE", 0L), split.getOrDefault("EXT_GST", 0L),
+                split.getOrDefault("EXT_INTEREST", 0L), split.getOrDefault("PENAL", 0L));
+        DocumentFacts f = facts(app, loan).withVersion(version);
+        save(app, LoanDocumentType.EXTENSION_ADDENDUM, version, kfsRenderer.renderExtensionAddendum(f, a), f);
     }
 
     // ---------------------------------------------------------------- access

@@ -13,6 +13,7 @@ import com.navix.common.notification.event.RepaymentVerifiedEvent;
 import com.navix.loan.domain.LoanLifecycle;
 import com.navix.loan.domain.LoanStatus;
 import com.navix.loan.domain.PaymentMethod;
+import com.navix.loan.domain.PaymentPurpose;
 import com.navix.loan.domain.PaymentStatus;
 import com.navix.loan.domain.RepaymentStatus;
 import com.navix.loan.entity.Loan;
@@ -67,6 +68,7 @@ public class RepaymentService {
     private final CreditLevelService creditLevels;
     private final PaymentAllocator allocator;
     private final IdempotencyService idempotency;
+    private final LoanExtensionLedger extensionLedger;
 
     /**
      * Record a (possibly partial) repayment. Idempotent on {@code txnRef} per loan.
@@ -93,18 +95,33 @@ public class RepaymentService {
     @Transactional
     public Payment submitPayment(String idempotencyKey, Long loanId, long amountPaise, PaymentMethod method,
                                  String txnRef, String proofUrl, LocalDate paidOn) {
+        return submitPayment(idempotencyKey, loanId, amountPaise, method, txnRef, proofUrl, paidOn,
+                PaymentPurpose.REPAYMENT, null);
+    }
+
+    /**
+     * As above for either purpose. {@code EXTENSION} pays the borrower's ACCEPTED extension
+     * {@code extensionId}, for exactly its quote on {@code paidOn} (PLAN Phase 6b).
+     */
+    @Transactional
+    public Payment submitPayment(String idempotencyKey, Long loanId, long amountPaise, PaymentMethod method,
+                                 String txnRef, String proofUrl, LocalDate paidOn, PaymentPurpose purpose,
+                                 java.util.UUID extensionId) {
         var actor = ActorContext.get();
+        PaymentPurpose p = purpose != null ? purpose : PaymentPurpose.REPAYMENT;
+        Long recorder = "BORROWER".equals(actor.role()) ? null : staffIdOrNull();
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             if ("BORROWER".equals(actor.role())) {
                 throw new BusinessException("IDEMPOTENCY_KEY_REQUIRED", "Send an Idempotency-Key with this request.");
             }
-            return recordPayment(loanId, amountPaise, method, txnRef, proofUrl, paidOn);
+            return recordPayment(loanId, amountPaise, method, txnRef, proofUrl, paidOn, recorder, true, p, extensionId);
         }
         String request = String.join("|", actor.id(), String.valueOf(loanId), String.valueOf(amountPaise),
                 String.valueOf(method), String.valueOf(normaliseUtr(txnRef)), String.valueOf(proofUrl),
-                String.valueOf(paidOn));
+                String.valueOf(paidOn)) + (p == PaymentPurpose.EXTENSION ? "|EXTENSION|" + extensionId : "");
         Long id = idempotency.execute("REPAYMENT_SUBMIT", idempotencyKey, request,
-                () -> recordPayment(loanId, amountPaise, method, txnRef, proofUrl, paidOn).getId());
+                () -> recordPayment(loanId, amountPaise, method, txnRef, proofUrl, paidOn, recorder, true, p,
+                        extensionId).getId());
         return paymentRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Payment", String.valueOf(id)));
     }
@@ -135,6 +152,13 @@ public class RepaymentService {
      */
     private Payment recordPayment(Long loanId, long amountPaise, PaymentMethod method, String txnRef,
                                   String proofUrl, LocalDate paidOn, Long recordedBy, boolean strictUtr) {
+        return recordPayment(loanId, amountPaise, method, txnRef, proofUrl, paidOn, recordedBy, strictUtr,
+                PaymentPurpose.REPAYMENT, null);
+    }
+
+    private Payment recordPayment(Long loanId, long amountPaise, PaymentMethod method, String txnRef,
+                                  String proofUrl, LocalDate paidOn, Long recordedBy, boolean strictUtr,
+                                  PaymentPurpose purpose, java.util.UUID extensionId) {
         Loan loan = requireLoan(loanId);
         requireOwnLoanIfBorrower(loan);
         if (loan.getLifecycleStatus() == LoanLifecycle.DISBURSEMENT_PENDING) {
@@ -155,6 +179,12 @@ public class RepaymentService {
         if (utr != null) {
             var existing = paymentRepository.findFirstByTxnRefAndStatusNot(utr, PaymentStatus.REJECTED);
             if (existing.isPresent()) {
+                // One transfer is a repayment or an extension charge, never both (PLAN Phase 6b).
+                if (existing.get().getPurpose() != purpose) {
+                    throw new BusinessException("UTR_USED_FOR_OTHER_PURPOSE",
+                            "This payment reference is already on file for "
+                                    + (existing.get().isExtension() ? "an extension." : "a repayment."));
+                }
                 if (!strictUtr && existing.get().getLoanId().equals(loanId)) {
                     return existing.get();
                 }
@@ -162,9 +192,14 @@ public class RepaymentService {
             }
         }
         LocalDate effectivePaidOn = requireSanePaidOn(loan, paidOn);
+        boolean extension = purpose == PaymentPurpose.EXTENSION;
+        if (extension) {
+            extensionLedger.requirePayable(loan, extensionId, amountPaise, effectivePaidOn);
+        }
         // Penalty-aware remaining as of the payment date, so a short payment on an overdue loan is
-        // correctly flagged partial (the stored total excludes the accruing late penalty).
-        long remaining = outstandingAsOf(loanId, effectivePaidOn);
+        // correctly flagged partial (the stored total excludes the accruing late penalty). Not for an
+        // extension charge, which pays no part of the balance.
+        long remaining = extension ? 0L : outstandingAsOf(loanId, effectivePaidOn);
 
         Payment payment = new Payment();
         payment.setLoanId(loanId);
@@ -174,16 +209,23 @@ public class RepaymentService {
         payment.setTxnRef(utr);
         payment.setProofUrl(proofUrl);
         payment.setPaidOn(effectivePaidOn);
-        payment.setPartial(amountPaise < remaining);
+        payment.setPartial(!extension && amountPaise < remaining);
         payment.setRecordedBy(recordedBy);
+        payment.setPurpose(purpose);
+        payment.setExtensionId(extension ? extensionId : null);
         Payment saved;
         try {
             saved = paymentRepository.saveAndFlush(payment);
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
-            throw duplicateUtr(); // two submits of one UTR at the same moment: the unique index decides (V101)
+            // Two submits of one UTR at the same moment (V101), or a second payment for one extension (V103).
+            throw duplicateUtr();
         }
-        // The loan is managed in this transaction, so the change is flushed with it.
-        loan.setRepaymentStatus(RepaymentStatus.PAID_PENDING_VERIFICATION);
+        if (extension) {
+            extensionLedger.markPaymentPending(extensionId);
+        } else {
+            // The loan is managed in this transaction, so the change is flushed with it.
+            loan.setRepaymentStatus(RepaymentStatus.PAID_PENDING_VERIFICATION);
+        }
         eventPublisher.publishEvent(new RepaymentRecordedEvent(
                 loanId, loan.getCustomerId(), saved.getId(), amountPaise, Instant.now()));
         return saved;
@@ -256,9 +298,18 @@ public class RepaymentService {
             payment.setStatus(PaymentStatus.VERIFIED);
             stampDecider(payment);
             paymentRepository.save(payment);
-            allocate(loan, payment);
+            // An extension charge moves the due date instead of reducing the balance (PLAN Phase 6b). If the
+            // extension was cancelled meanwhile (the loan closed), all of it is refunded (CC-69).
+            if (!payment.isExtension()) {
+                allocate(loan, payment);
+            } else if (!extensionLedger.onVerified(loan, payment)) {
+                allocator.allocate(payment, 0L, 0L, 0L);
+            }
         }
         recomputeOutstanding(payment.getLoanId());
+        if (payment.isExtension()) {
+            return payment; // the borrower hears EXTENSION_ACTIVATED instead (Phase 6b)
+        }
         eventPublisher.publishEvent(new RepaymentVerifiedEvent(
                 loan.getId(), loan.getCustomerId(), payment.getId(), payment.getAmount(),
                 loan.getStatus() == LoanStatus.CLOSED, Instant.now()));
@@ -331,6 +382,10 @@ public class RepaymentService {
             payment.setRejectionNote(note);
             stampDecider(payment);
             paymentRepository.save(payment);
+            if (payment.isExtension()) {
+                // EXT-19: the borrower may pay again until the pay-by day.
+                extensionLedger.markPaymentRejected(payment.getExtensionId());
+            }
         }
         Loan loan = requireLoan(payment.getLoanId());
         // No balance change, only where repayment stands; the managed loan is flushed with the payment.
@@ -451,15 +506,18 @@ public class RepaymentService {
         int tenureDays = (int) ChronoUnit.DAYS.between(loan.getDisbursedOn(), loan.getDueDate());
         int daysToAsOf = (int) Math.max(0L, ChronoUnit.DAYS.between(loan.getDisbursedOn(), at));
         int interestDays = math.pricing().upfront() ? 0 : Math.min(daysToAsOf, tenureDays + loan.getGraceDays());
-        int rawDpd = math.daysPastDue(loan.getDueDate(), at);
-        int penaltyDays = Math.max(0, rawDpd - loan.getGraceDays());
+        // The current due cycle's late days, within what is left of the lifetime cap (EXT-26). Late charge
+        // from earlier cycles that repayments paid is carried, so principal stays whole after an extension.
+        int penaltyDays = math.chargeablePenalDays(loan.getDueDate(), at, loan.getGraceDays(), loan.getPenalDaysUsed());
+        long carried = loan.getPenalCarriedPaise();
         long interest = math.accruedInterestPaise(loan.getPrincipal(), interestDays);
-        long penalty = math.latePenaltyPaise(loan.getPrincipal(), penaltyDays);
-        long formulaOwed = math.outstandingPaise(loan.getPrincipal(), interestDays, penaltyDays, verified);
+        long penalty = math.latePenaltyPaise(loan.getPrincipal(), penaltyDays) + carried;
+        long formulaOwed = Math.max(0L, math.outstandingPaise(loan.getPrincipal(), interestDays, penaltyDays, 0L)
+                + carried - verified);
         long owed = settled != null ? Math.min(formulaOwed, Math.max(0L, settled - verified)) : formulaOwed;
         // Report the days actually CHARGED (penalty is capped inside latePenaltyPaise), so the
         // displayed "2%/day × N days" reconciles with penaltyPaise instead of overstating it.
-        int chargedPenaltyDays = Math.min(penaltyDays, math.penalCapDays());
+        int chargedPenaltyDays = penaltyDays;
         // Interest deducted at disbursal is shown, never owed (PLAN Phase 10b R4).
         long prepaid = loan.getUpfrontInterestPaise() != null ? loan.getUpfrontInterestPaise() : 0L;
         return new OutstandingBreakdown(owed, interest, penalty, verified, settled,
@@ -579,6 +637,8 @@ public class RepaymentService {
         // A settlement closure says so in the audit trail: the borrower did not pay the full formula balance.
         var settlement = settlementDirectory.approvedSettlementAmount(loanId);
         if (newlyClosed) {
+            // An open extension offer ends with the loan; any charge paid for it is refunded (EXT-06, CC-69).
+            extensionLedger.onLoanClosed(loanId);
             // Credit ladder (PLAN Phase 2). On-time is judged by the bank date of the closing payment
             // (paid_on, a date: the start of that IST day), never the verification time (CC-05).
             creditLevels.onLoanClosed(loan, settledOn.atStartOfDay(IST).toInstant(), settlement.isPresent());
@@ -615,7 +675,8 @@ public class RepaymentService {
             loan.setRepaymentStatus(RepaymentStatus.PAID);
             return;
         }
-        List<Payment> payments = paymentRepository.findByLoanId(loan.getId());
+        List<Payment> payments = paymentRepository.findByLoanId(loan.getId()).stream()
+                .filter(p -> !p.isExtension()).toList();
         loan.setRepaymentStatus(
                 payments.stream().anyMatch(p -> p.getStatus() == PaymentStatus.PENDING_VERIFICATION)
                         ? RepaymentStatus.PAID_PENDING_VERIFICATION
@@ -624,10 +685,10 @@ public class RepaymentService {
                                 : RepaymentStatus.UNPAID);
     }
 
-    /** The date the borrower last actually paid, over VERIFIED payments only. */
+    /** The date the borrower last actually paid, over VERIFIED repayments only (not extension charges). */
     private java.util.Optional<LocalDate> latestVerifiedPaidOn(Long loanId) {
         return paymentRepository.findByLoanId(loanId).stream()
-                .filter(p -> p.getStatus() == PaymentStatus.VERIFIED && p.getPaidOn() != null)
+                .filter(p -> !p.isExtension() && p.getStatus() == PaymentStatus.VERIFIED && p.getPaidOn() != null)
                 .map(Payment::getPaidOn)
                 .max(LocalDate::compareTo);
     }

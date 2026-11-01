@@ -68,7 +68,9 @@ public class CollectionsWorklistQuery {
                          else 'T90_PLUS'
                        end as bucket,
                        p.full_name, p.pan, p.mobile, p.employer, p.monthly_salary_paise as salary,
-                       cc.assigned_officer_id as officer_id, su.name as officer_name
+                       cc.assigned_officer_id as officer_id, su.name as officer_name,
+                       (select e.status from loan_extension e where e.loan_id = l.id
+                        order by e.seq desc limit 1) as ext_state
                 from loan l
                 left join (select distinct on (a.loan_id) a.loan_id, a.id as app_id
                            from loan_application a where a.loan_id is not null
@@ -78,7 +80,7 @@ public class CollectionsWorklistQuery {
                            from collection_case c order by c.loan_id, c.created_at, c.id) cc on cc.loan_id = l.id
                 left join staff_user su on su.id = cc.assigned_officer_id
                 where l.status in ('ACTIVE', 'OVERDUE', 'IN_COLLECTIONS') and l.hold_status <> 'DISPUTED'
-                  and l.due_date <= cast(:horizon as date)
+                  and (l.due_date <= cast(:horizon as date) or l.extension_count > 0)
             )
             """;
 
@@ -87,17 +89,18 @@ public class CollectionsWorklistQuery {
      * sorts by severity (days past due), which is what the label means, not the alphabet. The Java-side
      * sorts ({@link CollectionsService}) are not here.
      */
-    static final Map<String, String> SORTS = Map.of(
-            "customerId", "w.customer_id",
-            "borrowerName", "lower(w.full_name)",
-            "loanId", "w.loan_id",
-            "principalPaise", "w.principal",
-            "dueDate", "w.due_date",
-            "dpd", "w.dpd",
-            "bucketLabel", "w.dpd",
-            "employer", "lower(w.employer)",
-            "salaryPaise", "w.salary",
-            "officerName", "lower(w.officer_name)");
+    static final Map<String, String> SORTS = Map.ofEntries(
+            Map.entry("customerId", "w.customer_id"),
+            Map.entry("borrowerName", "lower(w.full_name)"),
+            Map.entry("loanId", "w.loan_id"),
+            Map.entry("principalPaise", "w.principal"),
+            Map.entry("dueDate", "w.due_date"),
+            Map.entry("dpd", "w.dpd"),
+            Map.entry("bucketLabel", "w.dpd"),
+            Map.entry("employer", "lower(w.employer)"),
+            Map.entry("salaryPaise", "w.salary"),
+            Map.entry("officerName", "lower(w.officer_name)"),
+            Map.entry("extState", "w.ext_state"));
 
     /**
      * Filterable columns, each a SQL literal over the {@code wl} CTE. The request only picks a key.
@@ -123,6 +126,7 @@ public class CollectionsWorklistQuery {
             .column("dpd", "w.dpd", NUM)
             .column("bucketLabel", "w.bucket", IN, TEXT)
             .column("officerName", "w.officer_id", IN)
+            .column("extState", "w.ext_state", IN, TEXT)
             .build();
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -135,6 +139,27 @@ public class CollectionsWorklistQuery {
     /** For tests, which hand in a recording template. */
     CollectionsWorklistQuery(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    /** A loan's latest extension state and how many are active (Phase 6b), for the worklist rows. */
+    public record ExtState(String status, int count) {
+    }
+
+    /** Latest extension state per loan, one query for the page. Loans never offered are absent. */
+    public Map<Long, ExtState> extStates(java.util.Collection<Long> loanIds) {
+        Map<Long, ExtState> out = new java.util.HashMap<>();
+        if (loanIds == null || loanIds.isEmpty()) {
+            return out;
+        }
+        jdbc.query("""
+                select distinct on (e.loan_id) e.loan_id, e.status, l.extension_count
+                from loan_extension e join loan l on l.id = e.loan_id
+                where e.loan_id in (:ids) order by e.loan_id, e.seq desc
+                """, new MapSqlParameterSource("ids", loanIds),
+                rs -> {
+                    out.put(rs.getLong(1), new ExtState(rs.getString(2), rs.getInt(3)));
+                });
+        return out;
     }
 
     /** Loan ids for one page, in display order. {@code sort} null/unknown falls back to most overdue first. */

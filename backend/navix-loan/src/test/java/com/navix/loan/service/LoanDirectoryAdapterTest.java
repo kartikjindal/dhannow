@@ -54,7 +54,7 @@ class LoanDirectoryAdapterTest {
     @BeforeEach
     void setUp() {
         adapter = new LoanDirectoryAdapter(loanRepository, applicationRepository, profileRepository,
-                repaymentService, java.time.Clock.system(IST));
+                repaymentService, org.mockito.Mockito.mock(LoanExtensionLedger.class), java.time.Clock.system(IST));
     }
 
     private Loan loan(long id, LoanStatus status) {
@@ -207,7 +207,7 @@ class LoanDirectoryAdapterTest {
     void listCollectibleLeavesOutADisputedLoan() {
         Loan disputed = loan(3L, LoanStatus.ACTIVE);
         disputed.setHoldStatus(com.navix.loan.domain.LoanHold.DISPUTED);
-        when(loanRepository.findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc(any(), any()))
+        when(loanRepository.findCollectible(any(), any()))
                 .thenReturn(List.of(loan(2L, LoanStatus.ACTIVE), disputed));
         when(applicationRepository.findByLoanIdIn(List.of(2L))).thenReturn(List.of());
         when(repaymentService.outstandingForAll(any(), any())).thenReturn(java.util.Map.of(2L, 999L));
@@ -217,7 +217,7 @@ class LoanDirectoryAdapterTest {
 
     @Test
     void listCollectibleMapsTheFinder() {
-        when(loanRepository.findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc(any(), any()))
+        when(loanRepository.findCollectible(any(), any()))
                 .thenReturn(List.of(loan(2L, LoanStatus.ACTIVE)));
         when(applicationRepository.findByLoanIdIn(List.of(2L))).thenReturn(List.of());
         when(repaymentService.outstandingForAll(any(), any())).thenReturn(java.util.Map.of(2L, 999L));
@@ -285,14 +285,14 @@ class LoanDirectoryAdapterTest {
     @Test
     void listCollectibleLooksAheadByThePreDueWindow() {
         LocalDate asOf = LocalDate.of(2026, 8, 29);
-        when(loanRepository.findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc(any(), any()))
+        when(loanRepository.findCollectible(any(), any()))
                 .thenReturn(List.of());
 
         adapter.listCollectible(asOf);
 
         ArgumentCaptor<LocalDate> horizon = ArgumentCaptor.forClass(LocalDate.class);
         verify(loanRepository)
-                .findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc(any(), horizon.capture());
+                .findCollectible(any(), horizon.capture());
         assertThat(horizon.getValue()).isEqualTo(asOf.plusDays(LoanDirectory.PRE_DUE_WINDOW_DAYS));
     }
 
@@ -373,7 +373,7 @@ class LoanDirectoryAdapterTest {
     void listCollectibleFlagsNotYetDueLoansAsPreDue() {
         Loan loan = loan(2L, LoanStatus.ACTIVE);
         loan.setDueDate(today().plusDays(3));
-        when(loanRepository.findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc(any(), any()))
+        when(loanRepository.findCollectible(any(), any()))
                 .thenReturn(List.of(loan));
         when(applicationRepository.findByLoanIdIn(List.of(2L))).thenReturn(List.of());
         when(repaymentService.outstandingForAll(any(), any())).thenReturn(java.util.Map.of());

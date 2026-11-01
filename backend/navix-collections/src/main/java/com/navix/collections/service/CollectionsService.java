@@ -474,6 +474,7 @@ public class CollectionsService {
         Map<Long, HandledBy> handledBy = applicationActorDirectory.byLoanId(loanIds);
         Map<Long, com.navix.common.loan.TrustSignals> trustByCustomer = customerTrustDirectory.forCustomers(
                 loans.stream().map(LoanSummary::customerId).filter(Objects::nonNull).distinct().toList());
+        Map<Long, CollectionsWorklistQuery.ExtState> extByLoan = worklistQuery.extStates(loanIds);
 
         Long me = scopeOfficer;
         return loans.stream().filter(loan -> {
@@ -491,7 +492,9 @@ public class CollectionsService {
                     c == null ? null : officerNames.get(c.getAssignedOfficerId()),
                     c == null ? null : c.getCreatedAt(),
                     handled.creditDecidedByName(), handled.disbursedByName(),
-                    loan, trustByCustomer.get(loan.customerId()));
+                    loan, trustByCustomer.get(loan.customerId()),
+                    extByLoan.containsKey(loan.loanId()) ? extByLoan.get(loan.loanId()).status() : null,
+                    extByLoan.containsKey(loan.loanId()) ? extByLoan.get(loan.loanId()).count() : 0);
         }).toList();
     }
 

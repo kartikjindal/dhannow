@@ -64,6 +64,7 @@ public class SettlementService {
     private final LoanDirectory loanDirectory;
     private final ApplicationEventPublisher eventPublisher;
     private final CollectionsService collectionsService;
+    private final com.navix.collections.repository.LoanExtensionRepository extensionRepository;
 
     /** Authorise the current actor against one of {@code roles} (ADMIN always passes). */
     private static void requireOneOf(String... roles) {
@@ -115,6 +116,11 @@ public class SettlementService {
         collectionsService.assertCaseAccessible(caseId);
         CollectionCase c = caseRepository.findById(caseId)
                 .orElseThrow(() -> new ResourceNotFoundException("CollectionCase", String.valueOf(caseId)));
+        // PLAN Phase 6b: one negotiation at a time; an open extension is decided first.
+        if (extensionRepository.findFirstByLoanIdAndStatusIn(c.getLoanId(),
+                com.navix.collections.entity.ExtensionStatus.OPEN).isPresent()) {
+            throw new BusinessException("EXTENSION_OPEN", "An extension is open on this loan. Decide it first.");
+        }
         Settlement s = new Settlement();
         s.setCollectionCaseId(caseId);
         s.setSettlementAmount(settlementAmountPaise);

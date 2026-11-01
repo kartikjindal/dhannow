@@ -20,7 +20,8 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class PaymentAllocator {
 
-    public enum Component { PENAL, INTEREST, PRINCIPAL, EXCESS }
+    /** EXT_* are an extension charge's parts (Phase 6b); the waterfall never fills them. */
+    public enum Component { PENAL, INTEREST, PRINCIPAL, EXCESS, EXT_FEE, EXT_GST, EXT_INTEREST }
 
     private final JdbcTemplate jdbc;
     private final RefundCaseService refunds;
@@ -39,7 +40,10 @@ public class PaymentAllocator {
     @Transactional
     public Map<Component, Long> allocate(Payment payment, long penalToDate, long interestToDate, long principal) {
         Map<Component, Long> paid = new EnumMap<>(Component.class);
-        jdbc.query("select component, sum(amount_paise) from payment_allocation where loan_id = ? group by component",
+        // What earlier repayments covered. An extension's own late-charge share is accounted on the loan
+        // (penal_carried_paise) when it activates, so it is not counted here.
+        jdbc.query("select a.component, sum(a.amount_paise) from payment_allocation a join payment p on p.id = a.payment_id"
+                        + " where a.loan_id = ? and p.purpose = 'REPAYMENT' group by a.component",
                 (org.springframework.jdbc.core.RowCallbackHandler)
                         rs -> paid.put(Component.valueOf(rs.getString(1)), rs.getLong(2)),
                 payment.getLoanId());

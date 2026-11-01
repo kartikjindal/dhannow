@@ -10,6 +10,7 @@ import com.navix.loan.dto.LoanDtos.PaymentView;
 import com.navix.loan.dto.LoanDtos.TransactionView;
 import com.navix.loan.entity.Payment;
 import com.navix.loan.entity.Loan;
+import com.navix.loan.service.LoanExtensionView;
 import com.navix.loan.service.RepaymentService;
 import com.navix.loan.service.TransactionService;
 import com.navix.loan.service.TransactionService.BorrowerRef;
@@ -35,6 +36,7 @@ public class LoanController {
 
     private final RepaymentService repaymentService;
     private final TransactionService transactionService;
+    private final LoanExtensionView extensionView;
 
     @GetMapping("/{loanId}")
     public ApiResponse<LoanView> getLoan(@PathVariable Long loanId) {
@@ -43,7 +45,9 @@ public class LoanController {
         // Single source of truth for "amount owed": the penalty/prepayment-aware balance, and an
         // effective status so a past-due ACTIVE loan reads as OVERDUE (matches the repay page).
         long owed = repaymentService.outstandingBreakdownAsOf(loan, null).outstandingPaise();
-        return ApiResponse.ok(LoanView.of(loan, owed, loan.effectiveStatus(LocalDate.now())));
+        // Phase 6b: the open extension and the history, read from collections (EXT-08: the banner comes from here).
+        return ApiResponse.ok(extensionView.attach(loan,
+                LoanView.of(loan, owed, loan.effectiveStatus(LocalDate.now()))));
     }
 
     /**

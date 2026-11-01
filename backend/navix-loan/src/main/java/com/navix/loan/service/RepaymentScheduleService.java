@@ -40,6 +40,36 @@ public class RepaymentScheduleService {
                 """, scheduleId, loan.getDueDate(), Timestamp.from(loan.getDueAt()), loan.getPrincipal(), interest);
     }
 
+    /**
+     * An activated extension (Phase 6b): supersede the ACTIVE schedule, then add the next version, kind
+     * EXTENSION, with one instalment of the principal still open on the new due date. The fee, GST and
+     * interest of the extension were paid to activate it, so none of them falls due here.
+     *
+     * @return {from, to} schedule versions; from is 0 when the loan had no schedule
+     */
+    @Transactional
+    public int[] writeExtension(Loan loan, long principalOpenPaise) {
+        Map<String, Object> active = jdbc.queryForList(
+                "select id, version from repayment_schedule where loan_id = ? and status = 'ACTIVE'", loan.getId())
+                .stream().findFirst().orElse(null);
+        Long parentId = active == null ? null : ((Number) active.get("id")).longValue();
+        int from = active == null ? 0 : ((Number) active.get("version")).intValue();
+        int to = jdbc.queryForObject("select coalesce(max(version), 0) + 1 from repayment_schedule where loan_id = ?",
+                Integer.class, loan.getId());
+        if (parentId != null) {
+            jdbc.update("update repayment_schedule set status = 'SUPERSEDED' where id = ?", parentId);
+        }
+        Long scheduleId = jdbc.queryForObject("""
+                insert into repayment_schedule (loan_id, version, kind, parent_version_id, status, created_by, reason_code)
+                values (?, ?, 'EXTENSION', ?, 'ACTIVE', ?, 'EXTENSION') returning id
+                """, Long.class, loan.getId(), to, parentId, ActorContext.get().id());
+        jdbc.update("""
+                insert into schedule_instalment (schedule_id, seq, due_date, due_at, principal_paise)
+                values (?, 1, ?, ?, ?)
+                """, scheduleId, loan.getDueDate(), Timestamp.from(loan.getDueAt()), principalOpenPaise);
+        return new int[] {from, to};
+    }
+
     /** Spread verified principal over the active schedule's instalments, earliest first. */
     @Transactional
     public void applyPaid(Long loanId, long paise) {

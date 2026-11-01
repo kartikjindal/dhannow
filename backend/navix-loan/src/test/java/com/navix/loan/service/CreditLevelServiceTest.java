@@ -165,6 +165,19 @@ class CreditLevelServiceTest {
         assertThat(h.getReasonCode()).isEqualTo("SETTLED");
     }
 
+    /** PLAN Phase 6b, EXT-28: a loan with any activated extension closes without a level change, even on time. */
+    @Test
+    void ext28_anExtendedLoanClosesWithoutALevelChange() {
+        CreditLevel row = at(2);
+        var loan = loan();
+        loan.setExtensionCount(1);
+
+        service.onLoanClosed(loan, DUE_AT.minus(Duration.ofDays(1)), false);
+
+        assertThat(row.getLevel()).isEqualTo((short) 2);
+        assertThat(lastHistory().getReason()).isEqualTo(CreditLevelReason.EXTENDED_NO_CHANGE);
+    }
+
     @Test
     void aNavixLoanWithoutDueAtIsDueAtTheEndOfItsDueDate() {
         CreditLevel row = at(1);

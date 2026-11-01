@@ -169,6 +169,16 @@ public class LoanMath {
     }
 
     /**
+     * Late-charge days owed in the current due cycle as of {@code asOf}: days past {@code dueDate} after the
+     * loan's grace, within what is left of the lifetime cap once {@code usedDays} were charged in earlier
+     * cycles (PLAN Phase 6b, EXT-26).
+     */
+    public int chargeablePenalDays(LocalDate dueDate, LocalDate asOf, int graceDays, int usedDays) {
+        int late = Math.max(0, daysPastDue(dueDate, asOf) - graceDays);
+        return Math.min(late, Math.max(0, pricing.penalCapDays() - usedDays));
+    }
+
+    /**
      * Eligible loan limit — <b>25% of monthly salary</b>, floored to the nearest ₹100 and capped at
      * the ₹10,00,000 instant ceiling. Salary drives both the limit and the due date.
      *

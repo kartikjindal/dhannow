@@ -8,6 +8,8 @@ public enum CreditLevelReason {
     ON_TIME_REPAID,
     /** Closed late, or by settlement: the level stays. */
     LATE_REPAID_NO_CHANGE,
+    /** Closed after one or more activated extensions: the level stays (PLAN Phase 6b). */
+    EXTENDED_NO_CHANGE,
     /** Set by an ADMIN with a reason code. */
     MANUAL_EXCEPTION
 }

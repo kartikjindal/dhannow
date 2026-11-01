@@ -111,7 +111,10 @@ public final class CollectionsDtos {
             String creditDecidedByName,
             String disbursedByName,
             LoanSummary loan,
-            com.navix.common.loan.TrustSignals trust) {
+            com.navix.common.loan.TrustSignals trust,
+            /** The loan's latest extension state (Phase 6b, sortable and faceted); null when never offered. */
+            String extState,
+            int extensionCount) {
     }
 
     /**
@@ -219,7 +222,9 @@ public final class CollectionsDtos {
             LocalDate paidOn,
             String txnRef,
             String proofRef,
-            UUID settlementId) {
+            UUID settlementId,
+            /** Required for kind EXTENSION: the accepted extension this pays for (Phase 6b). */
+            UUID extensionId) {
     }
 
     /** The Accountant's decision on a collections payment; {@code remarks} required on a reject. */
@@ -251,6 +256,7 @@ public final class CollectionsDtos {
             Instant validatedAt,
             String remarks,
             Long ledgerPaymentId,
-            String borrowerName) {
+            String borrowerName,
+            UUID extensionId) {
     }
 }

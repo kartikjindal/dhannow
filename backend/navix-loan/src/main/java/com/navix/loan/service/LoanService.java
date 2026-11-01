@@ -103,6 +103,7 @@ public class LoanService {
         int tenureDays = (int) ChronoUnit.DAYS.between(day0, dueDate);
         loan.setDisbursedOn(day0);
         loan.setDueDate(dueDate);
+        loan.setOriginalDueDate(dueDate);
         loan.setDueAt(LoanMath.dueAt(dueDate, pricing.product(application.getProductVersionId())));
         loan.setTenureDays(tenureDays);
         long total = math.totalRepayablePaise(loan.getPrincipal(), tenureDays);

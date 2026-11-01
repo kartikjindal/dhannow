@@ -104,4 +104,31 @@ public interface LoanDirectory {
      * who has already paid the settled figure must not wait for another payment to be closed.
      */
     void recomputeOutstanding(Long loanId);
+
+    // ---- loan extension (PLAN Phase 6b) ----------------------------------------------------
+
+    /**
+     * Take the loan's transaction-scoped advisory lock, the one NACH presentment uses. Every extension
+     * transition holds it, so a payment verification, a debit and an offer never interleave on one loan.
+     */
+    default void lockLoan(Long loanId) {
+        throw new UnsupportedOperationException("lockLoan");
+    }
+
+    /** Eligibility and the quote for an extension paid on {@code paidOn} (null = today, IST). */
+    default com.navix.common.extension.ExtensionFacts extensionFacts(Long loanId, LocalDate paidOn) {
+        throw new UnsupportedOperationException("extensionFacts");
+    }
+
+    /**
+     * The Accountant validated an extension payment collections logged: record it as an EXTENSION payment
+     * (verified) and activate the extension, moving the due date. The only path besides the borrower's own
+     * verified payment that moves a due date. Refuses an amount that is not the quote for {@code paidOn}.
+     *
+     * @return the ledger {@code payment.id}
+     */
+    default Long applyExtension(Long loanId, java.util.UUID extensionId, long amountPaise, LocalDate paidOn,
+                                String txnRef, String proofRef) {
+        throw new UnsupportedOperationException("applyExtension");
+    }
 }

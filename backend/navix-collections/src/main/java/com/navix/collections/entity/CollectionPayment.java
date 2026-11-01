@@ -91,4 +91,13 @@ public class CollectionPayment {
     /** The {@code payment} row this created in the loan ledger; null until validated. */
     @Column(name = "ledger_payment_id")
     private Long ledgerPaymentId;
+
+    /** The accepted loan extension an {@code EXTENSION} payment pays for (V103). */
+    @Column(name = "extension_id")
+    private UUID extensionId;
+
+    /** Optimistic lock (V103): two Accountants validating at once → the second gets 409 STALE_STATE (EXT-20). */
+    @jakarta.persistence.Version
+    @Column(name = "version", nullable = false)
+    private long version;
 }

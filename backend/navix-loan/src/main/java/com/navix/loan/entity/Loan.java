@@ -122,6 +122,25 @@ public class Loan extends BaseAuditEntity {
     @Column(name = "due_at")
     private Instant dueAt;
 
+    /** Activated extensions (V103). Each one moved the due date by one tenure; capped by product config. */
+    @Column(name = "extension_count", nullable = false)
+    private int extensionCount;
+
+    /** The due date the loan was confirmed with, before any extension (V103). */
+    @Column(name = "original_due_date")
+    private LocalDate originalDueDate;
+
+    /** Late-charge days already charged in earlier due cycles; they count toward the lifetime cap (EXT-26). */
+    @Column(name = "penal_days_used", nullable = false)
+    private int penalDaysUsed;
+
+    /**
+     * Late charge from earlier due cycles that repayments, not an extension, paid (V103). Repayments
+     * reduce what is owed by everything they paid, so this is added back to keep principal whole.
+     */
+    @Column(name = "penal_carried_paise", nullable = false)
+    private long penalCarriedPaise;
+
     /**
      * DhanNow lifecycle (V97). Written only through {@link #moveTo} (and {@link #startPending} on a new
      * row), which keep {@link #status} in step. {@code LoanService.disburse} mints the row

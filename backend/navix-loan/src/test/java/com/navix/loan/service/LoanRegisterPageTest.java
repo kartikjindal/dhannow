@@ -72,7 +72,7 @@ class LoanRegisterPageTest {
                 applicationFlowService, settlementDirectory, eventPublisher, dsaCommissionService, storage,
                 org.mockito.Mockito.mock(CreditLevelService.class),
                 org.mockito.Mockito.mock(PaymentAllocator.class),
-                org.mockito.Mockito.mock(com.navix.common.idempotency.IdempotencyService.class));
+                org.mockito.Mockito.mock(com.navix.common.idempotency.IdempotencyService.class), org.mockito.Mockito.mock(LoanExtensionLedger.class));
         service = new LoanRegisterService(loanRepository, applicationRepository, profileRepository,
                 repaymentService, loanMath, collectionCaseDirectory, staffDirectory, trustSignals, registerQuery);
         lenient().when(settlementDirectory.approvedSettlementAmounts(any())).thenReturn(Map.of());

@@ -62,13 +62,21 @@ public interface LoanRepository extends JpaRepository<Loan, Long> {
     List<Loan> findByStatusIn(Collection<LoanStatus> statuses);
 
     /** Loans eligible for collections: a given set of statuses, due on or before {@code asOf}. */
+    /**
+     * The collections worklist set: {@code statuses}, due on or before {@code horizon}, plus every extended loan
+     * whatever its new due date (PLAN Phase 6b, item 11). Soonest due first.
+     */
+    @Query("select l from Loan l where l.status in :statuses and (l.dueDate <= :horizon or l.extensionCount > 0)"
+            + " order by l.dueDate asc")
+    List<Loan> findCollectible(@Param("statuses") Collection<LoanStatus> statuses, @Param("horizon") LocalDate horizon);
+
     List<Loan> findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc(
             Collection<LoanStatus> statuses, LocalDate asOf);
 
     /**
      * Live loans NOT yet due as of {@code asOf}, soonest first — the collections pre-due watchlist
      * behind the UPCOMING DPD bucket. The mirror of
-     * {@link #findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc}: same statuses, opposite side
+     * {@link #findCollectible}: same statuses, opposite side
      * of the due date. Loans with a null {@code due_date} drop out on their own (SQL comparison
      * against null is never true), which is what keeps the day-count arithmetic downstream safe.
      */

@@ -10,6 +10,8 @@ public enum NotificationCategory {
     DISBURSEMENT,
     REPAYMENT,
     COLLECTIONS,
+    /** Loan extension (PLAN Phase 6b): the bell deep-links to the extension screen by loan id. */
+    EXTENSION,
     STAFF_IAM,
     SECURITY,
     SYSTEM

@@ -42,6 +42,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @AutoConfigureMockMvc
 @Testcontainers
 @Tag("integration")
+// OTP mock mode (fixed code, no SMS) so the extension confirmation can be driven end to end.
+@org.springframework.test.context.TestPropertySource(properties = "navix.sms.mock=true")
 class ApplicationFlowIntegrationTest {
 
     @Container
@@ -302,6 +304,276 @@ class ApplicationFlowIntegrationTest {
                 rs -> out.put(rs.getString(1), rs.getLong(2)), loanId);
         return out;
     }
+
+    // ---- PLAN Phase 6b: loan extension --------------------------------------------------
+
+    private static final String HEAD_A = "7";
+    private static final String HEAD_B = "8";
+
+    /** A ₹1,000 loan 3 days past due, with the borrower's mobile on file. @return {appId, loanId} */
+    private long[] overdueLoan(long customerId, int daysLate) throws Exception {
+        long appId = walkToActive(customerId);
+        long loanId = loanIdOf(appId);
+        LocalDate due = LocalDate.now(IST).minusDays(daysLate);
+        jdbc.update("update loan set disbursed_on = ?, due_date = ?, original_due_date = ?, due_at = ? where id = ?",
+                due.minusDays(14), due, due, java.sql.Timestamp.from(due.atTime(23, 59, 59).atZone(IST).toInstant()),
+                loanId);
+        jdbc.update("insert into customer_profile (application_id, full_name, mobile, created_at, created_by)"
+                + " values (?, 'Asha Rao', ?, now(), 'it')", appId, "98765" + String.format("%05d", customerId));
+        return new long[] {appId, loanId};
+    }
+
+    private JsonNode extensionCall(org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request,
+                                   String bearer, String body) throws Exception {
+        request = request.header("Authorization", bearer).contentType(MediaType.APPLICATION_JSON);
+        if (body != null) {
+            request = request.content(body);
+        }
+        return data(mvc.perform(request).andExpect(status().isOk()).andReturn());
+    }
+
+    /** Offer (Head A, case auto-opened) → approve (Head B) → OTP → accept. @return the extension JSON */
+    private JsonNode acceptedExtension(long loanId, long customerId) throws Exception {
+        JsonNode offered = extensionCall(post("/api/collections/loans/{id}/extensions", loanId),
+                bearer(HEAD_A, "COLLECTION_HEAD"), "{\"callNote\":\"Borrower asked for 14 days\"}");
+        String extId = offered.get("id").asText();
+        extensionCall(post("/api/collections/extensions/{id}/approve", extId), bearer(HEAD_B, "COLLECTION_HEAD"), null);
+        String b = bearer(String.valueOf(customerId), "BORROWER");
+        extensionCall(post("/api/loans/{l}/extensions/{e}/otp", loanId, extId), b, null);
+        return extensionCall(post("/api/loans/{l}/extensions/{e}/accept", loanId, extId), b,
+                "{\"otp\":\"123456\",\"consentVersion\":\"EXT-V1\"}");
+    }
+
+    private static String extensionPayment(long paise, String utr, String extId) {
+        return "{\"amountPaise\":" + paise + ",\"method\":\"UPI\",\"txnRef\":\"" + utr + "\",\"paidOn\":\""
+                + LocalDate.now(IST) + "\",\"proofUrl\":\"loan/repayment-proof/ext.png\",\"purpose\":\"EXTENSION\","
+                + "\"extensionId\":\"" + extId + "\"}";
+    }
+
+    /**
+     * The whole path: officer offers on a ₹1,000 loan 3 days late → a second offer is refused (409, and the DB
+     * index) → the Head who offered cannot approve (SOD_VIOLATION) → another Head approves → the borrower sees it on
+     * the loan, gets the OTP and accepts (idempotent) → pays ₹318 in the app (a wrong amount is refused) → nothing
+     * moves until the Accountant verifies → due = old + 14, "Extended 1 of 3", principal untouched, schedule v2,
+     * due history, balance_adjustment, addendum → repaying ₹1,000 closes the loan with no level change.
+     */
+    @Test
+    void extension_offerApproveAcceptPayVerifyMovesTheDueDateAndClosesWithNoLevelUp() throws Exception {
+        long[] ids = overdueLoan(90L, 3);
+        long loanId = ids[1];
+        LocalDate oldDue = LocalDate.now(IST).minusDays(3);
+        String b = bearer("90", "BORROWER");
+
+        JsonNode offered = extensionCall(post("/api/collections/loans/{id}/extensions", loanId),
+                bearer(HEAD_A, "COLLECTION_HEAD"), "{\"callNote\":\"Borrower asked for 14 days\",\"recordingId\":\"REC-90\"}");
+        String extId = offered.get("id").asText();
+        String caseId = offered.get("caseId").asText();
+        assertThat(offered.get("status").asText()).isEqualTo("OFFERED");
+        assertThat(offered.get("newDueDate").asText()).isEqualTo(oldDue.plusDays(14).toString());
+
+        // EXT-01: one open extension per loan, at the API and in the database.
+        mvc.perform(post("/api/collections/cases/{id}/extensions", caseId)
+                        .header("Authorization", bearer(HEAD_B, "COLLECTION_HEAD")).contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("EXTENSION_ALREADY_OPEN"));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update("insert into loan_extension (id, loan_id,"
+                        + " collection_case_id, seq, status, fee_paise, gst_paise, interest_paise, pay_by, expires_at,"
+                        + " old_due_date, new_due_date, proposed_by, proposed_at) values (gen_random_uuid(), ?, cast(? as uuid),"
+                        + " 99, 'OFFERED', 0, 0, 0, current_date, now(), current_date, current_date, 7, now())", loanId, caseId))
+                .hasMessageContaining("uq_loan_extension_open");
+
+        // The panel: today's quote is ₹318 (CC-15) and the cap is 3.
+        mvc.perform(get("/api/collections/cases/{id}/extensions", caseId).header("Authorization", bearer(HEAD_B, "COLLECTION_HEAD")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.quoteForToday.totalPaise").value(31800))
+                .andExpect(jsonPath("$.data.quoteForToday.lateChargePaise").value(6000))
+                .andExpect(jsonPath("$.data.cap").value(3))
+                .andExpect(jsonPath("$.data.used").value(0))
+                .andExpect(jsonPath("$.data.reasonCode").value("EXTENSION_ALREADY_OPEN"))
+                .andExpect(jsonPath("$.data.current.status").value("OFFERED"));
+
+        // The borrower never sees an offer the Head has not approved.
+        mvc.perform(get("/api/loan/{id}", loanId).header("Authorization", b))
+                .andExpect(jsonPath("$.data.pendingExtension").doesNotExist());
+
+        // EXT-04: the Head who offered cannot approve.
+        expectSod(post("/api/collections/extensions/{id}/approve", extId), HEAD_A, "COLLECTION_HEAD", null);
+        extensionCall(post("/api/collections/extensions/{id}/approve", extId), bearer(HEAD_B, "COLLECTION_HEAD"), null);
+
+        mvc.perform(get("/api/loan/{id}", loanId).header("Authorization", b))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.pendingExtension.status").value("APPROVED"))
+                .andExpect(jsonPath("$.data.pendingExtension.quoteForToday.totalPaise").value(31800))
+                .andExpect(jsonPath("$.data.pendingExtension.cap").value(3))
+                .andExpect(jsonPath("$.data.pendingExtension.newDueDate").value(oldDue.plusDays(14).toString()))
+                .andExpect(jsonPath("$.data.extensionCount").value(0));
+        extensionCall(post("/api/loans/{l}/extensions/{e}/seen", loanId, extId), b, null);
+        assertThat(jdbc.queryForObject("select seen_by_borrower_at is not null from loan_extension where id = cast(? as uuid)",
+                Boolean.class, extId)).isTrue();
+
+        // Another borrower cannot touch it.
+        mvc.perform(post("/api/loans/{l}/extensions/{e}/seen", loanId, extId).header("Authorization", bearer("91", "BORROWER")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("FORBIDDEN_OWNER"));
+
+        // OTP confirm; EXT-12: a retry is idempotent.
+        extensionCall(post("/api/loans/{l}/extensions/{e}/otp", loanId, extId), b, null);
+        mvc.perform(post("/api/loans/{l}/extensions/{e}/accept", loanId, extId).header("Authorization", b)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"otp\":\"000000\",\"consentVersion\":\"EXT-V1\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("INVALID_OTP"));
+        JsonNode accepted = extensionCall(post("/api/loans/{l}/extensions/{e}/accept", loanId, extId), b,
+                "{\"otp\":\"123456\",\"consentVersion\":\"EXT-V1\"}");
+        assertThat(accepted.get("status").asText()).isEqualTo("ACCEPTED");
+        assertThat(extensionCall(post("/api/loans/{l}/extensions/{e}/accept", loanId, extId), b, "{}")
+                .get("status").asText()).isEqualTo("ACCEPTED");
+
+        // EXT-16: a short payment is refused; the exact quote is recorded and waits for the Accountant.
+        mvc.perform(post("/api/loan/{id}/repayments", loanId).header("Authorization", b).header("Idempotency-Key", "k-90-x")
+                        .contentType(MediaType.APPLICATION_JSON).content(extensionPayment(25800, "UTR-EXT-90A", extId)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("EXTENSION_AMOUNT_MISMATCH"));
+        long paid = submit(loanId, b, "k-90-1", extensionPayment(31800, "UTR-EXT-90", extId));
+        assertThat(jdbc.queryForObject("select status from loan_extension where id = cast(? as uuid)", String.class, extId))
+                .isEqualTo("PAYMENT_PENDING");
+        // Only the Accountant's verification moves the due date.
+        assertThat(jdbc.queryForObject("select due_date from loan where id = ?", LocalDate.class, loanId)).isEqualTo(oldDue);
+
+        verifyPayment(loanId, paid);
+
+        var loan = jdbc.queryForMap("select due_date, original_due_date, extension_count, lifecycle_status, status,"
+                + " penal_days_used from loan where id = ?", loanId);
+        assertThat(loan).containsEntry("extension_count", 1).containsEntry("lifecycle_status", "ACTIVE")
+                .containsEntry("status", "ACTIVE").containsEntry("penal_days_used", 3);
+        assertThat(((java.sql.Date) loan.get("due_date")).toLocalDate()).isEqualTo(oldDue.plusDays(14));
+        assertThat(((java.sql.Date) loan.get("original_due_date")).toLocalDate()).isEqualTo(oldDue);
+        assertThat(jdbc.queryForObject("select status from loan_extension where id = cast(? as uuid)", String.class, extId))
+                .isEqualTo("ACTIVE");
+        // The charge is split into its parts; principal is untouched (no PRINCIPAL row, outstanding still ₹1,000).
+        assertThat(allocations(loanId)).containsOnly(java.util.Map.entry("EXT_FEE", 10000L),
+                java.util.Map.entry("EXT_GST", 1800L), java.util.Map.entry("EXT_INTEREST", 14000L),
+                java.util.Map.entry("PENAL", 6000L));
+        mvc.perform(get("/api/loan/{id}/outstanding", loanId).header("Authorization", b))
+                .andExpect(jsonPath("$.data.outstandingPaise").value(100000))
+                .andExpect(jsonPath("$.data.verifiedPaise").value(0))
+                .andExpect(jsonPath("$.data.penaltyPaise").value(0));
+        assertThat(jdbc.queryForList("select version, kind, status from repayment_schedule where loan_id = ? order by version",
+                loanId)).extracting(r -> r.get("kind") + ":" + r.get("status"))
+                .containsExactly("BULLET:SUPERSEDED", "EXTENSION:ACTIVE");
+        assertThat(jdbc.queryForObject("select i.principal_paise from schedule_instalment i join repayment_schedule s"
+                + " on s.id = i.schedule_id where s.loan_id = ? and s.status = 'ACTIVE'", Long.class, loanId)).isEqualTo(100000L);
+        assertThat(jdbc.queryForList("select seq, penal_days, to_at is null as open from loan_due_history where loan_id = ?"
+                + " order by seq", loanId)).extracting(r -> r.get("seq") + ":" + r.get("penal_days") + ":" + r.get("open"))
+                .containsExactly("1:3:false", "2:0:true");
+        assertThat(jdbc.queryForObject("select count(*) from balance_adjustment where loan_id = ? and kind = 'EXTENSION'",
+                Long.class, loanId)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("select count(*) from loan_document where loan_id = ? and type = 'EXTENSION_ADDENDUM'",
+                Long.class, loanId)).isEqualTo(1L);
+        mvc.perform(get("/api/loan/{id}", loanId).header("Authorization", b))
+                .andExpect(jsonPath("$.data.extensionCount").value(1))
+                .andExpect(jsonPath("$.data.originalDueDate").value(oldDue.toString()))
+                .andExpect(jsonPath("$.data.pendingExtension").doesNotExist())
+                .andExpect(jsonPath("$.data.extensions[0].status").value("ACTIVE"));
+
+        // Item 11: the extended loan stays on the worklist although its new due date is past the 7-day horizon.
+        mvc.perform(get("/api/collections/worklist").header("Authorization", bearer(HEAD_B, "COLLECTION_HEAD")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.loanId==" + loanId + ")].extState").value("ACTIVE"))
+                .andExpect(jsonPath("$.data[?(@.loanId==" + loanId + ")].extensionCount").value(1));
+
+        // Repaying the principal closes the loan; an extended loan never raises the level.
+        long repaid = submit(loanId, b, "k-90-2", repayment(100000, "UTR-PAY-90", LocalDate.now(IST)));
+        verifyPayment(loanId, repaid);
+        assertThat(jdbc.queryForObject("select lifecycle_status from loan where id = ?", String.class, loanId)).isEqualTo("CLOSED");
+        assertThat(allocations(loanId)).containsEntry("PRINCIPAL", 100000L).doesNotContainKey("EXCESS");
+        mvc.perform(get("/api/me/credit-level").header("Authorization", b)).andExpect(jsonPath("$.data.level").value(1));
+        assertThat(jdbc.queryForObject("select reason from credit_level_history where loan_id = ? and reason <> 'FIRST_LOAN'",
+                String.class, loanId)).isEqualTo("EXTENDED_NO_CHANGE");
+    }
+
+    /**
+     * EXT-20 / EXT-15: the officer logs the extension payment; two Accountants validate it at the same moment and
+     * the due date moves once. The same UTR cannot then be used for a repayment.
+     */
+    @Test
+    void ext20_twoAccountantsValidatingAtOnceMoveTheDueDateOnce() throws Exception {
+        long[] ids = overdueLoan(92L, 3);
+        long loanId = ids[1];
+        JsonNode ext = acceptedExtension(loanId, 92L);
+        String caseId = jdbc.queryForObject(
+                "select cast(collection_case_id as text) from loan_extension where id = cast(? as uuid)", String.class,
+                ext.get("id").asText());
+        JsonNode raised = extensionCall(post("/api/collections/cases/{id}/payments", caseId), bearer(HEAD_A, "COLLECTION_HEAD"),
+                "{\"kind\":\"EXTENSION\",\"amountPaise\":31800,\"txnRef\":\"UTR-EXT-92\",\"extensionId\":\""
+                        + ext.get("id").asText() + "\"}");
+        String paymentId = raised.get("id").asText();
+
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        java.util.List<java.util.concurrent.Future<Integer>> results = new java.util.ArrayList<>();
+        for (String accountant : new String[] {"3", "4"}) {
+            results.add(pool.submit(() -> {
+                start.await();
+                return mvc.perform(post("/api/collections/payments/{id}/validate", paymentId)
+                                .header("Authorization", bearer(accountant, "ACCOUNTANT"))
+                                .contentType(MediaType.APPLICATION_JSON).content("{\"accept\":true}"))
+                        .andReturn().getResponse().getStatus();
+            }));
+        }
+        start.countDown();
+        java.util.List<Integer> codes = new java.util.ArrayList<>();
+        for (var f : results) {
+            codes.add(f.get(60, java.util.concurrent.TimeUnit.SECONDS));
+        }
+        pool.shutdown();
+        assertThat(codes).containsOnlyOnce(200);
+        assertThat(jdbc.queryForMap("select extension_count, due_date from loan where id = ?", loanId))
+                .containsEntry("extension_count", 1)
+                .containsEntry("due_date", java.sql.Date.valueOf(LocalDate.now(IST).minusDays(3).plusDays(14)));
+        assertThat(jdbc.queryForObject("select count(*) from payment where loan_id = ? and purpose = 'EXTENSION'",
+                Long.class, loanId)).isEqualTo(1L);
+        // EXT-15: the extension's UTR cannot be reused for a repayment.
+        mvc.perform(post("/api/loan/{id}/repayments", loanId).header("Authorization", bearer("92", "BORROWER"))
+                        .header("Idempotency-Key", "k-92-1").contentType(MediaType.APPLICATION_JSON)
+                        .content(repayment(100000, "UTR-EXT-92", LocalDate.now(IST))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("UTR_USED_FOR_OTHER_PURPOSE"));
+    }
+
+    /** EXT-25: a 4th extension without an ADMIN override is 422 EXTENSION_CAP_REACHED; ADMIN with a reason may. */
+    @Test
+    void ext25_aFourthExtensionNeedsAnAdminOverride() throws Exception {
+        long[] ids = overdueLoan(93L, 1);
+        long loanId = ids[1];
+        jdbc.update("update loan set extension_count = 3 where id = ?", loanId);
+        mvc.perform(post("/api/collections/loans/{id}/extensions", loanId)
+                        .header("Authorization", bearer(HEAD_A, "COLLECTION_HEAD")).contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value("EXTENSION_CAP_REACHED"));
+        JsonNode overridden = extensionCall(post("/api/collections/loans/{id}/extensions", loanId), bearer("1", "ADMIN"),
+                "{\"overrideReason\":\"Hospitalised, approved by credit head\"}");
+        assertThat(overridden.get("overrideReason").asText()).isEqualTo("Hospitalised, approved by credit head");
+    }
+
+    /** CC-67 / EXT-29: an accepted offer never paid expires in the 00:05 sweep; nothing on the loan changes. */
+    @Test
+    void cc67_anAcceptedOfferThatIsNeverPaidExpires() throws Exception {
+        long[] ids = overdueLoan(94L, 2);
+        long loanId = ids[1];
+        JsonNode ext = acceptedExtension(loanId, 94L);
+        jdbc.update("update loan_extension set expires_at = now() - interval '1 minute' where id = cast(? as uuid)",
+                ext.get("id").asText());
+        assertThat(sweep.expireAll()).isGreaterThanOrEqualTo(1);
+        assertThat(jdbc.queryForObject("select status from loan_extension where id = cast(? as uuid)", String.class,
+                ext.get("id").asText())).isEqualTo("EXPIRED");
+        assertThat(jdbc.queryForObject("select extension_count from loan where id = ?", Integer.class, loanId)).isZero();
+        mvc.perform(get("/api/loan/{id}", loanId).header("Authorization", bearer("94", "BORROWER")))
+                .andExpect(jsonPath("$.data.pendingExtension").doesNotExist())
+                .andExpect(jsonPath("$.data.extensions[0].status").value("EXPIRED"));
+    }
+
+    @Autowired
+    private com.navix.scheduler.ExtensionExpirySweep sweep;
 
     // ---- PLAN Phase 5: documents ------------------------------------------------------
 

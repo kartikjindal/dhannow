@@ -22,6 +22,8 @@ public interface OtpVerifierPort {
     /** An admin correcting a customer's mobile number on file — the code is sent to the NEW number,
      *  proving it is real and reachable before it is saved over the old one. */
     String ADMIN_MOBILE_CHANGE = "ADMIN_MOBILE_CHANGE";
+    /** The borrower confirming a loan extension the Collection Head approved (PLAN Phase 6b). */
+    String LOAN_EXTENSION = "LOAN_EXTENSION";
 
     /**
      * @param mobile  the number the code was sent to. For every purpose except

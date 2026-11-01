@@ -52,6 +52,7 @@ public class LoanDirectoryAdapter implements LoanDirectory {
     private final LoanApplicationRepository applicationRepository;
     private final CustomerProfileRepository profileRepository;
     private final RepaymentService repaymentService;
+    private final LoanExtensionLedger extensionLedger;
     private final Clock clock;
 
     @Override
@@ -162,8 +163,9 @@ public class LoanDirectoryAdapter implements LoanDirectory {
         // polled register.
         // A DISPUTED loan is off the worklist (no collections calls) and so off the NACH sweep, which
         // presents from this list, until the dispute is resolved (PLAN Phase 3).
+        // An extended loan stays on the worklist whatever its new due date (PLAN Phase 6b, item 11).
         return enrich(loanRepository
-                .findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc(COLLECTIBLE, horizon).stream()
+                .findCollectible(COLLECTIBLE, horizon).stream()
                 .filter(l -> l.getHoldStatus() != LoanHold.DISPUTED)
                 .toList(),
                 effectiveAsOf);
@@ -258,6 +260,26 @@ public class LoanDirectoryAdapter implements LoanDirectory {
     @Transactional
     public void recomputeOutstanding(Long loanId) {
         repaymentService.recomputeOutstanding(loanId);
+    }
+
+    @Override
+    public void lockLoan(Long loanId) {
+        extensionLedger.lock(loanId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public com.navix.common.extension.ExtensionFacts extensionFacts(Long loanId, LocalDate paidOn) {
+        return extensionLedger.facts(loanId, paidOn);
+    }
+
+    @Override
+    @Transactional
+    public Long applyExtension(Long loanId, java.util.UUID extensionId, long amountPaise, LocalDate paidOn,
+                               String txnRef, String proofRef) {
+        Long paymentId = extensionLedger.applyCollected(loanId, extensionId, amountPaise, paidOn, txnRef, proofRef);
+        repaymentService.recomputeOutstanding(loanId);
+        return paymentId;
     }
 
     /** Build the snapshot, resolving the borrower via the application's KYC profile (both nullable). */

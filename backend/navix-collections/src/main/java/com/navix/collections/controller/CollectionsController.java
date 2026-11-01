@@ -1,5 +1,6 @@
 package com.navix.collections.controller;
 
+import com.navix.collections.dto.ExtensionDtos;
 import com.navix.collections.dto.CollectionsDtos.AssignOfficerRequest;
 import com.navix.collections.dto.CollectionsDtos.CaseDetailView;
 import com.navix.collections.dto.CollectionsDtos.CaseView;
@@ -17,6 +18,7 @@ import com.navix.collections.dto.CollectionsDtos.ValidateCollectionPaymentReques
 import com.navix.collections.entity.CollectionPaymentKind;
 import com.navix.collections.entity.CollectionPaymentStatus;
 import com.navix.collections.service.CollectionPaymentService;
+import com.navix.collections.service.LoanExtensionService;
 import com.navix.collections.service.CollectionsService;
 import com.navix.collections.service.DpdCalculator;
 import com.navix.collections.service.ManualDebitService;
@@ -66,6 +68,7 @@ public class CollectionsController {
     private final CollectionPaymentService collectionPaymentService;
     private final DpdCalculator dpdCalculator;
     private final ManualDebitService manualDebitService;
+    private final LoanExtensionService extensionService;
 
     /**
      * The collections worklist — one row per live loan, past due or due within the next week,
@@ -257,6 +260,50 @@ public class CollectionsController {
         return ApiResponse.ok(settlementService.reject(settlementId));
     }
 
+    // ---- loan extension (PLAN Phase 6b) -------------------------------------------------
+
+    /** State, history and eligibility with a reason code. */
+    @GetMapping("/cases/{caseId}/extensions")
+    public ApiResponse<ExtensionDtos.ExtensionPanel> extensions(@PathVariable UUID caseId) {
+        return ApiResponse.ok(extensionService.panel(caseId));
+    }
+
+    /** Offer (officer, own case). */
+    @PostMapping("/cases/{caseId}/extensions")
+    public ApiResponse<ExtensionDtos.ExtensionView> offerExtension(
+            @PathVariable UUID caseId, @RequestBody(required = false) ExtensionDtos.OfferRequest request) {
+        return ApiResponse.ok(extensionService.offer(caseId, request));
+    }
+
+    /** Offer on a loan with no case yet: the case is opened first. */
+    @PostMapping("/loans/{loanId}/extensions")
+    public ApiResponse<ExtensionDtos.ExtensionView> offerExtensionForLoan(
+            @PathVariable Long loanId, @RequestBody(required = false) ExtensionDtos.OfferRequest request) {
+        return ApiResponse.ok(extensionService.offerForLoan(loanId, request));
+    }
+
+    @PostMapping("/extensions/{extensionId}/approve")
+    public ApiResponse<ExtensionDtos.ExtensionView> approveExtension(@PathVariable UUID extensionId) {
+        return ApiResponse.ok(extensionService.approve(extensionId));
+    }
+
+    @PostMapping("/extensions/{extensionId}/reject")
+    public ApiResponse<ExtensionDtos.ExtensionView> rejectExtension(
+            @PathVariable UUID extensionId, @RequestBody ExtensionDtos.ReasonRequest request) {
+        return ApiResponse.ok(extensionService.reject(extensionId, request.reason(), request.note()));
+    }
+
+    @PostMapping("/extensions/{extensionId}/cancel")
+    public ApiResponse<ExtensionDtos.ExtensionView> cancelExtension(
+            @PathVariable UUID extensionId, @RequestBody(required = false) ExtensionDtos.ReasonRequest request) {
+        return ApiResponse.ok(extensionService.cancel(extensionId, request == null ? null : request.reason()));
+    }
+
+    @PostMapping("/extensions/{extensionId}/resend")
+    public ApiResponse<ExtensionDtos.ExtensionView> resendExtension(@PathVariable UUID extensionId) {
+        return ApiResponse.ok(extensionService.resend(extensionId));
+    }
+
     // ---- collections payments (V47) ---------------------------------------------------
 
     /** A Collection Executive (or Head) records a payment the borrower made. */
@@ -268,10 +315,11 @@ public class CollectionsController {
             kind = CollectionPaymentKind.valueOf(request.kind());
         } catch (IllegalArgumentException unknown) {
             throw new BusinessException("INVALID_PAYMENT_KIND",
-                    "Payment kind must be PART_PAYMENT, FULL_PAYMENT or SETTLEMENT");
+                    "Payment kind must be one of " + java.util.Arrays.toString(CollectionPaymentKind.values()));
         }
         return ApiResponse.ok(collectionPaymentService.raise(caseId, kind, request.amountPaise(),
-                request.paidOn(), request.txnRef(), request.proofRef(), request.settlementId()));
+                request.paidOn(), request.txnRef(), request.proofRef(), request.settlementId(),
+                request.extensionId()));
     }
 
     @GetMapping("/cases/{caseId}/payments")

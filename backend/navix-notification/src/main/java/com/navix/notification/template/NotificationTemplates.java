@@ -331,6 +331,31 @@ public class NotificationTemplates {
         inApp(NotificationType.COLLECTION_PAYMENT_REJECTED, "Collections payment rejected",
                 "The {paymentAmount} recorded on loan #{loanId} was not validated: {remarks}");
 
+        // ---------------- EXTENSION (Phase 6b) ----------------
+        inApp(NotificationType.EXTENSION_TO_APPROVE, "Extension to approve",
+                "An extension of loan #{loanId} for {charge} was offered. Your approval is needed.");
+
+        inApp(NotificationType.EXTENSION_OFFERED, "Extend your loan by 14 days",
+                "You can move your due date to {newDueDate} by paying {charge} by {payBy}. Open the app to confirm.");
+        email(NotificationType.EXTENSION_OFFERED, "You can extend your loan",
+                "Hi {name},\n\nAs discussed with our collections team, you can move the due date of loan #{loanId} "
+                        + "to {newDueDate}. To do this, confirm in the app and pay {charge} by {payBy}. The charge "
+                        + "does not reduce your principal.\n\nIf you did not ask for this, tell us in the app.");
+
+        inApp(NotificationType.EXTENSION_ACTIVATED, "Loan extended",
+                "Your loan is extended ({count} of {cap}). Your new due date is {newDueDate}.");
+        email(NotificationType.EXTENSION_ACTIVATED, "Your loan is extended",
+                "Hi {name},\n\nWe received {paid} and extended loan #{loanId} ({count} of {cap}). Your new due date "
+                        + "is {newDueDate}. Your extension letter is in the app under documents.");
+        sms(NotificationType.EXTENSION_ACTIVATED,
+                "Dear {name}, loan {loanId} is extended. New due date {newDueDate}.");
+
+        inApp(NotificationType.EXTENSION_EXPIRED, "Extension offer expired",
+                "The extension offered on loan #{loanId} expired without payment.");
+
+        inApp(NotificationType.EXTENSION_DECLINED, "Extension declined",
+                "The borrower declined the extension on loan #{loanId} ({reason}).");
+
         // ---------------- SYSTEM ----------------
         inApp(NotificationType.APPLICATION_CANCELLED, "Application cancelled",
                 "Your loan application #{applicationId} has been cancelled.");

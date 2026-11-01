@@ -25,7 +25,10 @@ public final class LoanDtos {
             @NotNull PaymentMethod method,
             String txnRef,
             String proofUrl,
-            LocalDate paidOn) {
+            LocalDate paidOn,
+            /** REPAYMENT (default) or EXTENSION with the extension it pays for (PLAN Phase 6b). */
+            com.navix.loan.domain.PaymentPurpose purpose,
+            java.util.UUID extensionId) {
     }
 
     /**
@@ -71,10 +74,24 @@ public final class LoanDtos {
             /** DhanNow (V97), additive: lifecycle, hold and repayment state as persisted. */
             com.navix.loan.domain.LoanLifecycle lifecycleStatus,
             com.navix.loan.domain.LoanHold holdStatus,
-            com.navix.loan.domain.RepaymentStatus repaymentStatus) {
+            com.navix.loan.domain.RepaymentStatus repaymentStatus,
+            /** Phase 6b, additive: the due date before any extension, and how many are active ("Extended n of 3"). */
+            LocalDate originalDueDate,
+            int extensionCount,
+            /** The extension open to the borrower (Head-approved, not yet active or ended); null when none. */
+            PendingExtension pendingExtension,
+            /** Every extension the borrower was shown, oldest first; null outside the borrower's loan read. */
+            java.util.List<ExtensionLine> extensions) {
 
         public static LoanView of(Loan l) {
             return of(l, l.getOutstanding(), l.getStatus());
+        }
+
+        public LoanView withExtensions(PendingExtension pending, java.util.List<ExtensionLine> lines) {
+            return new LoanView(id, customerId, principalPaise, processingFeePaise, gstPaise, netDisbursedPaise,
+                    dailyInterestRate, disbursedOn, dueDate, totalRepayablePaise, outstandingPaise, status,
+                    disbursalTxnRef, closedOn, graceDays, lifecycleStatus, holdStatus, repaymentStatus,
+                    originalDueDate, extensionCount, pending, lines);
         }
 
         /**
@@ -87,8 +104,24 @@ public final class LoanDtos {
                     l.getGst(), l.getNetDisbursed(), l.getDailyInterestRate(), l.getDisbursedOn(),
                     l.getDueDate(), l.getTotalRepayable(), outstandingPaise, status,
                     l.getDisbursalTxnRef(), l.getClosedOn(), l.getGraceDays(),
-                    l.getLifecycleStatus(), l.getHoldStatus(), l.getRepaymentStatus());
+                    l.getLifecycleStatus(), l.getHoldStatus(), l.getRepaymentStatus(),
+                    l.getOriginalDueDate(), l.getExtensionCount(), null, null);
         }
+    }
+
+    /**
+     * The borrower's open extension (PLAN Phase 6b). The app renders from {@code status} only; {@code version}
+     * goes back on accept/decline/pay so a stale screen gets 409 (EXT-09). {@code quoteForToday} is what paying
+     * today costs (the late charge follows the bank date).
+     */
+    public record PendingExtension(java.util.UUID id, String status, long version, int seq, int cap,
+                                   com.navix.common.extension.ExtensionQuote quoteForToday, LocalDate payBy,
+                                   java.time.Instant expiresAt, LocalDate newDueDate, boolean seen) {
+    }
+
+    /** One extension in the borrower's history. */
+    public record ExtensionLine(java.util.UUID id, int seq, String status, LocalDate oldDueDate,
+                                LocalDate newDueDate, java.time.Instant activatedAt, Long paymentId) {
     }
 
     public record PaymentView(
@@ -105,19 +138,22 @@ public final class LoanDtos {
             String customerName,
             // Set only when status == REJECTED (item 5): a fixed picklist code + optional free text.
             String rejectionReason,
-            String rejectionNote) {
+            String rejectionNote,
+            /** REPAYMENT or EXTENSION (Phase 6b); the Accountant's queue badges extension payments. */
+            com.navix.loan.domain.PaymentPurpose purpose,
+            java.util.UUID extensionId) {
 
         public static PaymentView of(Payment p) {
             return new PaymentView(p.getId(), p.getLoanId(), p.getAmount(), p.getMethod(), p.getStatus(),
                     p.getTxnRef(), p.getProofUrl(), p.getPaidOn(), p.isPartial(), null, null,
-                    p.getRejectionReason(), p.getRejectionNote());
+                    p.getRejectionReason(), p.getRejectionNote(), p.getPurpose(), p.getExtensionId());
         }
 
         /** Staff queue variant: associates a repayment with the borrower without exposing it to borrower APIs. */
         public static PaymentView of(Payment p, Long customerId, String customerName) {
             return new PaymentView(p.getId(), p.getLoanId(), p.getAmount(), p.getMethod(), p.getStatus(),
                     p.getTxnRef(), p.getProofUrl(), p.getPaidOn(), p.isPartial(), customerId, customerName,
-                    p.getRejectionReason(), p.getRejectionNote());
+                    p.getRejectionReason(), p.getRejectionNote(), p.getPurpose(), p.getExtensionId());
         }
 
         /**
@@ -129,7 +165,7 @@ public final class LoanDtos {
         public static PaymentView ofWithResolvedProof(Payment p, String presignedProofUrl) {
             return new PaymentView(p.getId(), p.getLoanId(), p.getAmount(), p.getMethod(), p.getStatus(),
                     p.getTxnRef(), presignedProofUrl, p.getPaidOn(), p.isPartial(), null, null,
-                    p.getRejectionReason(), p.getRejectionNote());
+                    p.getRejectionReason(), p.getRejectionNote(), p.getPurpose(), p.getExtensionId());
         }
 
         /** {@link #of(Payment, Long, String)} + {@link #ofWithResolvedProof(Payment, String)} combined. */
@@ -137,7 +173,7 @@ public final class LoanDtos {
                                                        String presignedProofUrl) {
             return new PaymentView(p.getId(), p.getLoanId(), p.getAmount(), p.getMethod(), p.getStatus(),
                     p.getTxnRef(), presignedProofUrl, p.getPaidOn(), p.isPartial(), customerId, customerName,
-                    p.getRejectionReason(), p.getRejectionNote());
+                    p.getRejectionReason(), p.getRejectionNote(), p.getPurpose(), p.getExtensionId());
         }
     }
 

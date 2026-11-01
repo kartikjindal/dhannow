@@ -18,7 +18,13 @@ public enum CollectionPaymentKind {
      * {@link Settlement} on the case — the Collection Head's approval is what makes the concession,
      * and this payment is only its settlement.
      */
-    SETTLEMENT;
+    SETTLEMENT,
+
+    /**
+     * The charge for a loan extension the borrower accepted (PLAN Phase 6b). The Head already approved the
+     * offer, so it goes straight to the Accountant, whose validation moves the due date.
+     */
+    EXTENSION;
 
     /** Whether this kind needs the Collection Head's approval before reaching the Accountant. */
     public boolean needsHeadApproval() {

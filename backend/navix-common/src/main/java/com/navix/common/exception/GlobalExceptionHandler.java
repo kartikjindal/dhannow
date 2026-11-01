@@ -98,6 +98,31 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(ApiResponse.failure(error));
     }
 
+    /** 409: the item moved on (stale version, illegal transition, already open); the current state goes back. */
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ApiResponse<Void>> handleConflict(ConflictException ex, HttpServletRequest request) {
+        log.warn("conflict code={} path={} state={}", ex.getCode(), request.getRequestURI(), ex.getCurrentState());
+        ApiError error = ApiError.builder()
+                .code(ex.getCode())
+                .message(ex.getMessage())
+                .path(request.getRequestURI())
+                .details(ex.getCurrentState() == null ? null : java.util.List.of(ex.getCurrentState()))
+                .build();
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.failure(error));
+    }
+
+    /** 409 STALE_STATE: an optimistic-lock ({@code @Version}) race lost to another writer (CC-21). */
+    @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> handleStale(Exception ex, HttpServletRequest request) {
+        log.warn("stale state path={}", request.getRequestURI());
+        ApiError error = ApiError.builder()
+                .code("STALE_STATE")
+                .message("Someone else changed this just now. Refresh and try again.")
+                .path(request.getRequestURI())
+                .build();
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.failure(error));
+    }
+
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResponse<Void>> handleBusiness(BusinessException ex,
                                                            HttpServletRequest request) {

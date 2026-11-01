@@ -47,6 +47,8 @@ class SettlementServiceTest {
     private LoanDirectory loanDirectory;
     @Mock
     private CollectionsService collectionsService;
+    @Mock
+    private com.navix.collections.repository.LoanExtensionRepository extensionRepository;
 
     private SettlementService service;
 
@@ -63,7 +65,7 @@ class SettlementServiceTest {
     void setUp() {
         org.mockito.Mockito.lenient().when(collectionsService.scopedCaseIdsOrNull()).thenReturn(null); // unscoped by default
         service = new SettlementService(settlementRepository, caseRepository, staffDirectory,
-                loanDirectory, event -> {}, collectionsService);
+                loanDirectory, event -> {}, collectionsService, extensionRepository);
     }
 
     @AfterEach
@@ -375,6 +377,18 @@ class SettlementServiceTest {
         when(staffDirectory.namesFor(any())).thenReturn(java.util.Map.of());
 
         assertThat(service.listAll()).extracting(SettlementView::collectionCaseId).containsExactly(caseId);
+    }
+
+    /** PLAN Phase 6b: no settlement while an extension is open on the loan. */
+    @Test
+    void proposeIsRefusedWhileAnExtensionIsOpen() {
+        ActorContext.set(OFFICER);
+        when(caseRepository.findById(caseId)).thenReturn(Optional.of(caseWithLoan()));
+        when(extensionRepository.findFirstByLoanIdAndStatusIn(any(), any()))
+                .thenReturn(Optional.of(new com.navix.collections.entity.LoanExtension()));
+
+        assertThatThrownBy(() -> service.propose(caseId, 500_000L))
+                .isInstanceOf(BusinessException.class).hasFieldOrPropertyWithValue("code", "EXTENSION_OPEN");
     }
 
     @Test

@@ -95,4 +95,17 @@ public class Payment extends BaseAuditEntity {
      */
     @Column(name = "recorded_by")
     private Long recordedBy;
+
+    /** REPAYMENT, or EXTENSION for the charge that buys a loan extension (V103). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "purpose", nullable = false, length = 16)
+    private com.navix.loan.domain.PaymentPurpose purpose = com.navix.loan.domain.PaymentPurpose.REPAYMENT;
+
+    /** The {@code loan_extension} an EXTENSION payment is for; null on a repayment. */
+    @Column(name = "extension_id")
+    private java.util.UUID extensionId;
+
+    public boolean isExtension() {
+        return purpose == com.navix.loan.domain.PaymentPurpose.EXTENSION;
+    }
 }

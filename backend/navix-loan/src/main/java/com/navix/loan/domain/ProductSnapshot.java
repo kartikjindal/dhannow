@@ -15,10 +15,11 @@ import java.util.List;
  * @param zone               the zone that time is read in (Asia/Kolkata)
  * @param overdueReviewDpd   days past due at which OVERDUE_D1 becomes OVERDUE_REVIEW (7)
  * @param offerValidityDays  days an offer stays open before it must be re-quoted (3, CC-02)
+ * @param extensionMax       loan extensions allowed per loan without an ADMIN override (3, V103)
  */
 public record ProductSnapshot(Long versionId, List<Long> allowedAmountsPaise, long minPaise,
                               long maxPaise, LocalTime dueCutoff, ZoneId zone, int overdueReviewDpd,
-                              int offerValidityDays) {
+                              int offerValidityDays, int extensionMax) {
 
     public ProductSnapshot {
         allowedAmountsPaise = List.copyOf(allowedAmountsPaise);
@@ -27,5 +28,5 @@ public record ProductSnapshot(Long versionId, List<Long> allowedAmountsPaise, lo
     /** The seed ladder (₹1k → 2k → 3k → 4k → 5k → 7k → 10k), identical to the V93 seed row. */
     public static final ProductSnapshot SEED = new ProductSnapshot(null,
             List.of(100_000L, 200_000L, 300_000L, 400_000L, 500_000L, 700_000L, 1_000_000L),
-            100_000L, 1_000_000L, LocalTime.of(23, 59, 59), ZoneId.of("Asia/Kolkata"), 7, 3);
+            100_000L, 1_000_000L, LocalTime.of(23, 59, 59), ZoneId.of("Asia/Kolkata"), 7, 3, 3);
 }

@@ -59,12 +59,17 @@ public class ProductConfig extends BaseAuditEntity {
     @Column(name = "offer_validity_days", nullable = false)
     private int offerValidityDays = 3;
 
+    /** Loan extensions allowed per loan before an ADMIN override is needed (V103). */
+    @Column(name = "extension_max", nullable = false)
+    private int extensionMax = 3;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
     private ConfigStatus status;
 
     public ProductSnapshot toSnapshot() {
         return new ProductSnapshot(getId(), Arrays.asList(allowedAmountsPaise), minPaise, maxPaise,
-                dueCutoffTime, ZoneId.of(timezone), overdueReviewDpd, offerValidityDays);
+                dueCutoffTime, ZoneId.of(timezone), overdueReviewDpd, offerValidityDays,
+                extensionMax);
     }
 }

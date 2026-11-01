@@ -54,7 +54,9 @@ class LoanLifecycleTest {
         assertThat(LoanLifecycle.OVERDUE_D1.canTransitionTo(LoanLifecycle.OVERDUE_REVIEW)).isTrue();
         assertThat(LoanLifecycle.OVERDUE_REVIEW.canTransitionTo(LoanLifecycle.RESTRUCTURE_PENDING)).isTrue();
         assertThat(LoanLifecycle.RESTRUCTURE_PENDING.canTransitionTo(LoanLifecycle.RESTRUCTURED)).isTrue();
-        assertThat(LoanLifecycle.OVERDUE_REVIEW.canTransitionTo(LoanLifecycle.ACTIVE)).isFalse();
+        // Phase 6b: only an activated extension takes a due or overdue loan back to ACTIVE.
+        assertThat(LoanLifecycle.OVERDUE_REVIEW.canTransitionTo(LoanLifecycle.ACTIVE)).isTrue();
+        assertThat(LoanLifecycle.RESTRUCTURED.canTransitionTo(LoanLifecycle.ACTIVE)).isFalse();
         assertThat(LoanLifecycle.DISBURSEMENT_PENDING.canTransitionTo(LoanLifecycle.CLOSED)).isFalse();
         // Any disbursed state closes; CLOSED is terminal.
         for (LoanLifecycle s : new LoanLifecycle[] {LoanLifecycle.ACTIVE, LoanLifecycle.DUE_TODAY,

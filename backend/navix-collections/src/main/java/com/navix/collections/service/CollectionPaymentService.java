@@ -77,6 +77,7 @@ public class CollectionPaymentService {
     private final StaffDirectory staffDirectory;
     private final ApplicationEventPublisher eventPublisher;
     private final CollectionsService collectionsService;
+    private final com.navix.collections.repository.LoanExtensionRepository extensionRepository;
 
     /**
      * Record a payment taken on a case. A settlement must name an <b>approved</b> settlement — the
@@ -87,6 +88,17 @@ public class CollectionPaymentService {
     public CollectionPaymentView raise(UUID caseId, CollectionPaymentKind kind, long amountPaise,
                                        LocalDate paidOn, String txnRef, String proofRef,
                                        UUID settlementId) {
+        return raise(caseId, kind, amountPaise, paidOn, txnRef, proofRef, settlementId, null);
+    }
+
+    /**
+     * As above; an {@code EXTENSION} names the case's ACCEPTED extension and must be exactly its quote for
+     * {@code paidOn} (422 {@code EXTENSION_AMOUNT_MISMATCH} otherwise, never silently accepted).
+     */
+    @Transactional
+    public CollectionPaymentView raise(UUID caseId, CollectionPaymentKind kind, long amountPaise,
+                                       LocalDate paidOn, String txnRef, String proofRef,
+                                       UUID settlementId, UUID extensionId) {
         requireOneOf(OFFICER_ROLE, HEAD_ROLE);
         if (amountPaise <= 0) {
             throw new BusinessException("INVALID_AMOUNT", "Payment amount must be positive");
@@ -106,7 +118,10 @@ public class CollectionPaymentService {
         p.setRaisedBy(actorStaffId());
         p.setRaisedAt(Instant.now());
 
-        if (kind.needsHeadApproval()) {
+        if (kind == CollectionPaymentKind.EXTENSION) {
+            p.setExtensionId(requireAcceptedExtension(c, extensionId, amountPaise, p.getPaidOn()).getId());
+            p.setStatus(CollectionPaymentStatus.PENDING_ACCOUNTANT);
+        } else if (kind.needsHeadApproval()) {
             p.setSettlementId(requireProposedOrApprovedSettlement(caseId, settlementId));
             // Already approved by the Head? Then the approval it was waiting for has happened and it
             // goes straight on to the Accountant.
@@ -176,6 +191,8 @@ public class CollectionPaymentService {
     public CollectionPaymentView validate(UUID paymentId, boolean accept, String remarks) {
         requireOneOf(CHECKER_ROLE);
         CollectionPayment p = require(paymentId);
+        // The loan lock (NACH's) plus @Version: a second Accountant waits here, then finds it decided (EXT-20).
+        loanDirectory.lockLoan(p.getLoanId());
         if (p.getStatus() != CollectionPaymentStatus.PENDING_ACCOUNTANT) {
             throw new BusinessException("PAYMENT_NOT_PENDING_VALIDATION",
                     p.getStatus() == CollectionPaymentStatus.PENDING_HEAD
@@ -192,7 +209,21 @@ public class CollectionPaymentService {
         p.setValidatedBy(validator);
         p.setValidatedAt(Instant.now());
         p.setRemarks(blankToNull(remarks));
-        if (accept) {
+        com.navix.collections.entity.LoanExtension ext = p.getExtensionId() == null ? null
+                : extensionRepository.findById(p.getExtensionId()).orElse(null);
+        if (ext != null) {
+            // Proposer ≠ approver ≠ payment verifier (PLAN Phase 4/6b).
+            SeparationOfDutiesGuard.extensionPaymentVerifier(validator, ext.getProposedBy(), ext.getApprovedBy());
+        }
+        if (accept && ext != null) {
+            // An extension payment moves the due date instead of crediting the balance; this is the only
+            // collections path that does (LoanDirectory.applyExtension).
+            if (p.getLedgerPaymentId() == null) {
+                p.setLedgerPaymentId(loanDirectory.applyExtension(p.getLoanId(), ext.getId(), p.getAmountPaise(),
+                        p.getPaidOn(), p.getTxnRef(), p.getProofRef()));
+            }
+            p.setStatus(CollectionPaymentStatus.VALIDATED);
+        } else if (accept) {
             // The one write into the loan ledger. Guarded by ledgerPaymentId so a retry after a
             // partial failure — or a double-click — can't credit the borrower's loan twice.
             if (p.getLedgerPaymentId() == null) {
@@ -202,6 +233,9 @@ public class CollectionPaymentService {
             p.setStatus(CollectionPaymentStatus.VALIDATED);
         } else {
             p.setStatus(CollectionPaymentStatus.REJECTED);
+            if (ext != null && ext.getStatus() == com.navix.collections.entity.ExtensionStatus.PAYMENT_PENDING) {
+                ext.moveTo(com.navix.collections.entity.ExtensionStatus.ACCEPTED); // EXT-19: pay again until pay-by
+            }
         }
         CollectionPayment saved = paymentRepository.save(p);
         eventPublisher.publishEvent(new CollectionPaymentDecidedEvent(
@@ -286,6 +320,35 @@ public class CollectionPaymentService {
         return live.get(0).getId();
     }
 
+    /**
+     * The case's ACCEPTED, unexpired extension, and the amount equal to its quote for {@code paidOn}. Moves it to
+     * PAYMENT_PENDING under the loan lock, so the borrower cannot pay the same extension in the app meanwhile.
+     */
+    private com.navix.collections.entity.LoanExtension requireAcceptedExtension(CollectionCase c, UUID extensionId,
+                                                                                long amountPaise, LocalDate paidOn) {
+        loanDirectory.lockLoan(c.getLoanId());
+        com.navix.collections.entity.LoanExtension ext = (extensionId == null ? java.util.Optional
+                .<com.navix.collections.entity.LoanExtension>empty() : extensionRepository.findById(extensionId))
+                .filter(e -> e.getLoanId().equals(c.getLoanId()))
+                .orElseThrow(() -> new BusinessException("EXTENSION_REQUIRED",
+                        "Name the accepted extension on this case that the payment is for"));
+        if (ext.getStatus() != com.navix.collections.entity.ExtensionStatus.ACCEPTED) {
+            throw new com.navix.common.exception.ConflictException("STALE_STATE",
+                    "The borrower has not confirmed this extension, or it is already being paid.", ext.getStatus().name());
+        }
+        if (Instant.now().isAfter(ext.getExpiresAt())) {
+            throw new com.navix.common.exception.ConflictException("EXTENSION_EXPIRED",
+                    "This extension offer has expired.", "EXPIRED");
+        }
+        long quote = loanDirectory.extensionFacts(c.getLoanId(), paidOn).quote().totalPaise();
+        if (quote != amountPaise) {
+            throw new BusinessException("EXTENSION_AMOUNT_MISMATCH",
+                    "The extension costs " + quote + " paise for a payment on " + paidOn + ".");
+        }
+        ext.moveTo(com.navix.collections.entity.ExtensionStatus.PAYMENT_PENDING);
+        return ext;
+    }
+
     private CollectionPayment require(UUID paymentId) {
         return paymentRepository.findById(paymentId)
                 .orElseThrow(() -> new ResourceNotFoundException("CollectionPayment", String.valueOf(paymentId)));
@@ -305,7 +368,7 @@ public class CollectionPaymentService {
                 p.getRaisedBy(), staffName(p.getRaisedBy()), p.getRaisedAt(),
                 p.getValidatedBy(), staffName(p.getValidatedBy()), p.getValidatedAt(),
                 p.getRemarks(), p.getLedgerPaymentId(),
-                borrowerName(p.getLoanId()));
+                borrowerName(p.getLoanId()), p.getExtensionId());
     }
 
     /** Batched variant of {@link #toView(CollectionPayment)} for the list reads — reads
@@ -323,7 +386,7 @@ public class CollectionPaymentService {
                 p.getValidatedBy(), p.getValidatedBy() == null ? null : names.get(p.getValidatedBy()),
                 p.getValidatedAt(),
                 p.getRemarks(), p.getLedgerPaymentId(),
-                loan == null ? null : loan.borrowerName());
+                loan == null ? null : loan.borrowerName(), p.getExtensionId());
     }
 
     private String borrowerName(Long loanId) {

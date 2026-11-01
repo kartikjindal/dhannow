@@ -93,6 +93,36 @@ public class KfsPdfRenderer {
         });
     }
 
+    /** The extension addendum (PLAN Phase 6b): issued once per activated extension, from the ledger. */
+    public byte[] renderExtensionAddendum(DocumentFacts f, AddendumFacts a) {
+        return PdfKit.render(f, "LOAN EXTENSION ADDENDUM", "Addendum " + a.seq() + "  ·  Loan account no. "
+                + PdfKit.loanAccount(f) + "  ·  Application no. " + f.applicationId(), doc -> {
+            doc.add(PdfKit.hero("Previous due date", date(a.oldDueDate()), "New due date", date(a.newDueDate())));
+            doc.add(kv(new String[][] {
+                    {"Borrower", PdfKit.borrowerLine(f)},
+                    {"Lender", f.lender().legalName()},
+                    {"Loan amount (principal)", rs(f.principalPaise())},
+                    {"Extension", a.seq() + " of " + a.cap()},
+                    {"Paid on", date(a.paidOn())},
+            }));
+            doc.add(section("Extension charge"));
+            doc.add(kv(new String[][] {
+                    {"Processing fee (" + pct(f.pfRate()) + " of the principal)", rs(a.feePaise())},
+                    {"GST on the processing fee (" + pct(f.gstRate()) + ")", rs(a.gstPaise())},
+                    {"Interest for " + f.tenureDays() + " more days", rs(a.interestPaise())},
+                    {"Late charge to the payment date", rs(a.lateChargePaise())},
+                    {"Total paid for the extension", rs(a.totalPaise())},
+            }));
+            doc.add(section("Please note"));
+            doc.add(bullets(
+                    "You repay " + rs(f.principalPaise()) + " by 23:59 on " + date(a.newDueDate())
+                            + ". The extension charge does not reduce the principal.",
+                    "Late charge: " + PdfKit.penalLine(f) + ", counted again from the new due date.",
+                    "All other terms of your loan agreement stay the same.",
+                    PdfKit.grievanceLine(f)));
+        });
+    }
+
     /** The closure receipt (PLAN Phase 6a): issued once when the loan closes, from the ledger. */
     public byte[] renderClosureReceipt(DocumentFacts f, ClosureFacts c) {
         return PdfKit.render(f, "LOAN CLOSURE RECEIPT", "Receipt v" + f.version() + "  ·  Loan account no. "

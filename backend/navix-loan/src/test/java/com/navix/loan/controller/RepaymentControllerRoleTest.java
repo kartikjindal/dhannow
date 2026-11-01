@@ -26,7 +26,7 @@ class RepaymentControllerRoleTest {
     private final RepaymentController controller = new RepaymentController(mock(RepaymentService.class));
 
     private static final RepaymentRequest REQUEST =
-            new RepaymentRequest(500_000L, PaymentMethod.UPI, "TXN-1", null, LocalDate.now());
+            new RepaymentRequest(500_000L, PaymentMethod.UPI, "TXN-1", null, LocalDate.now(), null, null);
 
     @AfterEach
     void clearActor() {
@@ -56,13 +56,13 @@ class RepaymentControllerRoleTest {
     void aBorrowersProofMustBeTheirOwnRepaymentUpload() {
         ActorContext.set(new CurrentActor("9000001", "Asha", "BORROWER"));
         for (String key : new String[] {"applications/7/aadhaar_card_front/1.jpg", "loan/repayment-proof/../x"}) {
-            RepaymentRequest withProof = new RepaymentRequest(500_000L, PaymentMethod.UPI, "TXN-1", key, LocalDate.now());
+            RepaymentRequest withProof = new RepaymentRequest(500_000L, PaymentMethod.UPI, "TXN-1", key, LocalDate.now(), null, null);
             assertThatThrownBy(() -> controller.record(1L, "key-1", withProof))
                     .isInstanceOf(BusinessException.class)
                     .hasFieldOrPropertyWithValue("code", "INVALID_PROOF_KEY");
         }
         RepaymentRequest own = new RepaymentRequest(500_000L, PaymentMethod.UPI, "TXN-1",
-                "loan/repayment-proof/uuid-shot.jpg", LocalDate.now());
+                "loan/repayment-proof/uuid-shot.jpg", LocalDate.now(), null, null);
         assertThatCode(() -> controller.record(1L, "key-1", own)).doesNotThrowAnyException();
     }
 }

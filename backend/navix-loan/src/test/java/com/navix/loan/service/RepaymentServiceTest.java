@@ -75,7 +75,7 @@ class RepaymentServiceTest {
     void setUp() {
         repaymentService = new RepaymentService(paymentRepository, loanRepository, TestPricing.navix(),
                 applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage,
-                creditLevels, allocator, idempotency);
+                creditLevels, allocator, idempotency, org.mockito.Mockito.mock(LoanExtensionLedger.class));
     }
 
     /**
@@ -448,7 +448,7 @@ class RepaymentServiceTest {
     void anUpfrontLoanOwesThePrincipalPlusAnyLateCharge() {
         RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, dhanNowPricing(),
                 applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage,
-                creditLevels, allocator, idempotency);
+                creditLevels, allocator, idempotency, org.mockito.Mockito.mock(LoanExtensionLedger.class));
         Loan loan = dhanNowLoan(today().minusDays(2));
         when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
 
@@ -470,7 +470,7 @@ class RepaymentServiceTest {
     void cc19_breakdownExcludesPrepaidInterestAndCapsTheLateChargeAtThirtyDays() {
         RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, dhanNowPricing(),
                 applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage,
-                creditLevels, allocator, idempotency);
+                creditLevels, allocator, idempotency, org.mockito.Mockito.mock(LoanExtensionLedger.class));
         Loan loan = dhanNowLoan(today().minusDays(45));
         loan.setUpfrontInterestPaise(14_000L);
         when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
@@ -492,7 +492,7 @@ class RepaymentServiceTest {
     void cc09_verifyAllocatesAgainstTheLateChargeToThePaymentDate() {
         RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, dhanNowPricing(),
                 applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage,
-                creditLevels, allocator, idempotency);
+                creditLevels, allocator, idempotency, org.mockito.Mockito.mock(LoanExtensionLedger.class));
         Loan loan = dhanNowLoan(today().minusDays(3));
         when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
         lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -541,7 +541,7 @@ class RepaymentServiceTest {
         CreditLevelHistoryRepository history = org.mockito.Mockito.mock(CreditLevelHistoryRepository.class);
         CreditLevelService ladder = new CreditLevelService(levels, history, pricing, java.time.Clock.system(IST));
         RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, pricing,
-                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage, ladder, allocator, idempotency);
+                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage, ladder, allocator, idempotency, org.mockito.Mockito.mock(LoanExtensionLedger.class));
         Loan loan = dhanNowLoan(today());
         when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
         when(loanRepository.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -586,7 +586,7 @@ class RepaymentServiceTest {
     @Test
     void cc09_partPaymentLeavesTheLoanOpenAndPartial() {
         RepaymentService dhanNow = new RepaymentService(paymentRepository, loanRepository, dhanNowPricing(),
-                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage, creditLevels, allocator, idempotency);
+                applicationFlowService, settlementDirectory, event -> {}, dsaCommissionService, storage, creditLevels, allocator, idempotency, org.mockito.Mockito.mock(LoanExtensionLedger.class));
         Loan loan = dhanNowLoan(today());
         when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
         lenient().when(paymentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -1068,5 +1068,130 @@ class RepaymentServiceTest {
             assertThat(repaymentService.outstandingBreakdownAsOf(1L, at))
                     .isEqualTo(repaymentService.outstandingBreakdownAsOf(loan, at));
         }
+    }
+
+    // ---- PLAN Phase 6b: loan extension ------------------------------------------------------
+
+    private RepaymentService withLedger(LoanExtensionLedger ledger) {
+        return new RepaymentService(paymentRepository, loanRepository, dhanNowPricing(), applicationFlowService,
+                settlementDirectory, event -> {}, dsaCommissionService, storage, creditLevels, allocator, idempotency,
+                ledger);
+    }
+
+    private static Payment extensionPayment(java.util.UUID extensionId, PaymentStatus status) {
+        Payment p = new Payment();
+        p.setId(5L);
+        p.setLoanId(1L);
+        p.setAmount(31_800L);
+        p.setStatus(status);
+        p.setPurpose(com.navix.loan.domain.PaymentPurpose.EXTENSION);
+        p.setExtensionId(extensionId);
+        p.setPaidOn(today());
+        return p;
+    }
+
+    /** EXT-15: one transfer is a repayment or an extension charge, never both. */
+    @Test
+    void ext15_aUtrAlreadyUsedForARepaymentCannotPayAnExtension() {
+        LoanExtensionLedger ledger = org.mockito.Mockito.mock(LoanExtensionLedger.class);
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(dhanNowLoan(today().minusDays(3))));
+        Payment repayment = new Payment();
+        repayment.setLoanId(1L);
+        repayment.setTxnRef("UTRX1");
+        when(paymentRepository.findFirstByTxnRefAndStatusNot("UTRX1", PaymentStatus.REJECTED))
+                .thenReturn(Optional.of(repayment));
+        com.navix.common.security.ActorContext.set(new com.navix.common.security.CurrentActor("1", "Admin", "ADMIN"));
+        try {
+            assertThatThrownBy(() -> withLedger(ledger).submitPayment(null, 1L, 31_800L, PaymentMethod.UPI, "utr x1",
+                    null, today(), com.navix.loan.domain.PaymentPurpose.EXTENSION, java.util.UUID.randomUUID()))
+                    .isInstanceOf(BusinessException.class)
+                    .hasFieldOrPropertyWithValue("code", "UTR_USED_FOR_OTHER_PURPOSE");
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
+    }
+
+    /** An extension payment is checked against the quote, never partial, and leaves repayment status alone. */
+    @Test
+    void anExtensionPaymentIsRecordedAgainstItsExtension() {
+        LoanExtensionLedger ledger = org.mockito.Mockito.mock(LoanExtensionLedger.class);
+        Loan loan = dhanNowLoan(today().minusDays(3));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+        java.util.UUID ext = java.util.UUID.randomUUID();
+        com.navix.common.security.ActorContext.set(new com.navix.common.security.CurrentActor("1", "Admin", "ADMIN"));
+        try {
+            Payment p = withLedger(ledger).submitPayment(null, 1L, 31_800L, PaymentMethod.UPI, "UTR-EXT-1", null,
+                    today(), com.navix.loan.domain.PaymentPurpose.EXTENSION, ext);
+            assertThat(p.isExtension()).isTrue();
+            assertThat(p.getExtensionId()).isEqualTo(ext);
+            assertThat(p.isPartial()).isFalse();
+            verify(ledger).requirePayable(loan, ext, 31_800L, today());
+            verify(ledger).markPaymentPending(ext);
+            assertThat(loan.getRepaymentStatus()).isEqualTo(com.navix.loan.domain.RepaymentStatus.UNPAID);
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
+    }
+
+    /** EXT-19: a rejected extension payment puts the extension back to ACCEPTED so the borrower can pay again. */
+    @Test
+    void ext19_aRejectedExtensionPaymentReturnsTheExtensionToAccepted() {
+        LoanExtensionLedger ledger = org.mockito.Mockito.mock(LoanExtensionLedger.class);
+        java.util.UUID ext = java.util.UUID.randomUUID();
+        when(paymentRepository.findById(5L)).thenReturn(Optional.of(extensionPayment(ext, PaymentStatus.PENDING_VERIFICATION)));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(dhanNowLoan(today().minusDays(3))));
+        withLedger(ledger).rejectPayment(5L, "NOT_RECEIVED", null);
+        verify(ledger).markPaymentRejected(ext);
+    }
+
+    /** Only the Accountant's verification moves the due date; the extension charge never reaches the waterfall. */
+    @Test
+    void verifyingAnExtensionPaymentActivatesItAndLeavesPrincipalAlone() {
+        LoanExtensionLedger ledger = org.mockito.Mockito.mock(LoanExtensionLedger.class);
+        java.util.UUID ext = java.util.UUID.randomUUID();
+        Loan loan = dhanNowLoan(today().minusDays(3));
+        Payment p = extensionPayment(ext, PaymentStatus.PENDING_VERIFICATION);
+        when(paymentRepository.findById(5L)).thenReturn(Optional.of(p));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(ledger.onVerified(loan, p)).thenReturn(true);
+        withLedger(ledger).verifyPayment(5L);
+        verify(ledger).onVerified(loan, p);
+        verify(allocator, org.mockito.Mockito.never()).allocate(any(), org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    /** CC-69: the loan closed before the extension payment was verified; all of it is refunded. */
+    @Test
+    void cc69_anExtensionPaymentForACancelledExtensionIsRefunded() {
+        LoanExtensionLedger ledger = org.mockito.Mockito.mock(LoanExtensionLedger.class);
+        java.util.UUID ext = java.util.UUID.randomUUID();
+        Loan loan = dhanNowLoan(today().minusDays(3));
+        Payment p = extensionPayment(ext, PaymentStatus.PENDING_VERIFICATION);
+        when(paymentRepository.findById(5L)).thenReturn(Optional.of(p));
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(ledger.onVerified(loan, p)).thenReturn(false);
+        withLedger(ledger).verifyPayment(5L);
+        verify(allocator).allocate(p, 0L, 0L, 0L);
+    }
+
+    /**
+     * EXT-26: late days charged in earlier cycles count toward the 30-day cap; late charge from earlier cycles
+     * that repayments paid is carried so principal stays whole.
+     */
+    @Test
+    void ext26_theBreakdownCountsLateDaysUsedInEarlierCycles() {
+        RepaymentService dhanNow = withLedger(org.mockito.Mockito.mock(LoanExtensionLedger.class));
+        Loan loan = dhanNowLoan(today().minusDays(5));
+        loan.setPenalDaysUsed(28);
+        loan.setPenalCarriedPaise(6_000L);
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(10_000L);
+
+        RepaymentService.OutstandingBreakdown b = dhanNow.outstandingBreakdownAsOf(1L, today());
+
+        assertThat(b.penaltyDays()).isEqualTo(2);
+        assertThat(b.penaltyPaise()).isEqualTo(4_000L + 6_000L);
+        assertThat(b.outstandingPaise()).isEqualTo(100_000L + 4_000L + 6_000L - 10_000L);
     }
 }
