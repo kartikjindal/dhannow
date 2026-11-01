@@ -12,6 +12,7 @@ import com.navix.common.extension.ExtensionQuote;
 import com.navix.common.notification.event.ExtensionActivatedEvent;
 import com.navix.common.security.ActorContext;
 import com.navix.common.security.SeparationOfDutiesGuard;
+import com.navix.loan.domain.EmiStatus;
 import com.navix.loan.domain.LoanHold;
 import com.navix.loan.domain.LoanLifecycle;
 import com.navix.loan.domain.PaymentMethod;
@@ -63,6 +64,7 @@ public class LoanExtensionLedger {
 
     private final LoanRepository loans;
     private final PaymentRepository payments;
+    private final com.navix.loan.repository.EmiConversionRepository emis;
     private final MandateDebitRepository debits;
     private final PricingService pricing;
     private final RepaymentScheduleService schedules;
@@ -117,6 +119,8 @@ public class LoanExtensionLedger {
             reason = "REPAYMENT_PENDING";
         } else if (debits.existsByLoanIdAndStatusIn(loanId, IN_FLIGHT)) {
             reason = "DEBIT_IN_FLIGHT";
+        } else if (emis.existsByLoanIdAndStatusIn(loanId, EmiStatus.OPEN)) {
+            reason = "EMI_OPEN";
         } else if (loan.getExtensionCount() >= product.extensionMax()) {
             reason = "EXTENSION_CAP_REACHED";
         }
@@ -126,7 +130,7 @@ public class LoanExtensionLedger {
     }
 
     /** The persisted state, moved on by the clock when the lifecycle job has not run yet. */
-    private LoanLifecycle effectiveState(Loan loan, ProductSnapshot product) {
+    LoanLifecycle effectiveState(Loan loan, ProductSnapshot product) {
         LoanLifecycle state = loan.getLifecycleStatus();
         if (loan.getDueDate() == null || !LoanLifecycleService.TIMED.contains(state)) {
             return state;
@@ -175,9 +179,10 @@ public class LoanExtensionLedger {
         extensions.paymentRejected(extensionId);
     }
 
-    /** Cancel any open extension on a loan that just closed (EXT-06, CC-69). */
+    /** Cancel any open extension (EXT-06, CC-69) or EMI offer on a loan that just closed. */
     public void onLoanClosed(Long loanId) {
         extensions.cancelOpen(loanId, "LOAN_CLOSED", clock.instant());
+        emis.cancelOpen(loanId, clock.instant());
     }
 
     /**

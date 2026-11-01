@@ -15,6 +15,7 @@ import com.navix.common.collections.SettlementDirectory;
 import com.navix.common.exception.BusinessException;
 import com.navix.common.storage.DocumentStoragePort;
 import com.navix.loan.domain.ConfigStatus;
+import com.navix.loan.domain.LoanLifecycle;
 import com.navix.loan.domain.LoanStatus;
 import com.navix.loan.domain.PaymentMethod;
 import com.navix.loan.domain.PaymentStatus;
@@ -965,6 +966,107 @@ class RepaymentServiceTest {
         verify(applicationFlowService).closeForLoan(1L, "Closed by approved settlement of ₹7,000.00 (full & final)");
         // A settlement never raises the credit level.
         verify(creditLevels).onLoanClosed(eq(loan), any(), eq(true));
+        // CC-18: the closure says how.
+        assertThat(loan.getClosureType()).isEqualTo("SETTLED");
+    }
+
+    @Test
+    void cc18_aFullRepaymentClosesWithClosureTypeRepaid() {
+        Loan loan = activeLoan();
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(10_000_000L);
+        when(settlementDirectory.approvedSettlementAmount(1L)).thenReturn(Optional.empty());
+
+        repaymentService.recomputeOutstanding(1L);
+
+        assertThat(loan.getLifecycleStatus()).isEqualTo(LoanLifecycle.CLOSED);
+        assertThat(loan.getClosureType()).isEqualTo("REPAID");
+    }
+
+    /** CC-05: paid on the due date, verified while overdue: the overdue state is reversed with an adjustment row. */
+    @Test
+    void cc05_paidOnTheDueDateButVerifiedWhileOverdueWritesALateReversedAdjustment() {
+        Loan loan = activeLoan();
+        loan.setId(1L);
+        loan.setDueDate(today().minusDays(1));
+        loan.advanceTo(LoanLifecycle.OVERDUE_D1);
+        Payment paid = new Payment();
+        paid.setLoanId(1L);
+        paid.setStatus(PaymentStatus.VERIFIED);
+        paid.setPaidOn(loan.getDueDate());
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.findByLoanId(1L)).thenReturn(List.of(paid));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(10_000_000L);
+        when(settlementDirectory.approvedSettlementAmount(1L)).thenReturn(Optional.empty());
+
+        repaymentService.recomputeOutstanding(1L);
+
+        assertThat(loan.getLifecycleStatus()).isEqualTo(LoanLifecycle.CLOSED);
+        verify(allocator).adjustment(eq(1L), any(), eq("LATE_REVERSED"), any(), any(), any(), eq("PAID_ON_TIME"), any());
+    }
+
+    @Test
+    void cc05_aLatePaymentWritesNoReversal() {
+        Loan loan = activeLoan();
+        loan.setDueDate(today().minusDays(3));
+        loan.advanceTo(LoanLifecycle.OVERDUE_D1);
+        Payment paid = new Payment();
+        paid.setLoanId(1L);
+        paid.setStatus(PaymentStatus.VERIFIED);
+        paid.setPaidOn(today());
+        when(loanRepository.findById(1L)).thenReturn(Optional.of(loan));
+        when(paymentRepository.findByLoanId(1L)).thenReturn(List.of(paid));
+        when(paymentRepository.sumAmountByLoanIdAndStatus(1L, PaymentStatus.VERIFIED)).thenReturn(10_000_000L);
+        when(settlementDirectory.approvedSettlementAmount(1L)).thenReturn(Optional.empty());
+
+        repaymentService.recomputeOutstanding(1L);
+
+        verify(allocator, never()).adjustment(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    /** CC-10: maker-checker: whoever verified (or recorded) a payment cannot reverse it. */
+    @Test
+    void cc10_theVerifierCannotReverseThePayment() {
+        Payment payment = new Payment();
+        payment.setId(55L);
+        payment.setLoanId(1L);
+        payment.setStatus(PaymentStatus.VERIFIED);
+        payment.setDecidedBy(3L);
+        when(paymentRepository.findById(55L)).thenReturn(Optional.of(payment));
+        com.navix.common.security.ActorContext.set(new com.navix.common.security.CurrentActor("3", "Deepa", "ACCOUNTANT"));
+        try {
+            assertThatThrownBy(() -> repaymentService.reversePayment(55L, "Bounced"))
+                    .isInstanceOf(BusinessException.class).extracting("code").isEqualTo("SOD_VIOLATION");
+            assertThat(payment.getStatus()).isEqualTo(PaymentStatus.VERIFIED);
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
+    }
+
+    @Test
+    void cc10_onlyAVerifiedRepaymentCanBeReversed() {
+        Payment ext = new Payment();
+        ext.setLoanId(1L);
+        ext.setStatus(PaymentStatus.VERIFIED);
+        ext.setPurpose(com.navix.loan.domain.PaymentPurpose.EXTENSION);
+        Payment pending = new Payment();
+        pending.setLoanId(1L);
+        pending.setStatus(PaymentStatus.PENDING_VERIFICATION);
+        when(paymentRepository.findById(55L)).thenReturn(Optional.of(ext));
+        when(paymentRepository.findById(56L)).thenReturn(Optional.of(pending));
+        com.navix.common.security.ActorContext.set(new com.navix.common.security.CurrentActor("4", "Ravi", "ACCOUNTANT"));
+        try {
+            assertThatThrownBy(() -> repaymentService.reversePayment(55L, "Bounced"))
+                    .isInstanceOf(BusinessException.class).extracting("code").isEqualTo("EXTENSION_PAYMENT");
+            assertThatThrownBy(() -> repaymentService.reversePayment(56L, "Bounced"))
+                    .isInstanceOf(BusinessException.class).extracting("code").isEqualTo("PAYMENT_NOT_VERIFIED");
+            com.navix.common.security.ActorContext.set(
+                    new com.navix.common.security.CurrentActor("9", "Asha", "COLLECTION_HEAD"));
+            assertThatThrownBy(() -> repaymentService.reversePayment(56L, "Bounced"))
+                    .isInstanceOf(BusinessException.class).extracting("code").isEqualTo("FORBIDDEN_ROLE");
+        } finally {
+            com.navix.common.security.ActorContext.clear();
+        }
     }
 
     /**

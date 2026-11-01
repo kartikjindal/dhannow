@@ -421,6 +421,7 @@ public class LoanExtensionService {
             case "DEBIT_IN_FLIGHT" -> "An auto-debit is in progress on this loan.";
             case "EXTENSION_CAP_REACHED" -> "The extension cap is reached: repay, settle or ask an ADMIN to override.";
             case "RESTRUCTURED" -> "This loan is being restructured.";
+            case "EMI_OPEN" -> "An EMI conversion is open on this loan. Decide it first.";
             default -> "This loan cannot be extended now.";
         };
     }

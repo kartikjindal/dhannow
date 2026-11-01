@@ -46,4 +46,8 @@ public class CreditLevelHistory extends BaseAuditEntity {
 
     @Column(name = "at", nullable = false)
     private Instant at;
+
+    /** Set when the closure this row recorded was reversed (CC-10, V104), so the loan may close again. */
+    @Column(name = "reversed_at")
+    private Instant reversedAt;
 }

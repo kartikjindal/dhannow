@@ -58,15 +58,19 @@ class LoanLifecycleTest {
         assertThat(LoanLifecycle.OVERDUE_REVIEW.canTransitionTo(LoanLifecycle.ACTIVE)).isTrue();
         assertThat(LoanLifecycle.RESTRUCTURED.canTransitionTo(LoanLifecycle.ACTIVE)).isFalse();
         assertThat(LoanLifecycle.DISBURSEMENT_PENDING.canTransitionTo(LoanLifecycle.CLOSED)).isFalse();
-        // Any disbursed state closes; CLOSED is terminal.
+        // Any disbursed state closes; only a payment reversal (CC-10) reopens a closed loan.
         for (LoanLifecycle s : new LoanLifecycle[] {LoanLifecycle.ACTIVE, LoanLifecycle.DUE_TODAY,
                 LoanLifecycle.OVERDUE_D1, LoanLifecycle.OVERDUE_REVIEW, LoanLifecycle.RESTRUCTURE_PENDING,
                 LoanLifecycle.RESTRUCTURED}) {
             assertThat(s.canTransitionTo(LoanLifecycle.CLOSED)).as(s.name()).isTrue();
         }
         for (LoanLifecycle s : LoanLifecycle.values()) {
-            assertThat(LoanLifecycle.CLOSED.canTransitionTo(s)).isFalse();
+            assertThat(LoanLifecycle.CLOSED.canTransitionTo(s)).as(s.name())
+                    .isEqualTo(s == LoanLifecycle.ACTIVE || s == LoanLifecycle.RESTRUCTURED);
         }
+        // Phase 6c: an EMI offer that ends unaccepted puts the loan back to overdue.
+        assertThat(LoanLifecycle.RESTRUCTURE_PENDING.canTransitionTo(LoanLifecycle.OVERDUE_D1)).isTrue();
+        assertThat(LoanLifecycle.RESTRUCTURE_PENDING.canTransitionTo(LoanLifecycle.ACTIVE)).isFalse();
     }
 
     @Test
@@ -81,7 +85,7 @@ class LoanLifecycleTest {
         assertThat(loan.getStatus()).isEqualTo(LoanStatus.ACTIVE);
         loan.moveTo(LoanLifecycle.CLOSED);
         assertThat(loan.getStatus()).isEqualTo(LoanStatus.CLOSED);
-        assertThatThrownBy(() -> loan.moveTo(LoanLifecycle.ACTIVE)).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> loan.moveTo(LoanLifecycle.OVERDUE_D1)).isInstanceOf(BusinessException.class);
     }
 
     /** CC-13: days of missed runs still step through every state, and never move backwards. */

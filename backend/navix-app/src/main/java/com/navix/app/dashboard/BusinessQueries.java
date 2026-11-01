@@ -38,7 +38,7 @@ public class BusinessQueries {
                 + " coalesce(sum(p.amount) filter (where l.status = 'CLOSED' and " + SETTLED_EXISTS + "), 0) as settled,"
                 + " coalesce(sum(p.amount) filter (where l.status <> 'CLOSED'), 0) as part"
                 + " from payment p join loan l on l.id = p.loan_id"
-                + " where p.status = 'VERIFIED' and p.paid_on between :from and :to";
+                + " where p.status = 'VERIFIED' and p.purpose = 'REPAYMENT' and p.paid_on between :from and :to";
         return metrics.jdbc().queryForObject(sql, new MapSqlParameterSource("from", from).addValue("to", to),
                 (rs, i) -> new long[] {rs.getLong("closed"), rs.getLong("settled"), rs.getLong("part")});
     }
@@ -66,7 +66,7 @@ public class BusinessQueries {
         String sql = MetricSql.query(Metric.COLLECTION_MONTH, scope, "select f.grp as month, count(*) as due,"
                 + " coalesce(sum(f.amount), 0) as repayable,"
                 + " coalesce(sum((select coalesce(sum(p.amount), 0) from payment p"
-                + " where p.loan_id = f.loan_id and p.status = 'VERIFIED')), 0) as collected,"
+                + " where p.loan_id = f.loan_id and p.status = 'VERIFIED' and p.purpose = 'REPAYMENT')), 0) as collected,"
                 + " count(*) filter (where l.status = 'CLOSED' and l.closed_on < l.due_date) as preclosed"
                 + " from {F} join loan l on l.id = f.loan_id group by f.grp");
         Map<String, MonthCollection> out = new LinkedHashMap<>();
@@ -176,7 +176,7 @@ public class BusinessQueries {
         String sql = MetricSql.query(Metric.COMPANY, scope, "select f.grp as company, count(*) as disbursed,"
                 + " coalesce(sum(f.amount), 0) as principal, coalesce(sum(l.total_repayable), 0) as repayable,"
                 + " coalesce(sum((select coalesce(sum(p.amount), 0) from payment p"
-                + " where p.loan_id = f.loan_id and p.status = 'VERIFIED')), 0) as collected"
+                + " where p.loan_id = f.loan_id and p.status = 'VERIFIED' and p.purpose = 'REPAYMENT')), 0) as collected"
                 + " from {F} join loan l on l.id = f.loan_id group by f.grp order by principal desc, f.grp limit :limit");
         MapSqlParameterSource p = metrics.params(Metric.COMPANY, scope, from, to, null, null).addValue("limit", limit);
         return metrics.jdbc().query(sql, p, (rs, i) -> new CompanyPerfAgg(rs.getString("company"),

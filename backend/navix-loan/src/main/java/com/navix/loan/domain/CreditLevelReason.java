@@ -11,5 +11,7 @@ public enum CreditLevelReason {
     /** Closed after one or more activated extensions: the level stays (PLAN Phase 6b). */
     EXTENDED_NO_CHANGE,
     /** Set by an ADMIN with a reason code. */
-    MANUAL_EXCEPTION
+    MANUAL_EXCEPTION,
+    /** The closing payment was reversed (CC-10): any level the closure gave is taken back. */
+    CLOSURE_REVERSED
 }

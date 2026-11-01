@@ -19,6 +19,8 @@ import java.util.Set;
  *  OVERDUE_* → RESTRUCTURE_PENDING → RESTRUCTURED (Phase 6)
  *  DUE_TODAY / OVERDUE_* → ACTIVE when an extension activates (Phase 6b)
  *  any disbursed state → CLOSED (outstanding 0 after verified reconciliation)
+ *  RESTRUCTURE_PENDING → OVERDUE_* when the EMI offer ends unaccepted (Phase 6c)
+ *  CLOSED → ACTIVE (then along the timeline) or RESTRUCTURED when the closing payment is reversed (CC-10)
  * </pre>
  *
  * <p>The timed part (ACTIVE … OVERDUE_REVIEW) is declared in order, so the timeline is the ordinal.
@@ -44,9 +46,11 @@ public enum LoanLifecycle {
         TRANSITIONS.put(DUE_TODAY, EnumSet.of(OVERDUE_D1, ACTIVE, CLOSED));
         TRANSITIONS.put(OVERDUE_D1, EnumSet.of(OVERDUE_REVIEW, RESTRUCTURE_PENDING, ACTIVE, CLOSED));
         TRANSITIONS.put(OVERDUE_REVIEW, EnumSet.of(RESTRUCTURE_PENDING, ACTIVE, CLOSED));
-        TRANSITIONS.put(RESTRUCTURE_PENDING, EnumSet.of(RESTRUCTURED, CLOSED));
+        // Phase 6c: an approved EMI waits for the borrower; declined, expired or cancelled, the loan is overdue again.
+        TRANSITIONS.put(RESTRUCTURE_PENDING, EnumSet.of(RESTRUCTURED, OVERDUE_D1, OVERDUE_REVIEW, CLOSED));
         TRANSITIONS.put(RESTRUCTURED, EnumSet.of(CLOSED));
-        TRANSITIONS.put(CLOSED, EnumSet.noneOf(LoanLifecycle.class));
+        // CC-10: only a payment reversal reopens a closed loan, to the state its dates imply.
+        TRANSITIONS.put(CLOSED, EnumSet.of(ACTIVE, RESTRUCTURED));
     }
 
     private final LoanStatus legacyStatus;

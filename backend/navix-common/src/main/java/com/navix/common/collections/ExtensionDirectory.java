@@ -34,6 +34,11 @@ public interface ExtensionDirectory {
     /** Every extension the borrower was shown (Head-approved), oldest first. */
     List<ExtensionRef> borrowerHistory(Long loanId);
 
+    /** An extension is open on the loan (offered and not yet active or ended); a recovery EMI waits for it. */
+    default boolean hasOpen(Long loanId) {
+        return false;
+    }
+
     /** ACCEPTED → PAYMENT_PENDING once a payment for it is on file. */
     void paymentPending(UUID extensionId);
 

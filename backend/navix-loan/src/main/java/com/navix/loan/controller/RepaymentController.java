@@ -107,6 +107,20 @@ public class RepaymentController {
                 repaymentService.rejectPayment(paymentId, request.reason(), request.note())));
     }
 
+    /** A verified repayment found bounced (CC-10). The service checks the roles and maker-checker. */
+    public record ReverseRequest(String reason) {
+    }
+
+    @PostMapping("/{paymentId}/reverse")
+    public ApiResponse<PaymentView> reverse(@PathVariable Long loanId, @PathVariable Long paymentId,
+                                            @RequestBody ReverseRequest request) {
+        requireRole("ACCOUNTANT", "ADMIN");
+        if (repaymentService.listPayments(loanId).stream().noneMatch(p -> p.getId().equals(paymentId))) {
+            throw new com.navix.common.exception.ResourceNotFoundException("Payment", String.valueOf(paymentId));
+        }
+        return ApiResponse.ok(repaymentService.view(repaymentService.reversePayment(paymentId, request.reason())));
+    }
+
     /**
      * A borrower's proof must be one of their own repayment-proof uploads. Every read of the payment
      * presigns {@code proofUrl}, so an arbitrary key here — another applicant's Aadhaar scan — would

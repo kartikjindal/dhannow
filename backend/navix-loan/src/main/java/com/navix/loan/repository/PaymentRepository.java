@@ -55,7 +55,8 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
      * Every payment decided (verified or rejected) by any of {@code staffIds} in the half-open
      * window {@code [from, to)} — backs the accountant-attribution columns on the staff-performance
      * summary (V59's {@code decided_by}/{@code decided_at}). Callers MUST short-circuit on an empty
-     * collection — {@code in ()} is not valid SQL.
+     * collection — {@code in ()} is not valid SQL. Both purposes: deciding an extension payment is the
+     * accountant's work too.
      */
     @Query("select p from Payment p "
             + "where p.decidedBy in :staffIds and p.decidedAt >= :from and p.decidedAt < :to")
@@ -67,7 +68,7 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
      * transactions ledger. Mirrors {@code LoanRepository.findAllForRegister} (including its
      * {@code cast(:from as date)} trick: Hibernate 6 cannot infer a bare null parameter's type in
      * {@code :param is null}), so the ledger's statement period is applied in SQL instead of by
-     * loading every payment ever taken and filtering them in memory.
+     * loading every payment ever taken and filtering them in memory. Both purposes: each row carries its own.
      */
     @Query("select p from Payment p where (cast(:from as date) is null or p.paidOn >= :from) "
             + "and (cast(:to as date) is null or p.paidOn <= :to)")

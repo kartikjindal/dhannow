@@ -63,6 +63,14 @@ public class ProductConfig extends BaseAuditEntity {
     @Column(name = "extension_max", nullable = false)
     private int extensionMax = 3;
 
+    /** Days between recovery-EMI instalments (V104). */
+    @Column(name = "emi_gap_days", nullable = false)
+    private int emiGapDays = 10;
+
+    /** Principal from which a recovery EMI has three instalments instead of two (V104). */
+    @Column(name = "emi_three_from_paise", nullable = false)
+    private long emiThreeFromPaise = 700_000L;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
     private ConfigStatus status;
@@ -70,6 +78,6 @@ public class ProductConfig extends BaseAuditEntity {
     public ProductSnapshot toSnapshot() {
         return new ProductSnapshot(getId(), Arrays.asList(allowedAmountsPaise), minPaise, maxPaise,
                 dueCutoffTime, ZoneId.of(timezone), overdueReviewDpd, offerValidityDays,
-                extensionMax);
+                extensionMax, emiGapDays, emiThreeFromPaise);
     }
 }

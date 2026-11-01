@@ -24,6 +24,8 @@ public interface OtpVerifierPort {
     String ADMIN_MOBILE_CHANGE = "ADMIN_MOBILE_CHANGE";
     /** The borrower confirming a loan extension the Collection Head approved (PLAN Phase 6b). */
     String LOAN_EXTENSION = "LOAN_EXTENSION";
+    /** The borrower accepting a recovery EMI conversion an ADMIN approved (PLAN Phase 6c). */
+    String EMI_CONVERSION = "EMI_CONVERSION";
 
     /**
      * @param mobile  the number the code was sent to. For every purpose except

@@ -7,5 +7,7 @@ package com.navix.loan.domain;
 public enum PaymentStatus {
     PENDING_VERIFICATION,
     VERIFIED,
-    REJECTED
+    REJECTED,
+    /** Verified, then found bounced or reversed by the bank (CC-10, V104). Never counts. */
+    REVERSED
 }

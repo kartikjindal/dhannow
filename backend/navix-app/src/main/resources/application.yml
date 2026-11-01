@@ -323,6 +323,10 @@ navix:
   # case. INTEREST owes nothing on the DhanNow terms (prepaid at disbursal), so this is penal -> principal.
   payments:
     waterfall: PENAL,INTEREST,PRINCIPAL
+  # Recovery EMI (PLAN Phase 6c, flag emi-conversion): how instalments are charged interest. NONE: an
+  # instalment is principal + the late charge converted on the conversion date.
+  emi:
+    interest-mode: NONE
   # SES bounce/complaint ingestion (SES config-set -> SNS -> SQS -> SesEventSqsListener). Off by
   # default so the app boots without an SQS queue; flip on in AWS environments.
   ses:

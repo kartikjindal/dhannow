@@ -141,6 +141,14 @@ public class Loan extends BaseAuditEntity {
     @Column(name = "penal_carried_paise", nullable = false)
     private long penalCarriedPaise;
 
+    /** How the loan closed (V104, CC-18): REPAID, or SETTLED by an approved settlement. Null while open. */
+    @Column(name = "closure_type", length = 16)
+    private String closureType;
+
+    /** When a recovery EMI conversion activated (V104). No late charge accrues after it while emi.penal is off. */
+    @Column(name = "restructured_at")
+    private java.time.Instant restructuredAt;
+
     /**
      * DhanNow lifecycle (V97). Written only through {@link #moveTo} (and {@link #startPending} on a new
      * row), which keep {@link #status} in step. {@code LoanService.disburse} mints the row

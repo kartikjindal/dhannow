@@ -36,7 +36,7 @@ public class CollectionQueries {
                 + " coalesce(sum(v.paid), 0) as paid"
                 + " from {F} join loan l on l.id = f.loan_id"
                 + " cross join lateral (select coalesce(sum(p.amount), 0) as paid from payment p"
-                + " where p.loan_id = l.id and p.status = 'VERIFIED') v group by 1 order by 1");
+                + " where p.loan_id = l.id and p.status = 'VERIFIED' and p.purpose = 'REPAYMENT') v group by 1 order by 1");
         return metrics.jdbc().query(sql, metrics.params(Metric.COLLECTION_GROUP, scope, date, date, null, groupBy),
                 (rs, i) -> new AnalysisAgg(rs.getString("k"), rs.getLong("loans"), rs.getLong("principal"),
                         rs.getLong("repayable"), rs.getLong("collected_n"), rs.getLong("paid")));
@@ -69,7 +69,8 @@ public class CollectionQueries {
         String sql = MetricSql.SEG + "select cc.assigned_officer_id as staff, a.segment,"
                 + " count(distinct p.loan_id) as loans, coalesce(sum(p.amount), 0) as amt"
                 + " from collection_case cc join loan l on l.id = cc.loan_id"
-                + " join payment p on p.loan_id = l.id and p.status = 'VERIFIED' and p.paid_on between :from and :to"
+                + " join payment p on p.loan_id = l.id and p.status = 'VERIFIED' and p.purpose = 'REPAYMENT'"
+                + " and p.paid_on between :from and :to"
                 + " join seg a on a.loan_id = l.id"
                 + " where cc.assigned_officer_id is not null and (:allStaff or cc.assigned_officer_id in (:ids))"
                 + " group by 1, 2";
@@ -81,7 +82,7 @@ public class CollectionQueries {
     public long[] collectedTotals(DashboardScope scope, LocalDate from, LocalDate to) {
         return metrics.jdbc().queryForObject("select count(distinct p.loan_id) as loans,"
                         + " coalesce(sum(p.amount), 0) as amt from payment p"
-                        + " where p.status = 'VERIFIED' and p.paid_on between :from and :to"
+                        + " where p.status = 'VERIFIED' and p.purpose = 'REPAYMENT' and p.paid_on between :from and :to"
                         + " and exists (select 1 from collection_case cc where cc.loan_id = p.loan_id"
                         + " and (:allStaff or cc.assigned_officer_id in (:ids)))",
                 staffParams(scope, from, to), (rs, i) -> new long[] {rs.getLong("loans"), rs.getLong("amt")});
@@ -95,7 +96,7 @@ public class CollectionQueries {
         Map<LocalDate, Long> out = new LinkedHashMap<>();
         metrics.jdbc().query("select p.paid_on as d, coalesce(sum(p.amount), 0) as amt from payment p"
                         + " join collection_case cc on cc.loan_id = p.loan_id"
-                        + " where p.status = 'VERIFIED' and p.paid_on between :from and :to"
+                        + " where p.status = 'VERIFIED' and p.purpose = 'REPAYMENT' and p.paid_on between :from and :to"
                         + " and cc.assigned_officer_id in (:ids)"
                         + " and exists (select 1 from interaction_log i where i.collection_case_id = cc.id"
                         + " and i.outcome = 'PROMISE_TO_PAY' and i.logged_by_staff_id in (:ids)"
@@ -115,7 +116,7 @@ public class CollectionQueries {
         return metrics.jdbc().queryForObject("select coalesce(sum(p.amount), 0) as total,"
                         + " coalesce(sum(p.amount) filter (where p.paid_on = " + assigned + "), 0) as same_day,"
                         + " max(p.paid_on) as latest from collection_case cc"
-                        + " join payment p on p.loan_id = cc.loan_id and p.status = 'VERIFIED'"
+                        + " join payment p on p.loan_id = cc.loan_id and p.status = 'VERIFIED' and p.purpose = 'REPAYMENT'"
                         + " and p.paid_on >= " + assigned + " and p.paid_on between :from and :to"
                         + " where cc.assigned_officer_id in (:ids)",
                 staffParams(scope, from, to), (rs, i) -> new PtpTotals(rs.getLong("total"), rs.getLong("same_day"),
@@ -140,7 +141,7 @@ public class CollectionQueries {
         Map<Long, Long> out = new LinkedHashMap<>();
         metrics.jdbc().query("select cc.assigned_officer_id as staff, coalesce(sum(p.amount), 0) as amt"
                         + " from collection_case cc"
-                        + " join payment p on p.loan_id = cc.loan_id and p.status = 'VERIFIED'"
+                        + " join payment p on p.loan_id = cc.loan_id and p.status = 'VERIFIED' and p.purpose = 'REPAYMENT'"
                         + " and p.paid_on between :from and :to"
                         + " where cc.assigned_officer_id is not null and " + MetricSql.ist("cc.created_at")
                         + " between :from and :to and (:allStaff or cc.assigned_officer_id in (:ids)) group by 1",
@@ -205,7 +206,7 @@ public class CollectionQueries {
         Map<Long, CountAmount> out = new LinkedHashMap<>();
         metrics.jdbc().query("select cc.assigned_officer_id as staff, count(*) as n, coalesce(sum(p.amount), 0) as amt"
                         + " from payment p join collection_case cc on cc.loan_id = p.loan_id"
-                        + " where p.status = 'VERIFIED' and p.partial and p.paid_on = :date"
+                        + " where p.status = 'VERIFIED' and p.purpose = 'REPAYMENT' and p.partial and p.paid_on = :date"
                         + " and cc.assigned_officer_id is not null and (:allStaff or cc.assigned_officer_id in (:ids))"
                         + " group by 1",
                 dayParams(scope, date), rs -> {

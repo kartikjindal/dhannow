@@ -64,7 +64,7 @@ public final class MetricSql {
 
     private static final String VERIFIED =
             "(select cast(coalesce(sum(p.amount), 0) as bigint) from payment p"
-                    + " where p.loan_id = l.id and p.status = 'VERIFIED')";
+                    + " where p.loan_id = l.id and p.status = 'VERIFIED' and p.purpose = 'REPAYMENT')";
     static final String SETTLED_EXISTS = "exists (select 1 from settlement s"
             + " join collection_case sc on sc.id = s.collection_case_id"
             + " where sc.loan_id = l.id and s.status = 'APPROVED')";
@@ -160,7 +160,7 @@ public final class MetricSql {
         PART_PAID(ADMIN_COLLECTION, KeyKind.OTHER, false,
                 sel("l.principal", NIL, NIL) + LOAN_JOIN
                         + "where l.status <> 'CLOSED' %LOAN% and exists (select 1 from payment p"
-                        + " where p.loan_id = l.id and p.status = 'VERIFIED' and p.partial"
+                        + " where p.loan_id = l.id and p.status = 'VERIFIED' and p.purpose = 'REPAYMENT' and p.partial"
                         + " and p.paid_on between :from and :to)"),
 
         // ---- pre-closure week: keyed by due date ----

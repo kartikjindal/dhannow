@@ -105,6 +105,16 @@ public class Payment extends BaseAuditEntity {
     @Column(name = "extension_id")
     private java.util.UUID extensionId;
 
+    /** A verified payment found bounced (V104, CC-10): who reversed it, when and why. */
+    @Column(name = "reversed_by")
+    private Long reversedBy;
+
+    @Column(name = "reversed_at")
+    private Instant reversedAt;
+
+    @Column(name = "reversal_reason")
+    private String reversalReason;
+
     public boolean isExtension() {
         return purpose == com.navix.loan.domain.PaymentPurpose.EXTENSION;
     }

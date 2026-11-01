@@ -68,7 +68,7 @@ public class TeamQueries {
                 });
         metrics.jdbc().query("select a.sanctioned_by as staff, coalesce(sum(l.total_repayable), 0) as due,"
                         + " coalesce(sum((select coalesce(sum(py.amount), 0) from payment py"
-                        + " where py.loan_id = l.id and py.status = 'VERIFIED')), 0) as paid"
+                        + " where py.loan_id = l.id and py.status = 'VERIFIED' and py.purpose = 'REPAYMENT')), 0) as paid"
                         + " from loan_application a join loan l on l.id = a.loan_id"
                         + " where a.sanctioned_by in (:ids) and l.due_date <= :to group by 1",
                 p(ids, from, to), rs -> {
@@ -213,6 +213,7 @@ public class TeamQueries {
      */
     public Map<String, long[]> paymentsByStatus(LocalDate from, LocalDate to, Long decidedBy) {
         Map<String, long[]> out = new LinkedHashMap<>();
+        // Both purposes: verifying an extension payment is the accountant's work too.
         metrics.jdbc().query("select p.status, count(*) as n, coalesce(sum(p.amount), 0) as amt from payment p"
                         + " where p.paid_on between :from and :to"
                         + (decidedBy == null ? "" : " and p.decided_by = :decidedBy") + " group by 1",
@@ -224,6 +225,7 @@ public class TeamQueries {
 
     /** Repayments waiting for the accountant right now (a live queue, not windowed): {count, paise}. */
     public long[] pendingVerification() {
+        // Both purposes: the queue holds extension payments as well as repayments.
         return metrics.jdbc().queryForObject("select count(*) as n, coalesce(sum(p.amount), 0) as amt from payment p"
                         + " where p.status = 'PENDING_VERIFICATION'",
                 new MapSqlParameterSource(), (rs, i) -> new long[] {rs.getLong("n"), rs.getLong("amt")});

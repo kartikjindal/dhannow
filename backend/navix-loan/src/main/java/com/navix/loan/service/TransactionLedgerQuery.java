@@ -22,7 +22,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * The accountant's transactions ledger as ONE statement. A ledger row is either a disbursal (a
- * {@code loan}) or a repayment (a {@code payment}), so the {@code ledger} CTE is a {@code UNION ALL}
+ * {@code loan}) or a payment in (type REPAYMENT, or EXTENSION for an extension charge: {@code payment.purpose},
+ * PLAN Phase 6), so the {@code ledger} CTE is a {@code UNION ALL}
  * of the two selects projecting the same columns, a literal {@code direction} saying which half a
  * row came from. Search, period, direction, column filters, ordering and paging then run once over
  * the union — a filtered page no longer means reading every disbursal and every repayment of the
@@ -68,7 +69,8 @@ public class TransactionLedgerQuery {
                 from loan l
                 left join prof pr on pr.loan_id = l.id
                 union all
-                select 'P-' || p.id, 'REPAYMENT', 'INCOMING', p.id,
+                select 'P-' || p.id, case when p.purpose = 'EXTENSION' then 'EXTENSION' else 'REPAYMENT' end,
+                       'INCOMING', p.id,
                        p.loan_id, l.customer_id, pr.full_name, pr.pan, pr.mobile,
                        coalesce(p.amount, 0), p.txn_ref,
                        cast(p.status as text), p.paid_on,
@@ -76,7 +78,7 @@ public class TransactionLedgerQuery {
                 from payment p
                 left join loan l on l.id = p.loan_id
                 left join prof pr on pr.loan_id = p.loan_id
-                where p.status <> 'REJECTED'
+                where p.status not in ('REJECTED', 'REVERSED')
             )
             """;
 

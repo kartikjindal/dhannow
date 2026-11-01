@@ -1090,6 +1090,19 @@ public class ApplicationFlowService {
         });
     }
 
+    /** CC-10: the payment that closed the loan was reversed; its application is ACTIVE again. */
+    @Transactional
+    public void reopenForLoan(Long loanId, String notes) {
+        applicationRepository.findByLoanId(loanId).ifPresent(app -> {
+            if (app.getStatus() == ApplicationStatus.CLOSED) {
+                // The one way out of CLOSED, so CLOSED stays terminal for every other check (no map entry).
+                logEvent(app, ApplicationStatus.CLOSED, ApplicationStatus.ACTIVE, "PAYMENT_REVERSED", notes);
+                app.setStatus(ApplicationStatus.ACTIVE);
+                applicationRepository.save(app);
+            }
+        });
+    }
+
     // ---- reads ---------------------------------------------------------------------
 
     @Transactional(readOnly = true)
@@ -1528,7 +1541,7 @@ public class ApplicationFlowService {
     private boolean paidBeyondTolerance(Loan loan) {
         LocalDate cutoff = loan.getDueDate().plusDays(LATE_REPAYMENT_TOLERANCE_DAYS);
         return paymentRepository.findByLoanId(loan.getId()).stream()
-                .anyMatch(p -> p.getStatus() == PaymentStatus.VERIFIED
+                .anyMatch(p -> p.getStatus() == PaymentStatus.VERIFIED && !p.isExtension()
                         && p.getPaidOn() != null && p.getPaidOn().isAfter(cutoff));
     }
 

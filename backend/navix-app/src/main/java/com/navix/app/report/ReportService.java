@@ -297,10 +297,14 @@ public class ReportService {
                 + " and e.id < l.id and e.disbursed_on is not null)", params);
         rows.add(row("Disbursals", "Of which repeat loans", v[0], null, inPeriod));
 
-        v = pair("select count(*), coalesce(sum(p.amount), 0) from payment p where p.status = 'VERIFIED' and "
-                + p.on("p.paid_on"), params);
+        v = pair("select count(*), coalesce(sum(p.amount), 0) from payment p where p.status = 'VERIFIED'"
+                + " and p.purpose = 'REPAYMENT' and " + p.on("p.paid_on"), params);
         rows.add(row("Collections", "Repayments verified", v[0], v[1], inPeriod));
-        v = pair("select count(*), coalesce(sum(p.amount), 0) from payment p where p.status = 'REJECTED' and "
+        // Extension income is its own series: it never counts as recovery (PLAN Phase 6, item 10).
+        v = pair("select count(*), coalesce(sum(p.amount), 0) from payment p where p.status = 'VERIFIED'"
+                + " and p.purpose = 'EXTENSION' and " + p.on("p.paid_on"), params);
+        rows.add(row("Collections", "Extension charges verified", v[0], v[1], inPeriod));
+        v = pair("select count(*), coalesce(sum(p.amount), 0) from payment p where p.status = 'REJECTED' and p.purpose = 'REPAYMENT' and "
                 + p.on("p.paid_on"), params);
         rows.add(row("Collections", "Repayments rejected", v[0], v[1], inPeriod));
         v = pair("select count(*), 0 from loan l where l.closed_on is not null and " + p.on("l.closed_on"), params);
@@ -332,7 +336,8 @@ public class ReportService {
         }
         rows.add(row("Live book", "Open loans — outstanding", (long) open.size(), outstanding, "As of today"));
         rows.add(row("Live book", "Overdue loans — outstanding", overdueN, overdueAmt, "As of today"));
-        v = pair("select count(*), coalesce(sum(p.amount), 0) from payment p where p.status = 'PENDING_VERIFICATION'", params);
+        v = pair("select count(*), coalesce(sum(p.amount), 0) from payment p where p.status = 'PENDING_VERIFICATION'"
+                + " and p.purpose = 'REPAYMENT'", params);
         rows.add(row("Live book", "Repayments awaiting verification", v[0], v[1], "As of today"));
         List<Position> all = positions(Period.ALL, "true");
         long overpaidN = all.stream().filter(r -> r.excess > 0).count();
@@ -431,23 +436,28 @@ public class ReportService {
                 Column.money("principal", "Principal (Rs.)"), Column.money("fee", "Processing fee (Rs.)"),
                 Column.money("gst", "GST (Rs.)"), Column.money("net", "Net disbursed (Rs.)"),
                 Column.number("payments", "Repayments verified"), Column.money("collected", "Collected (Rs.)"),
-                Column.number("closed", "Loans closed"), Column.money("expenses", "Expenses (Rs.)"));
+                Column.money("extension", "Extension charges (Rs.)"), Column.number("closed", "Loans closed"),
+                Column.money("expenses", "Expenses (Rs.)"));
         String sql = """
                 with d as (select to_char(l.disbursed_on, 'YYYY-MM') m, count(*) n, sum(l.principal) principal,
                                   sum(coalesce(l.processing_fee, 0)) fee, sum(coalesce(l.gst, 0)) gst,
                                   sum(coalesce(l.net_disbursed, 0)) net
                            from loan l where l.disbursed_on is not null and %1$s group by 1),
                      c as (select to_char(p.paid_on, 'YYYY-MM') m, count(*) n, sum(p.amount) amt
-                           from payment p where p.status = 'VERIFIED' and %2$s group by 1),
+                           from payment p where p.status = 'VERIFIED' and p.purpose = 'REPAYMENT' and %2$s group by 1),
+                     e2 as (select to_char(p.paid_on, 'YYYY-MM') m, sum(p.amount) amt
+                           from payment p where p.status = 'VERIFIED' and p.purpose = 'EXTENSION' and %2$s group by 1),
                      k as (select to_char(l.closed_on, 'YYYY-MM') m, count(*) n
                            from loan l where l.closed_on is not null and %3$s group by 1),
                      x as (select to_char(e.expense_date, 'YYYY-MM') m, sum(e.amount_paise) amt
                            from company_expense e where %4$s group by 1),
-                     months as (select m from d union select m from c union select m from k union select m from x)
+                     months as (select m from d union select m from c union select m from e2 union select m from k
+                                union select m from x)
                 select months.m, coalesce(d.n, 0), coalesce(d.principal, 0), coalesce(d.fee, 0), coalesce(d.gst, 0),
-                       coalesce(d.net, 0), coalesce(c.n, 0), coalesce(c.amt, 0), coalesce(k.n, 0), coalesce(x.amt, 0)
+                       coalesce(d.net, 0), coalesce(c.n, 0), coalesce(c.amt, 0), coalesce(e2.amt, 0), coalesce(k.n, 0),
+                       coalesce(x.amt, 0)
                 from months
-                left join d on d.m = months.m left join c on c.m = months.m
+                left join d on d.m = months.m left join c on c.m = months.m left join e2 on e2.m = months.m
                 left join k on k.m = months.m left join x on x.m = months.m
                 where months.m is not null
                 order by months.m desc
@@ -472,7 +482,7 @@ public class ReportService {
                                 sum(principal) borrowed
                          from loan where disbursed_on is not null group by customer_id),
                   pd as (select l.customer_id, sum(p.amount) repaid from payment p join loan l on l.id = p.loan_id
-                         where p.status = 'VERIFIED' group by l.customer_id)
+                         where p.status = 'VERIFIED' and p.purpose = 'REPAYMENT' group by l.customer_id)
                 select f.customer_id, pr.full_name, pr.mobile, %s, pr.email, pr.employer, pr.monthly_salary_paise,
                        f.signed_up, la.status, f.apps, coalesce(lo.n, 0), coalesce(lo.closed, 0),
                        coalesce(lo.borrowed, 0), coalesce(pd.repaid, 0), su.name
@@ -503,7 +513,7 @@ public class ReportService {
                                 min(disbursed_on) first, max(disbursed_on) last, sum(principal) borrowed
                          from loan where disbursed_on is not null group by customer_id having count(*) > 1),
                   pd as (select l.customer_id, sum(p.amount) repaid from payment p join loan l on l.id = p.loan_id
-                         where p.status = 'VERIFIED' group by l.customer_id)
+                         where p.status = 'VERIFIED' and p.purpose = 'REPAYMENT' group by l.customer_id)
                 select lo.customer_id, pr.full_name, pr.mobile, lo.n, lo.closed, lo.first, lo.last, lo.borrowed,
                        coalesce(pd.repaid, 0)
                 from lo left join prof pr on pr.customer_id = lo.customer_id
@@ -527,7 +537,8 @@ public class ReportService {
                            l.disbursal_txn_ref ref, 0 ord, l.id rid
                     from loan l where l.disbursed_on is not null
                     union all
-                    select p.paid_on, 'Repayment', 'In', l.customer_id, p.loan_id, p.amount, cast(p.method as text),
+                    select p.paid_on, case when p.purpose = 'EXTENSION' then 'Extension' else 'Repayment' end, 'In',
+                           l.customer_id, p.loan_id, p.amount, cast(p.method as text),
                            cast(p.status as text), p.txn_ref, 1, p.id
                     from payment p join loan l on l.id = p.loan_id
                 )
@@ -538,15 +549,18 @@ public class ReportService {
                 order by t.d desc nulls last, t.ord, t.rid desc
                 """.formatted(p.on("t.d"));
         List<List<Object>> rows = query(sql, p.params());
-        long out = 0, in = 0;
+        long out = 0, in = 0, ext = 0;
         for (List<Object> r : rows) {
             long amt = ((Number) r.get(7)).longValue();
             if ("Out".equals(r.get(2))) out += amt;
-            else if ("VERIFIED".equals(r.get(9))) in += amt;
+            else if ("VERIFIED".equals(r.get(9)) && "Repayment".equals(r.get(1))) in += amt;
+            else if ("VERIFIED".equals(r.get(9))) ext += amt;
         }
         return new Table(cols, rows, List.of(new Fact("Transactions", (long) rows.size(), ColumnType.NUMBER),
-                new Fact("Disbursed (out)", out, ColumnType.MONEY), new Fact("Repaid, verified (in)", in, ColumnType.MONEY)),
-                List.of("Repayments in every status are listed; only VERIFIED repayments count towards what a customer has paid."));
+                new Fact("Disbursed (out)", out, ColumnType.MONEY), new Fact("Repaid, verified (in)", in, ColumnType.MONEY),
+                new Fact("Extension charges, verified (in)", ext, ColumnType.MONEY)),
+                List.of("Repayments in every status are listed; only VERIFIED repayments count towards what a customer has paid."
+                        + " Extension charges are listed as their own type and never reduce what is owed."));
     }
 
     // ---- loans --------------------------------------------------------------------------------
@@ -723,7 +737,7 @@ public class ReportService {
                 join loan l on l.id = p.loan_id
                 left join prof pr on pr.customer_id = l.customer_id
                 left join staff_user su on su.id = p.decided_by
-                where %s
+                where p.purpose = 'REPAYMENT' and %s
                 order by p.paid_on desc nulls last, p.id desc
                 """.formatted(p.on("p.paid_on"));
         List<List<Object>> rows = query(sql, p.params());
@@ -746,7 +760,8 @@ public class ReportService {
                 Column.money("paid", "Paid, verified (Rs.)"), Column.text("how", "Closed by"),
                 Column.text("timing", "Timing"));
         String sql = "with " + PROF_CTE + """
-                , pd as (select loan_id, sum(amount) amt from payment where status = 'VERIFIED' group by loan_id),
+                , pd as (select loan_id, sum(amount) amt from payment where status = 'VERIFIED' and purpose = 'REPAYMENT'
+                             group by loan_id),
                   st as (select distinct cc.loan_id from settlement s join collection_case cc on cc.id = s.collection_case_id
                          where s.status = 'APPROVED')
                 select l.id, l.customer_id, pr.full_name, pr.mobile, l.disbursed_on, l.due_date, l.closed_on,
@@ -935,7 +950,8 @@ public class ReportService {
                     from application_event e join staff_user su on cast(su.id as text) = e.actor_id
                     where coalesce(e.actor_role, '') not in ('BORROWER', 'SYSTEM') and %s
                     union all
-                    select su.id, 'REPAYMENT_' || cast(p.status as text), p.loan_id, p.decided_at
+                    select su.id, case when p.purpose = 'EXTENSION' then 'EXTENSION_' else 'REPAYMENT_' end
+                           || cast(p.status as text), p.loan_id, p.decided_at
                     from payment p join staff_user su on su.id = p.decided_by
                     where p.decided_at is not null and p.status in ('VERIFIED', 'REJECTED') and %s
                 )
@@ -1166,7 +1182,7 @@ public class ReportService {
                                    coalesce(sum(p.amount) filter (where p.paid_on <= l.due_date + l.grace_days), 0) on_time,
                                    coalesce(sum(p.amount) filter (where p.paid_on > l.due_date + l.grace_days), 0) late
                             from payment p join loan l on l.id = p.loan_id
-                            where p.status = 'VERIFIED' group by p.loan_id),
+                            where p.status = 'VERIFIED' and p.purpose = 'REPAYMENT' group by p.loan_id),
                      x as (select l.due_date, coalesce(pd.on_time, 0) on_time, coalesce(pd.late, 0) late,
                                   l.closed_on is not null and l.closed_on <= l.due_date + l.grace_days closed_on_time,
                                   case when l.closed_on is not null and l.closed_on <= l.due_date + l.grace_days
@@ -1195,11 +1211,11 @@ public class ReportService {
                 Column.text("name", "Customer"), Column.text("mobile", "Mobile"), Column.date("paidOn", "Paid on"),
                 Column.money("amount", "Amount (Rs.)"), Column.text("method", "Method"), Column.text("txnRef", "Reference"),
                 Column.bool("proof", "Proof attached"), Column.dateTime("recordedAt", "Reported at"),
-                Column.number("days", "Days waiting"));
+                Column.number("days", "Days waiting"), Column.text("purpose", "Kind"));
         String sql = "with " + PROF_CTE + """
                 select p.id, p.loan_id, pr.full_name, pr.mobile, p.paid_on, p.amount, cast(p.method as text), p.txn_ref,
                        p.proof_url is not null, p.created_at,
-                       current_date - cast(p.created_at at time zone 'Asia/Kolkata' as date)
+                       current_date - cast(p.created_at at time zone 'Asia/Kolkata' as date), cast(p.purpose as text)
                 from payment p join loan l on l.id = p.loan_id
                 left join prof pr on pr.customer_id = l.customer_id
                 where p.status = 'PENDING_VERIFICATION'
@@ -1359,7 +1375,7 @@ public class ReportService {
                 with own as (select distinct on (loan_id) loan_id, assigned_officer_id sid from collection_case
                              where assigned_officer_id is not null order by loan_id, created_at desc),
                      pay as (select o.sid, count(*) n, sum(p.amount) amt from payment p join own o on o.loan_id = p.loan_id
-                             where p.status = 'VERIFIED' and %s group by o.sid),
+                             where p.status = 'VERIFIED' and p.purpose = 'REPAYMENT' and %s group by o.sid),
                      cl as (select o.sid, count(*) n from loan l join own o on o.loan_id = l.id
                             where l.closed_on is not null and %s group by o.sid)
                 select su.id, su.name, su.role, coalesce(pay.n, 0), coalesce(pay.amt, 0), coalesce(cl.n, 0)
@@ -1391,14 +1407,18 @@ public class ReportService {
                 Column.date("closedOn", "Closed on"), Column.money("principal", "Principal (Rs.)"),
                 Column.money("paid", "Total received (Rs.)"), Column.money("recovered", "Principal recovered (Rs.)"),
                 Column.money("income", "Interest & penalty earned (Rs.)"), Column.money("shortfall", "Principal lost (Rs.)"),
-                Column.money("fee", "Upfront fee earned (Rs.)"));
+                Column.money("fee", "Upfront fee earned (Rs.)"), Column.money("extension", "Extension charges (Rs.)"));
+        // Repayments recover principal; extension charges are their own income line (PLAN Phase 6, item 10).
         String sql = "with " + PROF_CTE + """
-                , pd as (select loan_id, sum(amount) amt from payment where status = 'VERIFIED' group by loan_id)
+                , pd as (select loan_id, sum(amount) amt from payment where status = 'VERIFIED' and purpose = 'REPAYMENT'
+                         group by loan_id),
+                  ex as (select loan_id, sum(amount) amt from payment where status = 'VERIFIED' and purpose = 'EXTENSION'
+                         group by loan_id)
                 select l.id, pr.full_name, l.closed_on, l.principal, coalesce(pd.amt, 0),
                        least(coalesce(pd.amt, 0), l.principal), greatest(coalesce(pd.amt, 0) - l.principal, 0),
-                       greatest(l.principal - coalesce(pd.amt, 0), 0), coalesce(l.processing_fee, 0)
+                       greatest(l.principal - coalesce(pd.amt, 0), 0), coalesce(l.processing_fee, 0), coalesce(ex.amt, 0)
                 from loan l left join prof pr on pr.customer_id = l.customer_id
-                left join pd on pd.loan_id = l.id
+                left join pd on pd.loan_id = l.id left join ex on ex.loan_id = l.id
                 where l.closed_on is not null and %s
                 order by l.closed_on desc, l.id desc
                 """.formatted(p.on("l.closed_on"));
@@ -1406,8 +1426,9 @@ public class ReportService {
         return totalled(cols, rows, List.of(new Fact("Loans closed", (long) rows.size(), ColumnType.NUMBER),
                 new Fact("Interest & penalty earned", sum(rows, 6), ColumnType.MONEY),
                 new Fact("Upfront fee earned", sum(rows, 8), ColumnType.MONEY),
-                new Fact("Principal lost", sum(rows, 7), ColumnType.MONEY)),
-                List.of("Interest & penalty earned is everything received above the principal (any overpayment is included and is owed back)."));
+                new Fact("Principal lost", sum(rows, 7), ColumnType.MONEY),
+                new Fact("Extension charges", sum(rows, 9), ColumnType.MONEY)),
+                List.of("Interest & penalty earned is everything repaid above the principal (any overpayment is included and is owed back)."));
     }
 
     private Table auditTrail(Period p) {

@@ -16,10 +16,12 @@ import java.util.List;
  * @param overdueReviewDpd   days past due at which OVERDUE_D1 becomes OVERDUE_REVIEW (7)
  * @param offerValidityDays  days an offer stays open before it must be re-quoted (3, CC-02)
  * @param extensionMax       loan extensions allowed per loan without an ADMIN override (3, V103)
+ * @param emiGapDays         days between recovery-EMI instalments, from the conversion date (10, V104)
+ * @param emiThreeFromPaise  principal from which a recovery EMI has three instalments, not two (₹7,000, V104)
  */
 public record ProductSnapshot(Long versionId, List<Long> allowedAmountsPaise, long minPaise,
                               long maxPaise, LocalTime dueCutoff, ZoneId zone, int overdueReviewDpd,
-                              int offerValidityDays, int extensionMax) {
+                              int offerValidityDays, int extensionMax, int emiGapDays, long emiThreeFromPaise) {
 
     public ProductSnapshot {
         allowedAmountsPaise = List.copyOf(allowedAmountsPaise);
@@ -28,5 +30,10 @@ public record ProductSnapshot(Long versionId, List<Long> allowedAmountsPaise, lo
     /** The seed ladder (₹1k → 2k → 3k → 4k → 5k → 7k → 10k), identical to the V93 seed row. */
     public static final ProductSnapshot SEED = new ProductSnapshot(null,
             List.of(100_000L, 200_000L, 300_000L, 400_000L, 500_000L, 700_000L, 1_000_000L),
-            100_000L, 1_000_000L, LocalTime.of(23, 59, 59), ZoneId.of("Asia/Kolkata"), 7, 3, 3);
+            100_000L, 1_000_000L, LocalTime.of(23, 59, 59), ZoneId.of("Asia/Kolkata"), 7, 3, 3, 10, 700_000L);
+
+    /** Recovery EMI instalments for a loan of {@code principalPaise}: two, or three from the configured amount. */
+    public int emiInstalments(long principalPaise) {
+        return principalPaise >= emiThreeFromPaise ? 3 : 2;
+    }
 }

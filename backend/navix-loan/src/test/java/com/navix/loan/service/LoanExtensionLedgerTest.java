@@ -54,13 +54,16 @@ class LoanExtensionLedgerTest {
     private final PaymentRepository payments = mock(PaymentRepository.class);
     private final MandateDebitRepository debits = mock(MandateDebitRepository.class);
     private final ExtensionDirectory extensions = mock(ExtensionDirectory.class);
+    private final com.navix.loan.repository.EmiConversionRepository emis =
+            mock(com.navix.loan.repository.EmiConversionRepository.class);
     private final PricingService pricing = dhanNowPricing();
     private final LoanMath math = new LoanMath(LoanMath.DHANNOW_SEED_PRICING);
     private LoanExtensionLedger ledger;
 
     @BeforeEach
     void setUp() {
-        ledger = new LoanExtensionLedger(loans, payments, debits, pricing, mock(RepaymentScheduleService.class),
+        ledger = new LoanExtensionLedger(loans, payments,
+                emis, debits, pricing, mock(RepaymentScheduleService.class),
                 extensions, mock(JdbcTemplate.class), e -> { }, new ObjectMapper(), CLOCK);
         ActorContext.set(new CurrentActor("7", "Borrower", "BORROWER"));
     }
@@ -137,6 +140,11 @@ class LoanExtensionLedgerTest {
         when(debits.existsByLoanIdAndStatusIn(any(), any())).thenReturn(true);
         assertThat(facts(loan(TODAY.minusDays(1))).ineligibleReason()).isEqualTo("DEBIT_IN_FLIGHT");
         when(debits.existsByLoanIdAndStatusIn(any(), any())).thenReturn(false);
+
+        // Phase 6c: no extension while an EMI conversion is open on the loan.
+        when(emis.existsByLoanIdAndStatusIn(any(), any())).thenReturn(true);
+        assertThat(facts(loan(TODAY.minusDays(1))).ineligibleReason()).isEqualTo("EMI_OPEN");
+        when(emis.existsByLoanIdAndStatusIn(any(), any())).thenReturn(false);
 
         Loan capped = loan(TODAY.minusDays(1));
         capped.setExtensionCount(3);

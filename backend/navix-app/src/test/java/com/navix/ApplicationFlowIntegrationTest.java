@@ -575,6 +575,250 @@ class ApplicationFlowIntegrationTest {
     @Autowired
     private com.navix.scheduler.ExtensionExpirySweep sweep;
 
+    // ---- PLAN Phase 6c: recovery EMI, reversal, closure type, refunds --------------------
+
+    private static final String ADMIN_A = "1";
+    private static final String ADMIN_B = "2";
+
+    /**
+     * The whole EMI path on a ₹7,000 loan 3 days late (owed ₹7,420): flag OFF refused → request (Head) → a second
+     * request 409 → an extension refused while it is open → a Head cannot approve (only ADMIN) → the requester
+     * cannot approve (SoD) → an ADMIN approves (RESTRUCTURE_PENDING) → the borrower sees three instalments → OTP
+     * accept (wrong code refused, replay idempotent) → RESTRUCTURED, EMI schedule v2 (₹2,333.33 ×2 + ₹2,333.34 of
+     * principal, ₹140 late charge each), balance_adjustment, no late charge after → instalment 1 paid → the rest
+     * paid closes the loan (REPAID, level unchanged).
+     */
+    @Test
+    void emi_requestApproveAcceptSplitsWhatIsOwedAndCloses() throws Exception {
+        long[] ids = overdueLoan(120L, 3);
+        long loanId = ids[1];
+        jdbc.update("update loan set principal = 700000, total_repayable = 700000 where id = ?", loanId);
+        String officer = bearer(HEAD_A, "COLLECTION_HEAD");
+        String b = bearer("120", "BORROWER");
+
+        expectCode(post("/api/collections/loans/{id}/emi", loanId).header("Authorization", officer)
+                .contentType(MediaType.APPLICATION_JSON).content("{}"), "FEATURE_DISABLED");
+        jdbc.update("update feature_flag set enabled = true where flag_key = 'emi-conversion'");
+        try {
+            mvc.perform(get("/api/collections/loans/{id}/emi", loanId).header("Authorization", officer))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.eligible").value(true))
+                    .andExpect(jsonPath("$.data.owedTodayPaise").value(742000))
+                    .andExpect(jsonPath("$.data.previewForToday.length()").value(3));
+
+            JsonNode requested = extensionCall(post("/api/collections/loans/{id}/emi", loanId), officer,
+                    "{\"note\":\"Lost job, can pay in three parts\"}");
+            String emiId = requested.get("id").asText();
+            assertThat(requested.get("status").asText()).isEqualTo("REQUESTED");
+            assertThat(requested.get("instalmentCount").asInt()).isEqualTo(3);
+            mvc.perform(post("/api/collections/loans/{id}/emi", loanId).header("Authorization", officer)
+                            .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.error.code").value("EMI_ALREADY_OPEN"));
+            // No extension while a conversion is open.
+            expectCode(post("/api/collections/loans/{id}/extensions", loanId).header("Authorization", bearer(HEAD_B,
+                    "COLLECTION_HEAD")).contentType(MediaType.APPLICATION_JSON).content("{}"), "EMI_OPEN");
+
+            // Only an ADMIN approves, and never the requester.
+            expectCode(post("/api/collections/emi/{id}/approve", emiId).header("Authorization",
+                    bearer(HEAD_B, "COLLECTION_HEAD")), "FORBIDDEN_ROLE");
+            expectSod(post("/api/collections/emi/{id}/approve", emiId), HEAD_A, "ADMIN", null);
+            mvc.perform(get("/api/collections/emi").header("Authorization", bearer(ADMIN_A, "ADMIN")))
+                    .andExpect(jsonPath("$.data[?(@.id=='" + emiId + "')].status").value("REQUESTED"));
+            JsonNode approved = extensionCall(post("/api/collections/emi/{id}/approve", emiId),
+                    bearer(ADMIN_A, "ADMIN"), null);
+            assertThat(approved.get("status").asText()).isEqualTo("APPROVED");
+            assertThat(jdbc.queryForObject("select lifecycle_status from loan where id = ?", String.class, loanId))
+                    .isEqualTo("RESTRUCTURE_PENDING");
+
+            JsonNode offer = extensionCall(get("/api/loans/{id}/emi", loanId), b, null);
+            assertThat(offer.get("status").asText()).isEqualTo("APPROVED");
+            assertThat(offer.get("totalPaise").asLong()).isEqualTo(742000L);
+            assertThat(offer.get("instalments").get(2).get("principalPaise").asLong()).isEqualTo(233334L);
+            mvc.perform(get("/api/loans/{id}/emi", loanId).header("Authorization", bearer("121", "BORROWER")))
+                    .andExpect(jsonPath("$.error.code").value("FORBIDDEN_OWNER"));
+
+            extensionCall(post("/api/loans/{l}/emi/{e}/otp", loanId, emiId), b, null);
+            expectCode(post("/api/loans/{l}/emi/{e}/accept", loanId, emiId).header("Authorization", b)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"otp\":\"000000\",\"consentVersion\":\"EMI-V1\"}"), "INVALID_OTP");
+            String accept = "{\"otp\":\"123456\",\"consentVersion\":\"EMI-V1\",\"version\":" + offer.get("version") + "}";
+            JsonNode active = extensionCall(post("/api/loans/{l}/emi/{e}/accept", loanId, emiId), b, accept);
+            assertThat(active.get("status").asText()).isEqualTo("ACTIVE");
+            assertThat(extensionCall(post("/api/loans/{l}/emi/{e}/accept", loanId, emiId), b, accept)
+                    .get("status").asText()).isEqualTo("ACTIVE");
+            assertThat(active.get("instalments").get(0).get("dueDate").asText())
+                    .isEqualTo(LocalDate.now(IST).plusDays(10).toString());
+
+            assertThat(jdbc.queryForObject("select lifecycle_status from loan where id = ?", String.class, loanId))
+                    .isEqualTo("RESTRUCTURED");
+            assertThat(jdbc.queryForList("select version, kind, status from repayment_schedule where loan_id = ?"
+                    + " order by version", loanId)).extracting(r -> r.get("kind") + ":" + r.get("status"))
+                    .containsExactly("BULLET:SUPERSEDED", "EMI:ACTIVE");
+            assertThat(jdbc.queryForList("select i.principal_paise, i.penal_paise from schedule_instalment i join"
+                    + " repayment_schedule s on s.id = i.schedule_id where s.loan_id = ? and s.kind = 'EMI' order by i.seq",
+                    loanId)).extracting(r -> r.get("principal_paise") + "+" + r.get("penal_paise"))
+                    .containsExactly("233333+14000", "233333+14000", "233334+14000");
+            assertThat(jdbc.queryForObject("select count(*) from balance_adjustment where loan_id = ? and kind = 'EMI'",
+                    Long.class, loanId)).isEqualTo(1L);
+            assertThat(jdbc.queryForObject("select count(*) from idempotency_key where key = ?", Long.class,
+                    "emi:" + emiId)).isEqualTo(1L);
+            // emi.penal off: moving the old due date further back adds no late charge.
+            jdbc.update("update loan set due_date = due_date - 5 where id = ?", loanId);
+            mvc.perform(get("/api/loan/{id}/outstanding", loanId).header("Authorization", b))
+                    .andExpect(jsonPath("$.data.outstandingPaise").value(742000));
+
+            String admin = bearer(ADMIN_A, "ADMIN");
+            long first = submit("/api/loan/{id}/repayments/admin-record", loanId, admin, "k-120-1",
+                    repayment(247333, "UTR-EMI-120-1", LocalDate.now(IST)));
+            verifyPayment(loanId, first);
+            assertThat(jdbc.queryForList("select i.status from schedule_instalment i join repayment_schedule s"
+                    + " on s.id = i.schedule_id where s.loan_id = ? and s.kind = 'EMI' order by i.seq", String.class, loanId))
+                    .containsExactly("PAID", "DUE", "DUE");
+            long rest = submit("/api/loan/{id}/repayments/admin-record", loanId, admin, "k-120-2",
+                    repayment(494667, "UTR-EMI-120-2", LocalDate.now(IST)));
+            verifyPayment(loanId, rest);
+            assertThat(jdbc.queryForMap("select lifecycle_status, closure_type from loan where id = ?", loanId))
+                    .containsEntry("lifecycle_status", "CLOSED").containsEntry("closure_type", "REPAID");
+            assertThat(jdbc.queryForObject("select count(*) from schedule_instalment i join repayment_schedule s"
+                    + " on s.id = i.schedule_id where s.loan_id = ? and s.kind = 'EMI' and i.status = 'PAID'", Long.class,
+                    loanId)).isEqualTo(3L);
+            mvc.perform(get("/api/me/credit-level").header("Authorization", b))
+                    .andExpect(jsonPath("$.data.level").value(1));
+        } finally {
+            jdbc.update("update feature_flag set enabled = false where flag_key = 'emi-conversion'");
+        }
+    }
+
+    /** A declined or expired EMI offer puts the loan back to overdue. */
+    @Test
+    void emi_aDeclinedOfferPutsTheLoanBackToOverdue() throws Exception {
+        long loanId = overdueLoan(122L, 2)[1];
+        jdbc.update("update feature_flag set enabled = true where flag_key = 'emi-conversion'");
+        try {
+            String emiId = extensionCall(post("/api/collections/loans/{id}/emi", loanId),
+                    bearer(HEAD_A, "COLLECTION_HEAD"), "{}").get("id").asText();
+            extensionCall(post("/api/collections/emi/{id}/approve", emiId), bearer(ADMIN_A, "ADMIN"), null);
+            JsonNode declined = extensionCall(post("/api/loans/{l}/emi/{e}/decline", loanId, emiId),
+                    bearer("122", "BORROWER"), "{\"reason\":\"NOT_NOW\"}");
+            assertThat(declined.get("status").asText()).isEqualTo("DECLINED");
+            assertThat(jdbc.queryForObject("select lifecycle_status from loan where id = ?", String.class, loanId))
+                    .isEqualTo("OVERDUE_D1");
+
+            String again = extensionCall(post("/api/collections/loans/{id}/emi", loanId),
+                    bearer(HEAD_A, "COLLECTION_HEAD"), "{}").get("id").asText();
+            extensionCall(post("/api/collections/emi/{id}/approve", again), bearer(ADMIN_B, "ADMIN"), null);
+            jdbc.update("update emi_conversion set expires_at = now() - interval '1 minute' where id = cast(? as uuid)",
+                    again);
+            assertThat(sweep.expireEmiOffers()).isGreaterThanOrEqualTo(1);
+            assertThat(jdbc.queryForObject("select status from emi_conversion where id = cast(? as uuid)", String.class,
+                    again)).isEqualTo("EXPIRED");
+            assertThat(jdbc.queryForObject("select lifecycle_status from loan where id = ?", String.class, loanId))
+                    .isEqualTo("OVERDUE_D1");
+        } finally {
+            jdbc.update("update feature_flag set enabled = false where flag_key = 'emi-conversion'");
+        }
+    }
+
+    /**
+     * CC-10: the payment that closed a loan on time bounced. Its verifier cannot reverse it; another ADMIN does:
+     * the payment is REVERSED, its split and instalment payment undone, the loan and application open again, the
+     * level the closure gave is taken back, all audited. Paying again closes it and moves the level up again.
+     */
+    @Test
+    void cc10_reversingTheClosingPaymentReopensTheLoanAndTakesBackTheLevel() throws Exception {
+        long appId = walkToActive(123L);
+        long loanId = loanIdOf(appId);
+        LocalDate today = LocalDate.now(IST);
+        long paid = submit("/api/loan/{id}/repayments/admin-record", loanId, bearer(ADMIN_A, "ADMIN"), "k-123-1",
+                repayment(100000, "UTR-BOUNCE-123", today));
+        verifyPayment(loanId, paid);
+        String b = bearer("123", "BORROWER");
+        mvc.perform(get("/api/me/credit-level").header("Authorization", b)).andExpect(jsonPath("$.data.level").value(2));
+        assertThat(jdbc.queryForObject("select closure_type from loan where id = ?", String.class, loanId)).isEqualTo("REPAID");
+
+        String reverse = "{\"reason\":\"Bank returned the transfer\"}";
+        expectSod(post("/api/loan/{l}/repayments/{p}/reverse", loanId, paid), "3", "ACCOUNTANT", reverse);
+        expectSod(post("/api/loan/{l}/repayments/{p}/reverse", loanId, paid), ADMIN_A, "ADMIN", reverse);
+        JsonNode reversed = extensionCall(post("/api/loan/{l}/repayments/{p}/reverse", loanId, paid),
+                bearer(ADMIN_B, "ADMIN"), reverse);
+        assertThat(reversed.get("status").asText()).isEqualTo("REVERSED");
+
+        assertThat(jdbc.queryForMap("select lifecycle_status, closed_on, closure_type, outstanding from loan where id = ?",
+                loanId)).containsEntry("lifecycle_status", "ACTIVE").containsEntry("closed_on", null)
+                .containsEntry("closure_type", null).containsEntry("outstanding", 100000L);
+        assertStatusEquals(appId, "ACTIVE");
+        assertThat(allocations(loanId)).isEmpty();
+        assertThat(jdbc.queryForObject("select i.paid_paise from schedule_instalment i join repayment_schedule s"
+                + " on s.id = i.schedule_id where s.loan_id = ? and s.status = 'ACTIVE'", Long.class, loanId)).isZero();
+        mvc.perform(get("/api/me/credit-level").header("Authorization", b)).andExpect(jsonPath("$.data.level").value(1));
+        assertThat(jdbc.queryForObject("select count(*) from credit_level_history where loan_id = ? and reason = 'CLOSURE_REVERSED'",
+                Long.class, loanId)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("select count(*) from balance_adjustment where loan_id = ? and kind = 'PAYMENT_REVERSAL'",
+                Long.class, loanId)).isEqualTo(1L);
+        expectCode(post("/api/loan/{l}/repayments/{p}/reverse", loanId, paid).header("Authorization",
+                bearer(ADMIN_B, "ADMIN")).contentType(MediaType.APPLICATION_JSON).content(reverse), "PAYMENT_NOT_VERIFIED");
+
+        long again = submit("/api/loan/{id}/repayments/admin-record", loanId, bearer(ADMIN_A, "ADMIN"), "k-123-2",
+                repayment(100000, "UTR-GOOD-123", today));
+        verifyPayment(loanId, again);
+        assertThat(jdbc.queryForObject("select lifecycle_status from loan where id = ?", String.class, loanId)).isEqualTo("CLOSED");
+        mvc.perform(get("/api/me/credit-level").header("Authorization", b)).andExpect(jsonPath("$.data.level").value(2));
+    }
+
+    /** CC-05: paid on the due date, verified the day after while overdue: closed on time, the overdue reversed. */
+    @Test
+    void cc05_paidOnTheDueDateVerifiedLateIsOnTime() throws Exception {
+        long loanId = overdueLoan(124L, 1)[1];
+        jdbc.update("update loan set lifecycle_status = 'OVERDUE_D1' where id = ?", loanId);
+        LocalDate due = LocalDate.now(IST).minusDays(1);
+        long paid = submit("/api/loan/{id}/repayments/admin-record", loanId, bearer(ADMIN_A, "ADMIN"), "k-124-1",
+                repayment(100000, "UTR-ONTIME-124", due));
+        verifyPayment(loanId, paid);
+        assertThat(jdbc.queryForObject("select lifecycle_status from loan where id = ?", String.class, loanId)).isEqualTo("CLOSED");
+        assertThat(jdbc.queryForObject("select count(*) from balance_adjustment where loan_id = ? and kind = 'LATE_REVERSED'",
+                Long.class, loanId)).isEqualTo(1L);
+        mvc.perform(get("/api/me/credit-level").header("Authorization", bearer("124", "BORROWER")))
+                .andExpect(jsonPath("$.data.level").value(2));
+    }
+
+    /** CC-17 and the refund case actions: an instalment past due reads OVERDUE; a refund is paid back with a UTR once. */
+    @Test
+    void cc17_overdueInstalmentAndRefundCaseActions() throws Exception {
+        long loanId = loanIdOf(walkToActive(125L));
+        assertThat(schedules.markOverdue(java.time.Instant.now().plus(java.time.Duration.ofDays(15)))).isGreaterThanOrEqualTo(1);
+        assertThat(jdbc.queryForObject("select i.status from schedule_instalment i join repayment_schedule s"
+                + " on s.id = i.schedule_id where s.loan_id = ?", String.class, loanId)).isEqualTo("OVERDUE");
+
+        long paid = submit("/api/loan/{id}/repayments/admin-record", loanId, bearer(ADMIN_A, "ADMIN"), "k-125-1",
+                repayment(100500, "UTR-OVER-125", LocalDate.now(IST)));
+        verifyPayment(loanId, paid);
+        assertThat(jdbc.queryForObject("select i.status from schedule_instalment i join repayment_schedule s"
+                + " on s.id = i.schedule_id where s.loan_id = ?", String.class, loanId)).isEqualTo("PAID");
+        long refundId = jdbc.queryForObject("select id from refund_case where payment_id = ?", Long.class, paid);
+
+        String accountant = bearer("3", "ACCOUNTANT");
+        expectCode(post("/api/refund-cases/{id}/refunded", refundId).header("Authorization", accountant)
+                .contentType(MediaType.APPLICATION_JSON).content("{}"), "UTR_REQUIRED");
+        JsonNode refunded = extensionCall(post("/api/refund-cases/{id}/refunded", refundId), accountant,
+                "{\"utr\":\"rf 125\"}");
+        assertThat(refunded.get("status").asText()).isEqualTo("REFUNDED");
+        assertThat(refunded.get("refundUtr").asText()).isEqualTo("RF125");
+        mvc.perform(post("/api/refund-cases/{id}/cancel", refundId).header("Authorization", accountant)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"Duplicate\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("STALE_STATE"));
+        expectCode(post("/api/refund-cases/{id}/cancel", refundId).header("Authorization", bearer("125", "BORROWER"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"x\"}"), "FORBIDDEN_ROLE");
+        // A payment whose excess was refunded cannot be reversed until the refund is recovered.
+        expectCode(post("/api/loan/{l}/repayments/{p}/reverse", loanId, paid).header("Authorization",
+                bearer(ADMIN_B, "ADMIN")).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"Bounced\"}"), "REFUND_ALREADY_PAID");
+    }
+
+    @Autowired
+    private com.navix.loan.service.RepaymentScheduleService schedules;
+
     // ---- PLAN Phase 5: documents ------------------------------------------------------
 
     private static final String ESIGN_INIT =

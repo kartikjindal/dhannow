@@ -39,6 +39,12 @@ public class ExtensionDirectoryAdapter implements ExtensionDirectory {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public boolean hasOpen(Long loanId) {
+        return extensions.findFirstByLoanIdAndStatusIn(loanId, ExtensionStatus.OPEN).isPresent();
+    }
+
+    @Override
     @Transactional
     public void paymentPending(UUID extensionId) {
         require(extensionId).moveTo(ExtensionStatus.PAYMENT_PENDING);

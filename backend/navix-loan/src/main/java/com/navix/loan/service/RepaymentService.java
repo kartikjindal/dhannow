@@ -508,7 +508,9 @@ public class RepaymentService {
         int interestDays = math.pricing().upfront() ? 0 : Math.min(daysToAsOf, tenureDays + loan.getGraceDays());
         // The current due cycle's late days, within what is left of the lifetime cap (EXT-26). Late charge
         // from earlier cycles that repayments paid is carried, so principal stays whole after an extension.
-        int penaltyDays = math.chargeablePenalDays(loan.getDueDate(), at, loan.getGraceDays(), loan.getPenalDaysUsed());
+        // A restructured loan's late charge was frozen into its EMI instalments (emi.penal off, Phase 6c).
+        int penaltyDays = loan.getRestructuredAt() != null ? 0
+                : math.chargeablePenalDays(loan.getDueDate(), at, loan.getGraceDays(), loan.getPenalDaysUsed());
         long carried = loan.getPenalCarriedPaise();
         long interest = math.accruedInterestPaise(loan.getPrincipal(), interestDays);
         long penalty = math.latePenaltyPaise(loan.getPrincipal(), penaltyDays) + carried;
@@ -625,6 +627,8 @@ public class RepaymentService {
             return;
         }
         boolean newlyClosed = loan.getStatus() != LoanStatus.CLOSED;
+        LoanLifecycle stateBefore = loan.getLifecycleStatus();
+        Long cachedBefore = loan.getOutstanding();
         loan.setOutstanding(0L);
         // Any open state → CLOSED once a verified reconciliation leaves nothing owed (PLAN Phase 3).
         loan.moveTo(LoanLifecycle.CLOSED);
@@ -637,6 +641,9 @@ public class RepaymentService {
         // A settlement closure says so in the audit trail: the borrower did not pay the full formula balance.
         var settlement = settlementDirectory.approvedSettlementAmount(loanId);
         if (newlyClosed) {
+            // CC-18: how it closed; a settlement never moves the ladder.
+            loan.setClosureType(settlement.isPresent() ? "SETTLED" : "REPAID");
+            recordLateReversed(loan, stateBefore, cachedBefore, settledOn);
             // An open extension offer ends with the loan; any charge paid for it is refunded (EXT-06, CC-69).
             extensionLedger.onLoanClosed(loanId);
             // Credit ladder (PLAN Phase 2). On-time is judged by the bank date of the closing payment
@@ -654,6 +661,97 @@ public class RepaymentService {
         // DSA commission maturity: flip ACCRUED -> PAYABLE (or VOID on an approved settlement /
         // default / write-off). A no-op when this loan has no DSA commission.
         dsaCommissionService.onLoanClosed(loanId);
+    }
+
+    /**
+     * CC-05: paid by the due date (bank {@code paid_on}) but verified after the loan went overdue. The waterfall
+     * already charged no late fee for that payment; the overdue state and the late charge the cached balance had
+     * accrued meanwhile are reversed, and a {@code balance_adjustment} row says so.
+     */
+    private void recordLateReversed(Loan loan, LoanLifecycle stateBefore, Long cachedBefore, LocalDate paidOn) {
+        if ((stateBefore != LoanLifecycle.OVERDUE_D1 && stateBefore != LoanLifecycle.OVERDUE_REVIEW)
+                || paidOn.isAfter(loan.getDueDate())) {
+            return;
+        }
+        Map<String, Object> before = new java.util.LinkedHashMap<>();
+        before.put("lifecycleStatus", stateBefore.name());
+        before.put("outstandingPaise", cachedBefore);
+        allocator.adjustment(loan.getId(), loan.getCustomerId(), "LATE_REVERSED", before,
+                Map.of("lifecycleStatus", LoanLifecycle.CLOSED.name(), "outstandingPaise", 0L,
+                        "paidOn", paidOn.toString()), null, "PAID_ON_TIME", Instant.now());
+    }
+
+    /**
+     * CC-10: a verified repayment found bounced or reversed by the bank. ACCOUNTANT or ADMIN, never the person
+     * who recorded or verified it (maker-checker). The payment becomes REVERSED and stops counting; its split is
+     * undone (an open refund case for it is cancelled); a closed loan reopens to the state its dates imply
+     * (RESTRUCTURED if it was) and any level its closure gave is taken back with a history row. Audited as a
+     * {@code balance_adjustment}. An extension payment moved a due date and is not reversed here.
+     */
+    @Transactional
+    public Payment reversePayment(Long paymentId, String reason) {
+        var actor = ActorContext.get();
+        if (!"ACCOUNTANT".equals(actor.role()) && !"ADMIN".equals(actor.role())) {
+            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role ACCOUNTANT or ADMIN");
+        }
+        if (reason == null || reason.isBlank()) {
+            throw new BusinessException("REASON_REQUIRED", "Say why the payment is reversed.");
+        }
+        Payment payment = paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Payment", String.valueOf(paymentId)));
+        if (payment.isExtension()) {
+            throw new BusinessException("EXTENSION_PAYMENT",
+                    "An extension payment moved the due date; correct it with a manual adjustment.");
+        }
+        extensionLedger.lock(payment.getLoanId());
+        if (payment.getStatus() != PaymentStatus.VERIFIED) {
+            throw new BusinessException("PAYMENT_NOT_VERIFIED", "Only a verified payment can be reversed.");
+        }
+        Long by = staffIdOrNull();
+        SeparationOfDutiesGuard.enforce(by, payment.getRecordedBy(), payment.getDecidedBy());
+        Loan loan = requireLoan(payment.getLoanId());
+        boolean wasClosed = loan.getLifecycleStatus() == LoanLifecycle.CLOSED;
+        if (wasClosed && loanRepository.findByCustomerId(loan.getCustomerId()).stream()
+                .anyMatch(l -> !l.getId().equals(loan.getId()) && l.getLifecycleStatus() != LoanLifecycle.CLOSED)) {
+            throw new BusinessException("ANOTHER_LOAN_OPEN",
+                    "The customer has another loan open; reverse this one with a manual adjustment.");
+        }
+        Instant now = Instant.now();
+        Map<String, Object> before = new java.util.LinkedHashMap<>();
+        before.put("lifecycleStatus", loan.getLifecycleStatus().name());
+        before.put("outstandingPaise", loan.getOutstanding());
+        before.put("closedOn", String.valueOf(loan.getClosedOn()));
+        before.put("allocation", allocator.unallocate(payment, now));
+
+        payment.setStatus(PaymentStatus.REVERSED);
+        payment.setReversedBy(by);
+        payment.setReversedAt(now);
+        payment.setReversalReason(reason.trim());
+        paymentRepository.saveAndFlush(payment);
+
+        if (wasClosed) {
+            loan.setClosedOn(null);
+            loan.setClosureType(null);
+            if (loan.getRestructuredAt() != null) {
+                loan.moveTo(LoanLifecycle.RESTRUCTURED);
+            } else {
+                var product = pricing.product(loan.getProductVersionId());
+                Instant dueAt = loan.getDueAt() != null ? loan.getDueAt() : LoanMath.dueAt(loan.getDueDate(), product);
+                loan.moveTo(LoanLifecycle.ACTIVE);
+                loan.advanceTo(LoanLifecycle.forTime(now, dueAt, product.zone(), product.overdueReviewDpd()));
+            }
+            loanRepository.save(loan);
+            applicationFlowService.reopenForLoan(loan.getId(), "Payment " + paymentId + " reversed: " + reason.trim());
+            creditLevels.onClosureReversed(loan);
+        }
+        recomputeOutstanding(loan.getId());
+        Map<String, Object> after = new java.util.LinkedHashMap<>();
+        after.put("lifecycleStatus", loan.getLifecycleStatus().name());
+        after.put("outstandingPaise", loan.getOutstanding());
+        after.put("paymentId", paymentId);
+        allocator.adjustment(loan.getId(), loan.getCustomerId(), "PAYMENT_REVERSAL", before, after, by,
+                reason.trim(), now);
+        return payment;
     }
 
     /**

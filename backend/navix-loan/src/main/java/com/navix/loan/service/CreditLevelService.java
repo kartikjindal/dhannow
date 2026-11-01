@@ -112,6 +112,25 @@ public class CreditLevelService {
                 loan.getId(), null, settled ? "SETTLED" : null);
     }
 
+    /**
+     * CC-10: the payment that closed {@code loan} was reversed. The closure's history row is marked reversed (so the
+     * loan may close again) and any levels it gave are taken back, with a CLOSURE_REVERSED row.
+     */
+    @Transactional
+    public void onClosureReversed(Loan loan) {
+        historyRepository.findFirstByLoanIdAndReasonInAndReversedAtIsNull(loan.getId(), java.util.EnumSet.of(
+                CreditLevelReason.ON_TIME_REPAID, CreditLevelReason.LATE_REPAID_NO_CHANGE,
+                CreditLevelReason.EXTENDED_NO_CHANGE)).ifPresent(closure -> {
+            closure.setReversedAt(clock.instant());
+            // Flushed now: a re-closure in the same transaction inserts a new closure row (one live per loan).
+            historyRepository.saveAndFlush(closure);
+            int from = levelOf(loan.getCustomerId());
+            int gained = closure.getFromLevel() == null ? 0 : closure.getToLevel() - closure.getFromLevel();
+            set(loan.getCustomerId(), Math.max(1, from - gained), from, CreditLevelReason.CLOSURE_REVERSED,
+                    loan.getId(), null, null);
+        });
+    }
+
     /** ADMIN only: put a customer on {@code toLevel}, with a reason code for the audit trail. */
     @Transactional
     public CreditLevelView manualException(Long customerId, int toLevel, String reasonCode) {
