@@ -65,6 +65,14 @@ class MobilePlatformIntegrationTest {
     @Autowired private JdbcTemplate jdbc;
     @Autowired private PlatformTransactionManager txManager;
     @Autowired private DeviceService deviceService;
+    /** S3 is offline in tests: presigning is local, but the upload check's HEAD is a call, so it is stubbed. */
+    @org.springframework.boot.test.mock.mockito.SpyBean private com.navix.storage.service.StorageAdapter storage;
+
+    @BeforeEach
+    void storedUploadsPassTheChecks() {
+        org.mockito.Mockito.doReturn(java.util.Optional.of(new com.navix.common.storage.DocumentStoragePort.ObjectInfo(
+                200_000L, "image/jpeg"))).when(storage).head(org.mockito.ArgumentMatchers.any());
+    }
 
     @BeforeEach
     void openApplications() {
@@ -336,6 +344,7 @@ class MobilePlatformIntegrationTest {
         assertThat(cfg.get("support").get("phone").asText()).isEqualTo("9211331169");
         assertThat(cfg.get("grievance").get("email").asText()).isEqualTo("grievance@dhannow.com");
         assertThat(cfg.get("legal").get(0).get("url").asText()).isEqualTo("https://dhannow.com/terms.html");
+        assertThat(cfg.get("legal").get(0).get("version").asText()).isEqualTo("1"); // site/doc-versions.json
         assertThat(cfg.get("legal").findValuesAsText("key")).contains("privacy", "kfs-policy", "repayment-policy");
     }
 

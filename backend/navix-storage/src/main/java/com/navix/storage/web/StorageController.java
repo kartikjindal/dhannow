@@ -2,6 +2,8 @@ package com.navix.storage.web;
 
 import com.navix.common.exception.BusinessException;
 import com.navix.common.security.ActorContext;
+import com.navix.common.storage.DocumentStoragePort;
+import com.navix.common.web.ApiResponse;
 import com.navix.storage.config.StorageCategory;
 import com.navix.storage.config.StorageProperties;
 import com.navix.storage.service.DocumentStorageService;
@@ -37,13 +39,20 @@ public class StorageController {
     private final DocumentStorageService storage;
     private final StorageProperties props;
 
-    /** Get a presigned PUT URL for a new document; returns the key to persist. */
+    /**
+     * Get a presigned PUT URL for a new document; returns the key to persist, in the {@code ApiResponse} envelope
+     * (PLAN Phase 11). A repayment proof (the borrower's screenshot) must be PDF, JPG or PNG; its size is checked
+     * when the key is submitted.
+     */
     @PostMapping("/presign-upload")
-    public PresignUploadResponse presignUpload(@Valid @RequestBody PresignUploadRequest request) {
+    public ApiResponse<PresignUploadResponse> presignUpload(@Valid @RequestBody PresignUploadRequest request) {
         requireMayUpload(request.category(), ActorContext.get().role());
+        if (request.category() == StorageCategory.REPAYMENT_PROOF) {
+            DocumentStoragePort.requireUploadType(request.contentType());
+        }
         String key = storage.buildKey(request.category(), request.filename());
         String url = storage.presignUpload(key, request.contentType());
-        return new PresignUploadResponse(key, url, "PUT", props.presignTtlSeconds());
+        return ApiResponse.ok(new PresignUploadResponse(key, url, "PUT", props.presignTtlSeconds()));
     }
 
     /**

@@ -48,7 +48,29 @@ public final class VerificationDtos {
                                       @NotBlank String leftKey) {
     }
 
-    public record AgreementRequest(List<String> versions) {
+    /**
+     * The legal pages the borrower accepted, each with its version from {@code GET /api/app/config} legal[]
+     * (PLAN Phase 10a W2): {@code [{"key":"terms","version":"1"}]}. The older {@code "terms@1"} string form is read too.
+     */
+    public record AgreementRequest(List<DocVersion> versions) {
+    }
+
+    public record DocVersion(String key, String version) {
+
+        @com.fasterxml.jackson.annotation.JsonCreator(mode = com.fasterxml.jackson.annotation.JsonCreator.Mode.PROPERTIES)
+        public DocVersion(@com.fasterxml.jackson.annotation.JsonProperty("key") String key,
+                          @com.fasterxml.jackson.annotation.JsonProperty("version") String version) {
+            this.key = key;
+            this.version = version;
+        }
+
+        /** {@code "terms@1"} → {@code (terms, 1)}; no {@code @} → no version. */
+        @com.fasterxml.jackson.annotation.JsonCreator(mode = com.fasterxml.jackson.annotation.JsonCreator.Mode.DELEGATING)
+        public static DocVersion of(String keyAtVersion) {
+            int at = keyAtVersion == null ? -1 : keyAtVersion.lastIndexOf('@');
+            return at < 0 ? new DocVersion(keyAtVersion, null)
+                    : new DocVersion(keyAtVersion.substring(0, at), keyAtVersion.substring(at + 1));
+        }
     }
 
     /**

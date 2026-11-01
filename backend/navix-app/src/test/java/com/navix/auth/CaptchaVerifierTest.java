@@ -90,22 +90,34 @@ class CaptchaVerifierTest {
     }
 
     /**
-     * Flag OFF: the header alone buys nothing. The request is judged by Turnstile like the web (refused here
-     * without a captcha token), unless the opt-in config says otherwise.
+     * Flag OFF: the header alone buys nothing on any surface but app password sign-in (PLAN Phase 11), which
+     * AuthController caps per IP and device instead. Every other surface is judged by Turnstile like the web,
+     * unless the opt-in config says otherwise.
      */
     @Test
-    void integrityOff_theAndroidHeaderAloneDoesNotSkipTurnstile() {
+    void integrityOff_theAndroidHeaderOnlySkipsTurnstileOnPasswordSignIn() {
         IntegrityVerifier never = t -> {
             throw new AssertionError("must not be called while the flag is off");
         };
         androidRequest("good");
         CaptchaVerifier safe = new CaptchaVerifier("a-secret", "", never, flag(false), false);
         assertThat(safe.androidCheck()).isEqualTo(CaptchaVerifier.AndroidCheck.OFF);
-        assertThatThrownBy(() -> safe.verify(null, "borrower-password-login"))
-                .hasFieldOrPropertyWithValue("code", "CAPTCHA_FAILED");
+        assertThatCode(() -> safe.verify(null, "borrower-password-login")).doesNotThrowAnyException();
+        for (String action : new String[] {"borrower-forgot-password", "staff-login", "staff-forgot-password"}) {
+            assertThatThrownBy(() -> safe.verify(null, action)).hasFieldOrPropertyWithValue("code", "CAPTCHA_FAILED");
+        }
 
         CaptchaVerifier optedIn = new CaptchaVerifier("a-secret", "", never, flag(false), true);
-        assertThatCode(() -> optedIn.verify(null, "borrower-password-login")).doesNotThrowAnyException();
+        assertThatCode(() -> optedIn.verify(null, "staff-login")).doesNotThrowAnyException();
+    }
+
+    /** A web request (no header) to the same surface still needs Turnstile. */
+    @Test
+    void integrityOff_aWebPasswordSignInStillNeedsTurnstile() {
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(new MockHttpServletRequest()));
+        CaptchaVerifier verifier = new CaptchaVerifier("a-secret", "", t -> false, flag(false), false);
+        assertThatThrownBy(() -> verifier.verify(null, "borrower-password-login"))
+                .hasFieldOrPropertyWithValue("code", "CAPTCHA_FAILED");
     }
 
     @Test

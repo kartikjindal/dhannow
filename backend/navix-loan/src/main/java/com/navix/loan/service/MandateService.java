@@ -461,7 +461,8 @@ public class MandateService {
         // one setting this up before their next advance — completes it there too. No token and no app id
         // in the link: /mine is scoped server-side to the borrower's own JWT, so the page adopts their
         // current application on a fresh device and can never resolve someone else's.
-        String link = frontendBaseUrl.replaceAll("/+$", "") + "/loan/mandate";
+        // PLAN Phase 10a: the app opens and its journey reaches the mandate step (no borrower web in v1).
+        String link = com.navix.common.util.AppLinks.open(frontendBaseUrl, null);
         eventPublisher.publishEvent(new MandateInviteEvent(app.getCustomerId(), appId,
                 profile == null ? null : profile.getFullName(), link, Instant.now()));
         log.info("Mandate invite sent applicationId={} customerId={}", appId, app.getCustomerId());

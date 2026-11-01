@@ -849,7 +849,7 @@ Deviations:
 Code:
 - **App sessions (`RefreshTokenService`, `AuthController`).** A borrower sign-in (`/borrower/login`, `/borrower/password-login`) that names a `deviceId` (plus optional `deviceName`, `appVersion`) gets a 15-minute access JWT carrying a `did` claim and a 30-day refresh token bound to that device; the response adds `refreshToken`, `expiresIn` (seconds) and `refreshExpiresAt`. `POST /api/auth/borrower/refresh {refreshToken, deviceId}` rotates (the old token is spent); a spent token sent again revokes the whole family (`REFRESH_REUSED`, CC-39); an unknown, expired, signed-out or other-device token is `REFRESH_INVALID` (another device also revokes the family). `POST /api/auth/borrower/logout {refreshToken?, allDevices?}` ends that device's family and forgets its push token; `allDevices` with a borrower bearer ends them all (CC-38). Every revocation commits in its own transaction before the error is thrown.
 - **Devices (`DeviceService`, `DeviceController`, app board D7).** `PUT /api/devices/me {fcmToken, platform, appVersion, deviceName}` (the device comes from the token's `did`; another device is `DEVICE_MISMATCH`; a token moving to this device is taken off any other row), `GET /api/devices/me` → `[{deviceId, name, platform, appVersion, lastSeen, current}]` (only devices with a live refresh token), `DELETE /api/devices/me/{deviceId}` revokes that device's refresh tokens and deletes its row. Borrower only (`FORBIDDEN_ROLE`).
-- **Play Integrity (`CaptchaVerifier`, `IntegrityVerifier` port, `PlayIntegrityClient`).** A request with `X-Client: android` is judged by its `X-Integrity-Token` while the `play-integrity` flag is ON: Google's `decodeIntegrityToken` with the service account, then our package (`navix.integrity.package-name`, `com.dhannow.app`), `PLAY_RECOGNIZED`, `MEETS_DEVICE_INTEGRITY` and a token at most 5 minutes old; a failure is `INTEGRITY_FAILED`. With the flag OFF the header buys nothing: the request goes through Turnstile like the web, and only `navix.integrity.allow-android-without-check=true` (default false, refused in prod) lets it skip. No service account means every token fails (fail closed).
+- **Play Integrity (`CaptchaVerifier`, `IntegrityVerifier` port, `PlayIntegrityClient`).** A request with `X-Client: android` is judged by its `X-Integrity-Token` while the `play-integrity` flag is ON: Google's `decodeIntegrityToken` with the service account, then our package (`navix.integrity.package-name`, `com.dhannow.app`), `PLAY_RECOGNIZED`, `MEETS_DEVICE_INTEGRITY` and a token at most 5 minutes old; a failure is `INTEGRITY_FAILED`. With the flag OFF the header buys nothing (except on app password sign-in, which is capped per IP and device instead; Phase 11, 2026-11-02): the request goes through Turnstile like the web, and only `navix.integrity.allow-android-without-check=true` (default false, refused in prod) lets it skip. No service account means every token fails (fail closed).
 - **OTP and limiter state in Postgres (`AuthStateStore` → `JdbcAuthStateStore`).** `AttemptLimiter`, `BorrowerOtpService` and `EmailOtpService` keep their logic and interfaces; each read-modify-write is row-locked in its own transaction, so caps hold across instances and survive a restart, and a rejected attempt is never rolled back with its rejection. This covers every OTP purpose (login, bureau consent, extension, EMI). Expired rows are purged on OTP sends. CC-36: `/borrower/otp/request` adds per-IP (30/hour) and per-device (10/hour) caps; an app request whose integrity check failed (CC-42, no Play Services) still gets an OTP under strict caps (10 and 3). Not applied in mock-SMS mode (nothing is sent).
 - **Server caps.** Selfie: 3 captures per application (`SELFIE_ATTEMPTS_EXCEEDED`), counted on the SELFIE row and reset when staff reopen or rule on it. DigiLocker: 3 consent sessions per 24 hours (was 5), then the manual Aadhaar upload (CC-33). Signup penny drop: `POST /verify/penny-drop` goes through `PennyDropGuard` (lock → `PENNY_DROP_LOCKED`, every non-PASS a strike, CC-27).
 - **Push (`FcmSender`, `PushClient` port, `FcmPushClient`).** `NotificationChannel.PUSH`, shown with the in-app title and body, data `{type}` for the app's router (CC-53). Skipped (`PUSH_DISABLED`) while `push-fcm` is OFF, `NO_DEVICE`/`NOT_BORROWER` otherwise; an FCM "unregistered" answer forgets the token (CC-61). FCM HTTP v1 with the service account (`GoogleServiceAccount`: RS256 JWT exchanged for an access token, cached). `EXTENSION_OFFERED` and `EXTENSION_ACTIVATED` now also go to PUSH.
@@ -1011,6 +1011,34 @@ The 24 static pages move into the monorepo as `site/`, unchanged except for the 
 **Wireframe follow-up (done 2026-10-27):** the legal links on A1b, A11, B5b, C6, D2, D3, D4 and D8 are labelled with the dhannow.com page each one opens. New boards E15 (return-to-app page, `app/cb/*`) and E16 (`download.html`) are added.
 
 **Tests:** link checker over `site/` (no 404s, every app-referenced URL exists). Playwright smoke on `site/` (calculator values, download page). App integration test opens each legal link (URL asserted, not content).
+
+**Status (2026-11-02): done.** `python site/check_all.py` is green: `node site/calc.js`, `node site/parity/calc.test.js`, `check_brand.py`, `doc_versions.py`, `check_links.py` (26 pages, 12 app links, 11 legal entries) and `check_theme.py`. `web` `tsc --noEmit` and `app` `flutter analyze` are clean after the regenerated brand files. No Maven run here.
+
+Code (`site/`):
+- **W1.** All eleven app/config pages exist. The backend `navix.mobile.legal` keys are the page names the app looks up (`links.dart`), and every page the app opens is in the map. No mismatch. `privacy.html#retention` (D8) had no anchor; "13. Data retention" now has `id="retention"`.
+- **W2.** The 21 pages `build_pages.py` writes carry `<meta name="dn-doc-version">`, all at version 1. `site/doc-versions.json` holds each page's version and SHA-256, with the tag itself left out of the hash. `doc_versions.py` fails when a page changed without a bump; `--bump <page>` raises the version, rewrites the tag and records the hash; `--add` records new pages.
+- **W3.** `site/.well-known/assetlinks.json` is generated from `docs/brand.json` (`com.dhannow.app`, fingerprint placeholder). `site/app/cb/digilocker.html` and `esign.html` follow board E15. Each page clears the provider's query from the address bar and tries `intent://` once, with an "Open DhanNow app" button and a download link. They set `noindex`, `no-referrer` and load nothing from other sites. Only esign reads `outcome`, for its heading.
+- **W4.** `site/download.html` follows board E16: version, size, Android 7.0+, package, Download APK, SHA-256 and the install steps. A Play badge card sits beside it. `docs/brand.json` `app.distribution` (`apk|play`) shows one or the other, here and on the home page's app section. "Get the app" on every page now goes to `download.html`.
+- **W5.** `docs/brand.json` is the one source: brand, tagline, site, support phone/email/hours, general email, grievance officer, company name, CIN and office, lender placeholders and app distribution. `site/build_brand.py` fills every `data-brand`, `data-brand-href`, `data-dist` and `data-app-intent` marker in `site/`, writes `assetlinks.json`, `web/src/lib/brand.ts` and `app/lib/core/brand.dart` (same names and shape), and updates the `navix.brand.*` / `navix.grievance.*` yml defaults. `check_brand.py` fails if any of those files differs. It also fails on any phone, `@dhannow.com` address, CIN, company name or office on the site that is not in the config; on any other `92113…` number in `app/lib` or `web/src`; on the backend lender and contact-form defaults; on banned copy (NBFC claim, DhanBoost, salary day, pay early); and if the W4 wording ("Android app", "no login") is lost.
+- **W6.** `site/parity/ladder.json` gives all 7 ladder amounts in paise: borrow, fee, GST, interest, deductions, net, repay, extension charge and late charge per day. ₹1,000 → 74,200 net; ₹10,000 → 742,000. Four extension examples are included, among them ₹1,000 three days late → 31,800 and the 30-day cap. `calc.js` gains `extension(p, daysLate)` and `module.exports`; `parity/calc.test.js` checks it against the fixture.
+- **W7.** `kfs.html`, `sanction-letter.html` and `loan-agreement.html` carry an "Illustrative sample" banner. Their lender-name, address and contact blanks are `lender.*` from the config, which still holds placeholders.
+- **W8.** `site/app/open.html?to=repay|loans|support` tries `intent://dhannow.com/app/open?to=…` with `S.browser_fallback_url` set to `download.html`. Any other `to` opens the app's home. Browsers without intent support fall back after 2.5 s.
+- **W9.** `check_theme.py` maps every `:root` colour variable in the site pages and template to a `DnTokens` name and compares the values. It also checks `tokens.dart` against the CLAUDE.md table.
+- **Extending your loan** is on `repayment-policy.html` (before section 14) and `loan-information.html` (before 12): collections-led, officer → Head → OTP → pay → Accountant, ₹258 per ₹1,000 plus the late charge to date (₹318 for ₹1,000 three days late), due = previous due + 14, up to 3, no level rise. The section is marked "Pending Legal and tax sign-off", and its table is built from the parity fixture.
+
+Deviations:
+- **Company details kept.** The site already showed NAVIX Finance Private Limited, its CIN and its office, so `docs/brand.json` holds those values rather than placeholders. `--release` refuses only the lender, the APK and the fingerprint.
+- **No `mandate.html`.** The app's `offer/mandate/init` sends no return URL, and `MandateService` links to `/loan/mandate` (eNACH is OFF).
+- **No Playwright smoke.** The calculator values are covered by the parity test; the download page has no test of its own.
+- `build_pages.py` now writes UTF-8 with LF line endings (it failed on Windows before). Regenerating from the docx reproduces the committed pages.
+
+Before go-live (`python site/check_all.py --release` fails until set): `lender.*`, `app.apk.{url, version, sizeMb, sha256}`, `app.signingCertSha256` (the Play app-signing key, plus the APK's own release key while the APK is served directly). Also confirm the company CIN and office and the Play URL.
+
+Hosting (Phase 13): serve extensionless paths as `.html`. The app returns providers to `/app/cb/digilocker` and `/app/cb/esign?outcome=…`, and SMS will use `/app/open?to=…`. Serve `/.well-known/assetlinks.json` as `application/json` with no redirect.
+
+Follow-ups:
+- **Backend:** add `version` to each `navix.mobile.legal` entry from `site/doc-versions.json` (`check_links.py` then fails on a disagreement) and store `{key, version}` on acceptance. Assert `LoanMath` / `ExtensionQuote` against `site/parity/ladder.json`. Switch the `frontend-base-url` links (`/login?next=…`, `/loan/mandate`, `/credit-question`) to `/app/open?to=…`.
+- **App:** add `/app/open` to the `autoVerify` intent filter and route `to` (repay → C6, loans, support → D3).
 
 ### Phase 10b: Staff dashboards, customer 360, loans, collections, accounting, reports (weeks 9–11)
 
@@ -1342,11 +1370,43 @@ Not done:
 - **Other phase items:** FCM push, Play Integrity, `local_auth`, riverpod, l10n, Crashlytics, the maintenance banner, referral code, document share.
 - **The release APK size** was not measured.
 
-Backend gaps:
-- `verify/documents` should accept the address-proof doc types.
-- The legacy PRE_APPROVED re-borrow `apply` fast-tracks to disbursal without the KFS or a signature.
-- `/api/storage/presign-upload` returns a bare body, not `ApiResponse`.
-- Neither presign path enforces a size or type limit server-side; only the app does.
+Backend gaps: all closed on 2026-11-02, see below.
+
+**Backend gaps from the app (2026-11-02).** The backend now covers what the app had to work around. Unit and integration tests cover each fix.
+- **B1 price list.** `GET /api/applications/{id}/offer/quotes` returns one `OfferSummaryView` per ladder amount up to the sanctioned ceiling, on the offer's frozen terms. `OfferSummaryView` gains `feeRateBps`, `gstRateBps` and `dailyRateBps`.
+- **`LoanView`** gains:
+  - `loanAccountNumber`: `DNL` + the loan id, seven digits wide. It is derived, so no migration is needed. The PDFs print the same number.
+  - `daysLeft`: IST calendar days to the due date, borrower read only, null once the loan is closed.
+  - `upfrontInterestPaise` was already there (Phase 10b).
+  - `extensions[].chargePaidPaise`: the payment on file for each extension.
+  - `pendingExtension.offeredBy`: the officer's first name only.
+- **Waitlist (A1b).** `POST /api/onboarding-waitlist` takes the Aadhaar last 4 (`aadhaar` or `aadhaarLast4`). Only the last 4 is stored, and a full number is cut to it. The Aadhaar duplicate check is gone because four digits identify no one. Rows already stored keep their full number, encrypted.
+- **App password sign-in while `play-integrity` is OFF.** An `X-Client: android` request skips Turnstile on `borrower-password-login` only.
+  - Every such request is capped at 30 an hour per IP (the ALB hop) and 10 an hour per device id, on top of the per-mobile limiter.
+  - Risk: the header is client-supplied, so a bot can trade the challenge for these caps. Guessing one account stays at the limiter's rate, and stuffing across accounts is bounded per address.
+  - Every other surface still needs Turnstile. `allow-android-without-check` is still refused in prod. Turning `play-integrity` ON ends the exception.
+- **Forgot password (S5)** has two new calls:
+  - `POST /api/auth/borrower/forgot-password/otp {mobile, deviceId}` sends a code only to a registered number. It gives the same answer and counts against the same caps either way, and it never creates a customer. A closed account reads as unknown.
+  - `POST /api/auth/borrower/forgot-password/reset {mobile, otp, password, deviceId, deviceName, appVersion}` checks the password policy first, then the code. An unknown number gets `INVALID_OTP`. On success it returns a session (`AuthResponse`).
+  - The OTP purpose is `PASSWORD_RESET`.
+- **Address proof.** `verify/documents` accepts `ELECTRICITY_BILL`, `GAS_BILL` and `RENT_AGREEMENT`.
+- **Compliance: no disbursal without KFS and signature.**
+  - `ApplicationFlowService.transition` refuses every first entry to DISBURSEMENT_PENDING without both a PASS e-sign and an acknowledged KFS for that amount and pricing version. This covers accept, mandate override and ADMIN force, and also a staff-set ESIGN row.
+  - The PRE_APPROVED → DISBURSEMENT_PENDING edge is removed.
+  - A legacy PRE_APPROVED `apply` now becomes an offer: the stored limit (or the credit level), today's terms frozen, and SANCTIONED status. It then walks KFS → e-sign → disbursal account.
+  - The test is `disbursalIsImpossibleWithoutAKfsAcknowledgementAndASignatureOnEveryPath`.
+- **`/api/storage/presign-upload`** returns the `ApiResponse` envelope. The web console reads `data` and still accepts a bare body.
+- **Upload limits.**
+  - Presigns are refused for anything but PDF, JPG or PNG (`UNSUPPORTED_FILE_TYPE`). This applies to the application presign and to `REPAYMENT_PROOF`; lead files keep CSV/XLSX.
+  - When a key comes back (`verify/documents`, `verify/salary`, selfie frames, the borrower's repayment proof), an S3 HEAD checks that the object exists (`UPLOAD_NOT_FOUND`), is at most 5 MB (`FILE_TOO_LARGE`) and has an allowed type. If S3 cannot be reached the answer is `UPLOAD_UNAVAILABLE` and nothing is filed.
+  - A presigned PUT cannot cap size, so the HEAD is the real check. Rejected objects stay in S3 until a bucket lifecycle rule removes them (Phase 13).
+- **Journey.** `JourneyView.bureauChallengePending` is true while the bureau's security question is open: not answered, skipped or exhausted.
+- **Phase 10a follow-ups:**
+  - `navix.mobile.legal[].version` comes from `site/doc-versions.json` (all `1`) and is served in `GET /api/app/config` legal[].
+  - `verify/agreement {versions}` now stores `[{key, version}]`. The older `"terms@1"` strings are read too. The app does not call it yet.
+  - `SiteLadderParityTest` checks `site/parity/ladder.json` against `LoanMath` and the extension quote.
+  - SMS and email links (credit question, resume step, mandate invite) are `<base>/app/open`, or `?to=repay|loans|support` (`AppLinks`).
+  - The staff invite link and the emailed reset link are unchanged.
 
 ## Phase 12: Testing strategy (continuous, gate per phase)
 

@@ -307,7 +307,7 @@ final class PdfKit {
     }
 
     static String loanAccount(DocumentFacts f) {
-        return f.loanId() == null ? "Not yet assigned" : String.valueOf(f.loanId());
+        return f.loanId() == null ? "Not yet assigned" : com.navix.common.util.CustomerIds.loanAccount(f.loanId());
     }
 
     // ---------------------------------------------------------------- formatting

@@ -199,6 +199,11 @@ public class LoanDocumentService implements com.navix.common.outbox.OutboxHandle
         }
     }
 
+    /** Whether {@code latestKfs} is acknowledged and states this offer's amount and pricing (the disbursal gate, Phase 11). */
+    static boolean acknowledgesOffer(LoanApplication app, LoanDocument latestKfs) {
+        return latestKfs != null && latestKfs.getAcceptedAt() != null && describesOffer(latestKfs, app);
+    }
+
     /** Whether {@code latestKfs} is an acknowledgement of {@code app}'s current, unexpired offer. */
     static boolean kfsAcknowledged(LoanApplication app, LoanDocument latestKfs, Instant now) {
         return latestKfs != null && latestKfs.getAcceptedAt() != null && describesOffer(latestKfs, app)

@@ -99,6 +99,8 @@ public class ApplicationFlowService {
     // DhanNow (PLAN Phases 1-2): the terms frozen at sanction, and the credit ladder that caps the amount.
     private final PricingService pricing;
     private final CreditLevelService creditLevels;
+    // PLAN Phase 11: the KFS acknowledgement every door into disbursement checks (requireSignedOffer).
+    private final com.navix.loan.repository.LoanDocumentRepository loanDocuments;
 
     /** Loan statuses that mean money is still owed past the due date — never fully repaid. */
     private static final Set<LoanStatus> DELINQUENT_LOAN_STATUSES =
@@ -297,7 +299,7 @@ public class ApplicationFlowService {
         LoanApplication source = latestSanctionedApplication(customerId).orElse(null);
         if (source == null) {
             // Pre-approved but with nothing to re-sanction from (a legacy file that never carried a
-            // credit sanction). Leave them at PRE_APPROVED — apply() still routes them to disbursement.
+            // credit sanction). Leave them at PRE_APPROVED — apply() re-offers it (SANCTIONED, KFS + e-sign).
             return applicationRepository.save(app);
         }
         carryOverForReapply(app, source);
@@ -612,8 +614,8 @@ public class ApplicationFlowService {
             throw new BusinessException("AMOUNT_TOO_LOW", "Requested amount is below the minimum of ₹1,000");
         }
         // The ceiling is the STORED limit, never the one the caller posts: on the PRE_APPROVED
-        // reborrow path this call fast-tracks straight to DISBURSEMENT_PENDING, so a client-supplied
-        // figure would let a borrower set their own ceiling — and would overwrite an ADMIN override.
+        // reborrow path this call becomes the offer's ceiling, so a client-supplied figure would let a
+        // borrower set their own ceiling — and would overwrite an ADMIN override.
         // ApplyRequest.eligibleLimitPaise is accepted and ignored for wire compatibility.
         Long storedLimit = app.getEligibleLimit();
         if (storedLimit != null && !eligibilityService.isEligible(amountPaise, storedLimit)) {
@@ -625,11 +627,17 @@ public class ApplicationFlowService {
         // borrower's original day and never re-asks); a fresh borrower always sends the picked value.
         app.setSalaryCreditDay(salaryCreditDay != null ? salaryCreditDay : app.getSalaryCreditDay());
         if (st == ApplicationStatus.PRE_APPROVED) {
-            // Pre-approved returning borrower → straight to the Disbursement Head (skips credit).
-            // Second door to disbursement: it never passes acceptOffer, so it needs the same gate.
-            requireMandate(app);
-            transition(app, ApplicationStatus.DISBURSEMENT_PENDING, "APPLY_FAST_TRACK",
-                    "amountPaise=" + amountPaise);
+            // Pre-approved returning borrower (a legacy row with no sanction to carry): skips credit, but not the
+            // KFS or the signature (PLAN Phase 11). It becomes an offer on the customer's credit level and today's
+            // frozen terms, and walks KFS → e-sign → disbursal account like any SANCTIONED file.
+            long ceiling = storedLimit != null ? storedLimit : creditLevels.maxPaise(app.getCustomerId());
+            if (amountPaise > ceiling) {
+                throw new BusinessException("LIMIT_EXCEEDED", "Requested amount exceeds the eligible limit");
+            }
+            app.setSanctionedAmountPaise(ceiling);
+            pricing.freeze(app);
+            pricing.requireAllowedAmount(app, amountPaise);
+            transition(app, ApplicationStatus.SANCTIONED, "APPLY_REOFFER", "amountPaise=" + amountPaise);
         } else {
             // Stays KYC_APPROVED ("applied"); the Credit Head's queue picks up applied applications.
             logEvent(app, st, st, "APPLY", "amountPaise=" + amountPaise);
@@ -788,6 +796,24 @@ public class ApplicationFlowService {
         // Same-status event: an audit entry, not a transition.
         logEvent(app, app.getStatus(), app.getStatus(), "MARK_PENDING", reason);
         return applicationRepository.save(app);
+    }
+
+    /**
+     * PLAN Phase 11 (compliance): no file reaches the Disbursement Head without a PASS e-sign and the borrower's
+     * acknowledgement of the KFS for this exact offer (amount and pricing version). The e-sign step already demands
+     * the acknowledgement; this holds every door, including a staff-set ESIGN row.
+     */
+    private void requireSignedOffer(LoanApplication app) {
+        if (verificationRepository.findByApplicationIdAndCheckType(app.getId(), ApplicationVerificationService.ESIGN)
+                .filter(v -> ApplicationVerificationService.PASS.equals(v.getStatus())).isEmpty()) {
+            throw new BusinessException("ESIGN_REQUIRED", "Sign your sanction letter before continuing");
+        }
+        if (!LoanDocumentService.acknowledgesOffer(app, loanDocuments
+                .findFirstByApplicationIdAndTypeOrderByVersionDesc(app.getId(), com.navix.loan.domain.LoanDocumentType.KFS)
+                .orElse(null))) {
+            throw new BusinessException("KFS_NOT_ACKNOWLEDGED",
+                    "Read and accept the Key Fact Statement before you sign the loan agreement");
+        }
     }
 
     /** Flag on => the application's disbursal account must be covered by a usable ACTIVE mandate. */
@@ -1391,6 +1417,12 @@ public class ApplicationFlowService {
         if (!from.canTransitionTo(to)) {
             log.warn("illegal transition blocked app={} {} -> {} action={}", app.getId(), from, to, action);
             throw new BusinessException("ILLEGAL_TRANSITION", from + " → " + to + " is not allowed");
+        }
+        // Every first entry into disbursement goes through here, whichever door (accept, mandate override,
+        // ADMIN force): a disbursal retry or an Accountant return re-enters a file that already passed.
+        if (to == ApplicationStatus.DISBURSEMENT_PENDING && from != ApplicationStatus.DISBURSEMENT_FAILED
+                && from != ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING) {
+            requireSignedOffer(app);
         }
         logEvent(app, from, to, action, notes, retryFrom);
         app.setStatus(to);

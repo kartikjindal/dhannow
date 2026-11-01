@@ -228,6 +228,36 @@ class OfferServiceTest {
         assertThat(s.ceilingPaise()).isEqualTo(2_000_000L);
     }
 
+    /** PLAN Phase 11 (B1): one quote per ladder amount up to the ceiling, on the frozen DhanNow terms, with the rates. */
+    @Test
+    void quotesListEveryLadderAmountUpToTheCeilingOnTheFrozenTerms() {
+        var pricingRepo = org.mockito.Mockito.mock(com.navix.loan.repository.PricingConfigRepository.class);
+        var productRepo = org.mockito.Mockito.mock(com.navix.loan.repository.ProductConfigRepository.class);
+        when(pricingRepo.findById(11L)).thenReturn(Optional.of(TestPricing.pricingRow(11L, 1,
+                LoanMath.DHANNOW_SEED_PRICING, com.navix.loan.domain.ConfigStatus.ACTIVE)));
+        when(productRepo.findById(12L)).thenReturn(Optional.of(TestPricing.seedProductRow(12L,
+                com.navix.loan.domain.ConfigStatus.ACTIVE)));
+        offer = new OfferService(applicationRepo, profileRepo, referenceRepo, pennyDropGuard, documentRepo,
+                verification, flow, journey, changeLogger, documents, new PricingService(pricingRepo, productRepo),
+                mandateService);
+        app.setPricingVersionId(11L);
+        app.setProductVersionId(12L);
+        app.setSanctionedAmountPaise(300_000L); // level 3
+
+        List<OfferSummaryView> quotes = offer.quotes(APP);
+
+        assertThat(quotes).extracting(OfferSummaryView::principalPaise).containsExactly(100_000L, 200_000L, 300_000L);
+        OfferSummaryView first = quotes.get(0);
+        assertThat(first.netDisbursedPaise()).isEqualTo(74_200L);
+        assertThat(first.totalRepayablePaise()).isEqualTo(100_000L);
+        assertThat(first.interestPaise()).isEqualTo(14_000L);
+        assertThat(first.tenureDays()).isEqualTo(14);
+        assertThat(first.feeRateBps()).isEqualTo(1000);
+        assertThat(first.gstRateBps()).isEqualTo(1800);
+        assertThat(first.dailyRateBps()).isEqualTo(100);
+        assertThat(offer.summary(APP).feeRateBps()).isEqualTo(1000);
+    }
+
     @Test
     void summaryOfAStaleSanctionNeverQuotesANegativeTenure() {
         // A sanction never expires (decision 41), so the approved date can already be in the past.

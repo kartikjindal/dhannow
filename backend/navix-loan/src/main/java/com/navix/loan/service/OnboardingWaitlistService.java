@@ -29,11 +29,14 @@ import org.springframework.transaction.annotation.Transactional;
  * tells them it is under review. Everything with a loan behind it — repaid or live — is unaffected,
  * reborrow included; the frozen set is new mobiles, DRAFTs and files mid-pipeline with no loan yet.
  *
- * <p>Validation is local only (shape of the email, PAN regex, Aadhaar checksum): the whole point is
- * to spend nothing on Signzy / Digitap / Fintrix for people we are not going to lend to right now.
- * A PAN or Aadhaar already held by another customer, or by another waitlist row, is refused with a
- * message — the business chose being told over being quiet, the same trade-off as
- * {@code DUPLICATE_PAN} on intake.
+ * <p>Validation is local only (shape of the email, PAN regex): the whole point is to spend nothing on
+ * Signzy / Digitap / Fintrix for people we are not going to lend to right now. A PAN already held by
+ * another customer, or by another waitlist row, is refused with a message — the business chose being
+ * told over being quiet, the same trade-off as {@code DUPLICATE_PAN} on intake.
+ *
+ * <p>Aadhaar: only the <b>last four digits</b> are asked for and kept (PLAN Phase 11, board A1b) — a waitlist
+ * has no use for the full number. A full 12-digit number sent by an older client is cut to its last four
+ * before it is stored. Four digits identify no one, so there is no Aadhaar duplicate check here.
  */
 @Service
 @RequiredArgsConstructor
@@ -78,7 +81,9 @@ public class OnboardingWaitlistService {
     public record PausedStatus(boolean paused, String updatedBy, Instant updatedAt) {
     }
 
-    public record SubmitRequest(String fullName, String email, String mobile, String pan, String aadhaar) {
+    /** {@code aadhaar}: the last four digits ({@code aadhaarLast4} is accepted as the same field). */
+    public record SubmitRequest(String fullName, String email, String mobile, String pan,
+                                @com.fasterxml.jackson.annotation.JsonAlias("aadhaarLast4") String aadhaar) {
     }
 
     /** The one flag read the logged-out signup screen needs — nothing else leaks out anonymously. */
@@ -150,17 +155,15 @@ public class OnboardingWaitlistService {
         if (!PAN.matcher(pan).matches()) {
             throw new BusinessException("INVALID_PAN", "Enter a valid PAN");
         }
-        String aadhaar = Aadhaar.normalize(req.aadhaar());
-        if (!Aadhaar.isValid(aadhaar)) {
-            throw new BusinessException("INVALID_AADHAAR", "Enter a valid 12-digit Aadhaar number");
+        String typed = Aadhaar.normalize(req.aadhaar());
+        String aadhaarLast4 = typed != null && (typed.matches("\\d{4}") || Aadhaar.isValid(typed))
+                ? Aadhaar.lastFour(typed) : null;
+        if (aadhaarLast4 == null) {
+            throw new BusinessException("INVALID_AADHAAR", "Enter the last 4 digits of your Aadhaar");
         }
         if (profileRepository.existsPanForOtherCustomer(pan, customerId)
                 || waitlistRepository.existsByPanAndCustomerIdNot(pan, customerId)) {
             throw new BusinessException("DUPLICATE_PAN", "This PAN is already registered with another customer.");
-        }
-        if (!profileRepository.findOtherCustomerIdsByAadhaar(aadhaar, customerId).isEmpty()
-                || waitlistRepository.existsByAadhaarAndCustomerIdNot(aadhaar, customerId)) {
-            throw new BusinessException("DUPLICATE_AADHAAR", "This Aadhaar is already registered with another customer.");
         }
 
         OnboardingWaitlist row = new OnboardingWaitlist();
@@ -169,7 +172,7 @@ public class OnboardingWaitlistService {
         row.setEmail(email);
         row.setMobile(mobile);
         row.setPan(pan);
-        row.setAadhaar(aadhaar);
+        row.setAadhaar(aadhaarLast4);
         if (row.getCreatedAt() == null) {
             row.setCreatedAt(Instant.now());
         }

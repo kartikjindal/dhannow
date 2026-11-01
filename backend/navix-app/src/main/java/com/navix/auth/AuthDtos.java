@@ -108,6 +108,11 @@ public final class AuthDtos {
         }
     }
 
+    /** PLAN Phase 11: the app's forgot password — the code from {@code forgot-password/otp} and the new password. */
+    public record OtpPasswordResetRequest(@NotBlank String mobile, @NotBlank String otp, @NotBlank String password,
+                                          String deviceId, String deviceName, String appVersion) {
+    }
+
     /** Set/replace a password for the signed-in borrower (optional signup step / profile). */
     public record SetPasswordRequest(@NotBlank String password) {
     }

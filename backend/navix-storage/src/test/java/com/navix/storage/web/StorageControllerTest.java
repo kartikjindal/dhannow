@@ -52,7 +52,25 @@ class StorageControllerTest {
 
         var res = controller.presignUpload(new PresignUploadRequest(StorageCategory.REPAYMENT_PROOF, "a.jpg", "image/jpeg"));
 
-        assertThat(res.key()).isEqualTo("loan/repayment-proof/x-a.jpg");
+        assertThat(res.isSuccess()).isTrue(); // PLAN Phase 11: the ApiResponse envelope, like every other route
+        assertThat(res.getData().key()).isEqualTo("loan/repayment-proof/x-a.jpg");
+    }
+
+    /** PLAN Phase 11: a repayment proof is PDF, JPG or PNG; a lead file keeps its CSV/XLSX. */
+    @Test
+    void aRepaymentProofMustBeAPdfJpgOrPng() {
+        as("BORROWER");
+        assertThatThrownBy(() -> controller.presignUpload(
+                new PresignUploadRequest(StorageCategory.REPAYMENT_PROOF, "a.heic", "image/heic")))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("UNSUPPORTED_FILE_TYPE");
+        verifyNoInteractions(storage);
+
+        as("TELECALLER");
+        when(storage.buildKey(any(), anyString())).thenReturn("leads/import/x-a.csv");
+        when(storage.presignUpload(anyString(), anyString())).thenReturn("https://s3/put");
+        assertThat(controller.presignUpload(new PresignUploadRequest(StorageCategory.LEAD_IMPORT, "a.csv", "text/csv"))
+                .getData().key()).isEqualTo("leads/import/x-a.csv");
     }
 
     @Test

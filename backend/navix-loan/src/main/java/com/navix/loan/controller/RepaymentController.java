@@ -30,6 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class RepaymentController {
 
     private final RepaymentService repaymentService;
+    private final com.navix.common.storage.DocumentStoragePort storage;
 
     /**
      * Record a repayment (full, partial or prepayment) against the loan. Borrower (own loan only —
@@ -125,15 +126,17 @@ public class RepaymentController {
      * A borrower's proof must be one of their own repayment-proof uploads. Every read of the payment
      * presigns {@code proofUrl}, so an arbitrary key here — another applicant's Aadhaar scan — would
      * come back to the borrower as a working download link. Staff paths are left alone: collections
-     * credits a payment with a free-text reference through the service, not this endpoint.
+     * credits a payment with a free-text reference through the service, not this endpoint. PLAN Phase 11: the
+     * object must also be there, at most 5 MB, and a PDF, JPG or PNG ({@link com.navix.common.storage.DocumentStoragePort#requireUploaded}).
      */
-    private static void requireOwnProofKey(String proofUrl) {
+    private void requireOwnProofKey(String proofUrl) {
         if (!"BORROWER".equals(ActorContext.get().role()) || proofUrl == null || proofUrl.isBlank()) {
             return;
         }
         if (!proofUrl.startsWith(REPAYMENT_PROOF_PREFIX) || proofUrl.contains("..")) {
             throw new BusinessException("INVALID_PROOF_KEY", "That proof upload is not a repayment proof");
         }
+        storage.requireUploaded(proofUrl);
     }
 
     /** Key prefix {@code StorageCategory.REPAYMENT_PROOF} mints (navix-storage is not a dependency here). */

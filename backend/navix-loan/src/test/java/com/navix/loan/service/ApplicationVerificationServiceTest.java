@@ -1060,10 +1060,15 @@ class ApplicationVerificationServiceTest {
         CustomerProfile p = profile();
         when(profileRepo.findByApplicationId(APP)).thenReturn(Optional.of(p));
 
-        var result = service.recordAgreement(APP, List.of("loan-agreement@1", "sanction@1", "privacy@1"));
+        var result = service.recordAgreement(APP, List.of(
+                com.navix.loan.dto.VerificationDtos.DocVersion.of("terms@1"),
+                new com.navix.loan.dto.VerificationDtos.DocVersion("privacy", "1")));
 
         assertThat(result.status()).isEqualTo("PASS");
         assertThat(p.getAgreementAccepted()).isTrue();
+        // PLAN Phase 10a W2: each page is kept with its version.
+        assertThat(String.valueOf(result.derived().get("versions"))).contains("terms", "privacy")
+                .containsPattern("version\\W+1");
     }
 
     @Test
@@ -1980,19 +1985,46 @@ class ApplicationVerificationServiceTest {
         when(applicationRepo.findById(APP)).thenReturn(Optional.of(draftApp()));
         lenient().when(documentRepo.save(any())).thenAnswer(i -> i.getArgument(0));
 
-        for (String type : List.of("AADHAAR_CARD_FRONT", "AADHAAR_CARD_BACK", "PAN_CARD_FRONT", "PAN_CARD_BACK")) {
+        // PLAN Phase 11 (A12): the three address-proof types the app sends are filed too.
+        List<String> types = List.of("AADHAAR_CARD_FRONT", "AADHAAR_CARD_BACK", "PAN_CARD_FRONT", "PAN_CARD_BACK",
+                "ELECTRICITY_BILL", "GAS_BILL", "RENT_AGREEMENT");
+        for (String type : types) {
             service.saveUploadedDocuments(APP, type, List.of("applications/42/" + type.toLowerCase() + "/1.jpg"),
                     "secret");
         }
         ArgumentCaptor<ApplicationDocument> saved = ArgumentCaptor.forClass(ApplicationDocument.class);
-        verify(documentRepo, times(4)).save(saved.capture());
-        assertThat(saved.getAllValues()).extracting(ApplicationDocument::getDocType)
-                .containsExactly("AADHAAR_CARD_FRONT", "AADHAAR_CARD_BACK", "PAN_CARD_FRONT", "PAN_CARD_BACK");
+        verify(documentRepo, times(types.size())).save(saved.capture());
+        assertThat(saved.getAllValues()).extracting(ApplicationDocument::getDocType).containsExactlyElementsOf(types);
+        // PLAN Phase 11: each stored object is checked server-side (size and type) before it is filed.
+        verify(storage, times(types.size())).requireUploaded(any());
         assertThat(saved.getAllValues()).extracting(ApplicationDocument::getFilePassword).containsOnly("secret");
 
         assertThatThrownBy(() -> service.saveUploadedDocuments(APP, "PAN_CARD_SIDE", List.of("k"), null))
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", "UNSUPPORTED_DOC_TYPE");
+    }
+
+    /** PLAN Phase 11: the presign only issues for PDF, JPG or PNG. */
+    @Test
+    void presignUpload_refusesAnythingButPdfJpgOrPng() {
+        when(applicationRepo.findById(APP)).thenReturn(Optional.of(draftApp()));
+        for (String type : List.of("image/heic", "text/html", "application/octet-stream")) {
+            assertThatThrownBy(() -> service.presignUpload(APP, "BANK_STATEMENT", "a.bin", type))
+                    .hasFieldOrPropertyWithValue("code", "UNSUPPORTED_FILE_TYPE");
+        }
+        verify(storage, never()).presignUpload(any(), any());
+    }
+
+    /** A file over 5 MB (or of another type) is refused when its key is filed, and nothing is saved. */
+    @Test
+    void saveUploadedDocuments_refusesAnObjectThatBreaksTheUploadRules() {
+        when(applicationRepo.findById(APP)).thenReturn(Optional.of(draftApp()));
+        org.mockito.Mockito.doThrow(new BusinessException("FILE_TOO_LARGE", "Files must be 5 MB or smaller"))
+                .when(storage).requireUploaded("applications/42/bank_statement/1.pdf");
+        assertThatThrownBy(() -> service.saveUploadedDocuments(APP, "BANK_STATEMENT",
+                List.of("applications/42/bank_statement/1.pdf"), null))
+                .hasFieldOrPropertyWithValue("code", "FILE_TOO_LARGE");
+        verify(documentRepo, never()).save(any());
     }
 
     @Test

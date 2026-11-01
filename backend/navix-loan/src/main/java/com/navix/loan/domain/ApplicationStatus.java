@@ -29,8 +29,8 @@ public enum ApplicationStatus {
     KYC_APPROVED,
     KYC_REJECTED,
     // Returning-borrower (reborrow) states: a repeat borrower reuses their saved KYC profile and
-    // skips the fresh KYC + credit gates. PRE_APPROVED = cleared, awaiting amount → on apply routes
-    // straight to DISBURSEMENT_PENDING. REVIEW_PENDING = a borrower with past delinquency held for a
+    // skips the fresh KYC + credit gates. PRE_APPROVED = cleared, awaiting amount → on apply it is
+    // re-offered (SANCTIONED) and walks the KFS + e-sign like any offer (PLAN Phase 11). REVIEW_PENDING = a borrower with past delinquency held for a
     // KYC-approver re-review before they may proceed (→ PRE_APPROVED on approve).
     PRE_APPROVED,
     /** @deprecated Retired with the manual reborrow review (V45); kept for historical rows. */
@@ -87,11 +87,11 @@ public enum ApplicationStatus {
         // Retired with the manual reborrow review (V45) — historical rows only.
         TRANSITIONS.put(REVIEW_PENDING, EnumSet.of(PRE_APPROVED, REJECTED, CANCELLED));
         // Pre-approved returning borrower: re-applying carries the prior sanction (→ SANCTIONED, where
-        // they re-walk the short offer journey). DISBURSEMENT_PENDING remains legal for rows minted
-        // before V45 that already skipped straight to the Disbursement Head.
+        // they re-walk the short offer journey). Never straight to DISBURSEMENT_PENDING (PLAN Phase 11):
+        // no money moves without an acknowledged KFS and a signature.
         // REJECTED: ADMIN-only manual reject (rejectLead guards the role) for pre-approvals minted by
         // the pre-Sep-2026 reborrow gap, where a customer with no repaid loan was pre-approved.
-        TRANSITIONS.put(PRE_APPROVED, EnumSet.of(SANCTIONED, DISBURSEMENT_PENDING, REJECTED, CANCELLED));
+        TRANSITIONS.put(PRE_APPROVED, EnumSet.of(SANCTIONED, REJECTED, CANCELLED));
         // Credit Head or assigned Credit Executive sanctions or rejects here; there is no Head
         // counter-approval. CREDIT_EXEC_APPROVED / CREDIT_HEAD_* are off the live path.
         TRANSITIONS.put(CREDIT_EXEC_PENDING, EnumSet.of(SANCTIONED, REJECTED, CANCELLED));

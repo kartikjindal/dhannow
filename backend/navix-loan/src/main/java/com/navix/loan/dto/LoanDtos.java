@@ -83,17 +83,21 @@ public final class LoanDtos {
             /** Every extension the borrower was shown, oldest first; null outside the borrower's loan read. */
             java.util.List<ExtensionLine> extensions,
             /** Phase 10b, additive: the interest deducted at disbursal (prepaid, never owed); null on navix terms. */
-            Long upfrontInterestPaise) {
+            Long upfrontInterestPaise,
+            /** Phase 11, additive: the borrower-facing loan account number ({@code DNL0000123}), as on the documents. */
+            String loanAccountNumber,
+            /** Phase 11, additive: calendar days from today (IST) to the due date; negative once late. Borrower read only. */
+            Integer daysLeft) {
 
         public static LoanView of(Loan l) {
             return of(l, l.getOutstanding(), l.getStatus());
         }
 
-        public LoanView withExtensions(PendingExtension pending, java.util.List<ExtensionLine> lines) {
+        public LoanView withExtensions(PendingExtension pending, java.util.List<ExtensionLine> lines, Integer daysLeft) {
             return new LoanView(id, customerId, principalPaise, processingFeePaise, gstPaise, netDisbursedPaise,
                     dailyInterestRate, disbursedOn, dueDate, totalRepayablePaise, outstandingPaise, status,
                     disbursalTxnRef, closedOn, graceDays, lifecycleStatus, holdStatus, repaymentStatus,
-                    originalDueDate, extensionCount, pending, lines, upfrontInterestPaise);
+                    originalDueDate, extensionCount, pending, lines, upfrontInterestPaise, loanAccountNumber, daysLeft);
         }
 
         /**
@@ -107,23 +111,25 @@ public final class LoanDtos {
                     l.getDueDate(), l.getTotalRepayable(), outstandingPaise, status,
                     l.getDisbursalTxnRef(), l.getClosedOn(), l.getGraceDays(),
                     l.getLifecycleStatus(), l.getHoldStatus(), l.getRepaymentStatus(),
-                    l.getOriginalDueDate(), l.getExtensionCount(), null, null, l.getUpfrontInterestPaise());
+                    l.getOriginalDueDate(), l.getExtensionCount(), null, null, l.getUpfrontInterestPaise(),
+                    com.navix.common.util.CustomerIds.loanAccount(l.getId()), null);
         }
     }
 
     /**
      * The borrower's open extension (PLAN Phase 6b). The app renders from {@code status} only; {@code version}
      * goes back on accept/decline/pay so a stale screen gets 409 (EXT-09). {@code quoteForToday} is what paying
-     * today costs (the late charge follows the bank date).
+     * today costs (the late charge follows the bank date). {@code offeredBy} is the offering officer's first
+     * name only (null when unknown).
      */
     public record PendingExtension(java.util.UUID id, String status, long version, int seq, int cap,
                                    com.navix.common.extension.ExtensionQuote quoteForToday, LocalDate payBy,
-                                   java.time.Instant expiresAt, LocalDate newDueDate, boolean seen) {
+                                   java.time.Instant expiresAt, LocalDate newDueDate, boolean seen, String offeredBy) {
     }
 
-    /** One extension in the borrower's history. */
+    /** One extension in the borrower's history. {@code chargePaidPaise} is the payment on file for it (null when none). */
     public record ExtensionLine(java.util.UUID id, int seq, String status, LocalDate oldDueDate,
-                                LocalDate newDueDate, java.time.Instant activatedAt, Long paymentId) {
+                                LocalDate newDueDate, java.time.Instant activatedAt, Long paymentId, Long chargePaidPaise) {
     }
 
     public record PaymentView(

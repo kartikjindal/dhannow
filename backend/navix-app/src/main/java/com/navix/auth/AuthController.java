@@ -12,6 +12,7 @@ import com.navix.auth.AuthDtos.MfaEnrolResponse;
 import com.navix.auth.AuthDtos.MessageResponse;
 import com.navix.auth.AuthDtos.OtpRequestRequest;
 import com.navix.auth.AuthDtos.OtpRequestResponse;
+import com.navix.auth.AuthDtos.OtpPasswordResetRequest;
 import com.navix.auth.AuthDtos.ResetPasswordRequest;
 import com.navix.auth.AuthDtos.SetPasswordRequest;
 import com.navix.auth.AuthDtos.StaffLoginRequest;
@@ -306,6 +307,9 @@ public class AuthController {
     private static final int OTP_PER_IP_STRICT = 10;
     private static final int OTP_PER_DEVICE_STRICT = 3;
     private static final Duration OTP_SOURCE_WINDOW = Duration.ofHours(1);
+    /** App password sign-ins per source per hour (success or not), the price of skipping Turnstile — see CaptchaVerifier. */
+    private static final int PW_PER_IP = 30;
+    private static final int PW_PER_DEVICE = 10;
     private static final String TOO_MANY_OTPS = "Too many OTP requests.";
     /** Mock SMS (demo, e2e) sends nothing, so there is no SMS spend for the per-source caps to protect. */
     @org.springframework.beans.factory.annotation.Value("${navix.sms.mock:false}")
@@ -315,6 +319,60 @@ public class AuthController {
     @PostMapping("/borrower/otp/request")
     public ApiResponse<OtpRequestResponse> requestBorrowerOtp(@Valid @RequestBody OtpRequestRequest req,
                                                               jakarta.servlet.http.HttpServletRequest http) {
+        capOtpSource(req, http);
+        OtpVerifierPort.OtpRequestResult result = otpService.request(req.mobile(), OtpVerifierPort.LOGIN);
+        return ApiResponse.ok(new OtpRequestResponse(result.sent(), result.ttlSeconds(), result.devCode()));
+    }
+
+    /**
+     * PLAN Phase 11 (S5): forgot password in the app. The same answer for any number, but only a registered one
+     * gets a code; nothing is created for an unknown number (OTP sign-in would register it). Same caps as a sign-in
+     * OTP, and the per-number send cap counts either way.
+     */
+    @PostMapping("/borrower/forgot-password/otp")
+    public ApiResponse<OtpRequestResponse> forgotPasswordOtp(@Valid @RequestBody OtpRequestRequest req,
+                                                             jakarta.servlet.http.HttpServletRequest http) {
+        capOtpSource(req, http);
+        OtpVerifierPort.OtpRequestResult result = otpService.request(req.mobile(), OtpVerifierPort.PASSWORD_RESET,
+                registeredOrNull(req.mobile()) != null);
+        return ApiResponse.ok(new OtpRequestResponse(result.sent(), result.ttlSeconds(), result.devCode()));
+    }
+
+    /**
+     * PLAN Phase 11 (S5): spend the reset code and set the new password; the borrower is then signed in. An unknown
+     * number is refused exactly like a wrong code ({@code INVALID_OTP}). The policy is checked first so a weak
+     * password does not burn the code.
+     */
+    @PostMapping("/borrower/forgot-password/reset")
+    public ApiResponse<AuthResponse> resetPasswordWithOtp(@Valid @RequestBody OtpPasswordResetRequest req) {
+        PasswordPolicy.validate(req.password());
+        Long customerId = registeredOrNull(req.mobile());
+        // Unknown number first: mock SMS accepts the fixed code for any number.
+        if (customerId == null || !otpService.verify(req.mobile(), req.otp(), OtpVerifierPort.PASSWORD_RESET)) {
+            log.warn("borrower otp reset failed mobile={}", Masking.maskPhone(req.mobile()));
+            throw new BusinessException("INVALID_OTP", "Invalid or expired OTP");
+        }
+        passwordResetService.setBorrowerPassword(customerId, req.password());
+        limiter.clear("pw:" + req.mobile().replaceAll("\\D", "")); // the password-login limiter's key
+        log.info("borrower password reset by otp customerId={}", customerId);
+        return ApiResponse.ok(borrowerSession(customerId, resolveBorrowerName(null, req.mobile()), req.deviceId(),
+                req.deviceName(), req.appVersion()));
+    }
+
+    /** A registered, open account for this number, or null. A closed account reads as unknown here (no leak). */
+    private Long registeredOrNull(String mobile) {
+        try {
+            return existingCustomerId(mobile);
+        } catch (BusinessException e) {
+            if ("ACCOUNT_CLOSED".equals(e.getCode())) {
+                return null;
+            }
+            throw e;
+        }
+    }
+
+    /** The per-IP and per-device OTP send caps (CC-36); strict for an app whose integrity check failed. */
+    private void capOtpSource(OtpRequestRequest req, jakarta.servlet.http.HttpServletRequest http) {
         boolean strict = captcha.androidCheck() == CaptchaVerifier.AndroidCheck.FAILED;
         // ponytail: the web BFF forwards no client address, so every web send shares the BFF's one IP cap. Fine
         // until Phase 10 removes the borrower web; forward X-Forwarded-For from the BFF if it ever stays.
@@ -328,8 +386,6 @@ public class AuthController {
                         OTP_SOURCE_WINDOW, OTP_SOURCE_WINDOW, TOO_MANY_OTPS);
             }
         }
-        OtpVerifierPort.OtpRequestResult result = otpService.request(req.mobile(), OtpVerifierPort.LOGIN);
-        return ApiResponse.ok(new OtpRequestResponse(result.sent(), result.ttlSeconds(), result.devCode()));
     }
 
     @PostMapping("/borrower/login")
@@ -423,7 +479,16 @@ public class AuthController {
 
     /** Borrower sign-in by password (the OTP-less alternative; requires a previously set password). */
     @PostMapping("/borrower/password-login")
-    public ApiResponse<AuthResponse> borrowerPasswordLogin(@Valid @RequestBody BorrowerPasswordLoginRequest req) {
+    public ApiResponse<AuthResponse> borrowerPasswordLogin(@Valid @RequestBody BorrowerPasswordLoginRequest req,
+                                                           jakarta.servlet.http.HttpServletRequest http) {
+        // PLAN Phase 11: an app request may skip Turnstile here while play-integrity is OFF (CaptchaVerifier), so every
+        // app sign-in by password is capped by source: per IP (the ALB's hop) and per device id. Before the challenge,
+        // so a flood never reaches Google either.
+        if ("android".equalsIgnoreCase(http.getHeader(CaptchaVerifier.CLIENT_HEADER))) {
+            limiter.hit("pw-ip:" + clientIp(http), PW_PER_IP, OTP_SOURCE_WINDOW, OTP_SOURCE_WINDOW, TOO_MANY_LOGINS);
+            String device = req.deviceId() == null || req.deviceId().isBlank() ? "none" : req.deviceId().trim();
+            limiter.hit("pw-device:" + device, PW_PER_DEVICE, OTP_SOURCE_WINDOW, OTP_SOURCE_WINDOW, TOO_MANY_LOGINS);
+        }
         captcha.verify(req.captchaToken(), ACTION_BORROWER_LOGIN); // ahead of the limiter — see staffLogin
         String limitKey = "pw:" + req.mobile().replaceAll("\\D", "");
         limiter.hit(limitKey, MAX_LOGIN_ATTEMPTS, LOGIN_WINDOW, LOGIN_COOLOFF, TOO_MANY_LOGINS);

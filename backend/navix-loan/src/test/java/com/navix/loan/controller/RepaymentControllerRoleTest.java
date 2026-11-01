@@ -23,7 +23,8 @@ import org.junit.jupiter.api.Test;
  */
 class RepaymentControllerRoleTest {
 
-    private final RepaymentController controller = new RepaymentController(mock(RepaymentService.class));
+    private final com.navix.common.storage.DocumentStoragePort storage = mock(com.navix.common.storage.DocumentStoragePort.class);
+    private final RepaymentController controller = new RepaymentController(mock(RepaymentService.class), storage);
 
     private static final RepaymentRequest REQUEST =
             new RepaymentRequest(500_000L, PaymentMethod.UPI, "TXN-1", null, LocalDate.now(), null, null);
@@ -64,5 +65,6 @@ class RepaymentControllerRoleTest {
         RepaymentRequest own = new RepaymentRequest(500_000L, PaymentMethod.UPI, "TXN-1",
                 "loan/repayment-proof/uuid-shot.jpg", LocalDate.now(), null, null);
         assertThatCode(() -> controller.record(1L, "key-1", own)).doesNotThrowAnyException();
+        org.mockito.Mockito.verify(storage).requireUploaded("loan/repayment-proof/uuid-shot.jpg");
     }
 }

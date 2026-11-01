@@ -70,6 +70,13 @@ public class OfferController {
         return ApiResponse.ok(offer.summary(id));
     }
 
+    /** B1's price list: one summary per ladder amount the borrower may draw, on this offer's frozen terms. */
+    @GetMapping("/quotes")
+    public ApiResponse<List<OfferSummaryView>> quotes(@PathVariable Long id) {
+        authorize(id);
+        return ApiResponse.ok(offer.quotes(id));
+    }
+
     /** The offer's Key Fact Statement (issued or reused) and whether it is acknowledged. */
     @PostMapping("/kfs")
     public ApiResponse<KfsView> kfs(@PathVariable Long id) {

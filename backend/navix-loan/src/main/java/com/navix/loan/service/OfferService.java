@@ -185,17 +185,41 @@ public class OfferService {
     @Transactional(readOnly = true)
     public OfferSummaryView summary(Long appId) {
         LoanApplication app = requireSanctioned(appId);
+        return quote(app, drawdownOf(app));
+    }
+
+    /**
+     * The B1 price list (PLAN Phase 11): {@link #summary} for every ladder amount of the frozen product
+     * version up to the sanctioned ceiling (which the sanction already capped at the credit level), on
+     * the frozen pricing. A pre-V92 offer has no ladder and gets its one drawdown.
+     */
+    @Transactional(readOnly = true)
+    public List<OfferSummaryView> quotes(Long appId) {
+        LoanApplication app = requireSanctioned(appId);
+        long ceiling = ceilingOf(app);
+        List<Long> amounts = app.getProductVersionId() == null ? List.of(drawdownOf(app))
+                : pricing.product(app.getProductVersionId()).allowedAmountsPaise().stream()
+                        .filter(a -> a >= LoanMath.MIN_LOAN_PAISE && a <= ceiling).sorted().toList();
+        return amounts.stream().map(a -> quote(app, a)).toList();
+    }
+
+    private OfferSummaryView quote(LoanApplication app, long principal) {
         LoanMath math = pricing.mathFor(app);
-        long principal = drawdownOf(app);
         int tenure = tenureDays(app, math);
         long fee = math.processingFeePaise(principal);
         long gst = math.gstPaise(principal);
         long net = math.netDisbursedPaise(principal);
         long interest = math.interestPaise(principal, tenure);
         LocalDate expectedDisbursal = expectedDisbursalDate(ZonedDateTime.now(IST));
-        return new OfferSummaryView(appId, ceilingOf(app), principal, fee, gst, net, interest,
+        var p = math.pricing();
+        return new OfferSummaryView(app.getId(), ceilingOf(app), principal, fee, gst, net, interest,
                 math.totalRepayablePaise(principal, tenure), tenure, repaymentDate(app, math, expectedDisbursal),
-                expectedDisbursal);
+                expectedDisbursal, bps(p.pfRate()), bps(p.gstRate()), bps(p.dailyRate()));
+    }
+
+    /** A rate fraction as basis points: 0.10 → 1000. */
+    private static int bps(java.math.BigDecimal rate) {
+        return rate == null ? 0 : rate.movePointRight(4).setScale(0, java.math.RoundingMode.HALF_UP).intValueExact();
     }
 
     /**

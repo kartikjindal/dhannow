@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -287,13 +288,62 @@ class AuthControllerTest {
         when(credentialRepository.findById(9000001L)).thenReturn(Optional.of(cred));
 
         assertThatThrownBy(() -> controller.borrowerPasswordLogin(
-                new BorrowerPasswordLoginRequest("9819000001", "wrong-password", null)))
+                new BorrowerPasswordLoginRequest("9819000001", "wrong-password", null), new MockHttpServletRequest()))
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", "INVALID_CREDENTIALS");
 
         var resp = controller.borrowerPasswordLogin(
-                new BorrowerPasswordLoginRequest("9819000001", "right-password", null));
+                new BorrowerPasswordLoginRequest("9819000001", "right-password", null), new MockHttpServletRequest());
         assertThat(resp.getData().customerId()).isEqualTo(9000001L);
+        verify(mobileRepository, never()).saveAndFlush(any());
+        verify(mobileRepository, never()).save(any());
+    }
+
+    /** PLAN Phase 11: an app password sign-in skips Turnstile while play-integrity is OFF, so it is capped per device and IP. */
+    @Test
+    void borrowerPasswordLogin_fromTheAppIsCappedPerDeviceAndIp() {
+        when(mobileRepository.findByMobile(any())).thenReturn(Optional.empty());
+        for (int i = 0; i < 10; i++) {
+            MockHttpServletRequest http = new MockHttpServletRequest();
+            http.addHeader(CaptchaVerifier.CLIENT_HEADER, "android");
+            String mobile = "99190000" + String.format("%02d", i); // a different account each time: stuffing
+            assertThatThrownBy(() -> controller.borrowerPasswordLogin(new BorrowerPasswordLoginRequest(mobile, "x", null,
+                    "dev-1", null, null), http)).hasFieldOrPropertyWithValue("code", "NO_PASSWORD_SET");
+        }
+        MockHttpServletRequest http = new MockHttpServletRequest();
+        http.addHeader(CaptchaVerifier.CLIENT_HEADER, "android");
+        assertThatThrownBy(() -> controller.borrowerPasswordLogin(new BorrowerPasswordLoginRequest("9919000099", "x", null,
+                "dev-1", null, null), http)).hasFieldOrPropertyWithValue("code", "TOO_MANY_ATTEMPTS");
+        // The web path (no header) is not on these caps; it has Turnstile instead.
+        assertThatThrownBy(() -> controller.borrowerPasswordLogin(new BorrowerPasswordLoginRequest("9919000098", "x", null,
+                "dev-1", null, null), new MockHttpServletRequest())).hasFieldOrPropertyWithValue("code", "NO_PASSWORD_SET");
+    }
+
+    /**
+     * PLAN Phase 11 (S5): forgot password never creates a customer. An unknown number gets the same answer and no
+     * code; the reset then fails like a wrong code. A registered number gets a code and a new password.
+     */
+    @Test
+    void forgotPasswordByOtp_refusesUnknownNumbersWithoutRevealingThem() {
+        var answer = new com.navix.common.verification.OtpVerifierPort.OtpRequestResult(true, null, 300);
+        when(mobileRepository.findByMobile("9919000001")).thenReturn(Optional.empty());
+        when(otpService.request("9919000001", "PASSWORD_RESET", false)).thenReturn(answer);
+        when(mobileRepository.findByMobile("9819000001")).thenReturn(Optional.of(claim(9000001L, "9819000001")));
+        when(otpService.request("9819000001", "PASSWORD_RESET", true)).thenReturn(answer);
+
+        var unknown = controller.forgotPasswordOtp(new AuthDtos.OtpRequestRequest("9919000001"), new MockHttpServletRequest());
+        var known = controller.forgotPasswordOtp(new AuthDtos.OtpRequestRequest("9819000001"), new MockHttpServletRequest());
+        assertThat(unknown.getData()).isEqualTo(known.getData());
+
+        assertThatThrownBy(() -> controller.resetPasswordWithOtp(new AuthDtos.OtpPasswordResetRequest("9919000001",
+                "123456", "Secret1!", null, null, null))).hasFieldOrPropertyWithValue("code", "INVALID_OTP");
+        verify(otpService, never()).verify(eq("9919000001"), any(), any());
+
+        when(otpService.verify("9819000001", "123456", "PASSWORD_RESET")).thenReturn(true);
+        var session = controller.resetPasswordWithOtp(new AuthDtos.OtpPasswordResetRequest("9819000001", "123456",
+                "Secret1!", null, null, null));
+        assertThat(session.getData().customerId()).isEqualTo(9000001L);
+        verify(passwordResetService).setBorrowerPassword(9000001L, "Secret1!");
         verify(mobileRepository, never()).saveAndFlush(any());
         verify(mobileRepository, never()).save(any());
     }
@@ -303,7 +353,7 @@ class AuthControllerTest {
         when(mobileRepository.findByMobile("9919000001")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> controller.borrowerPasswordLogin(
-                new BorrowerPasswordLoginRequest("9919000001", "anything", null)))
+                new BorrowerPasswordLoginRequest("9919000001", "anything", null), new MockHttpServletRequest()))
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", "NO_PASSWORD_SET");
         verify(credentialRepository, never()).findById(any());

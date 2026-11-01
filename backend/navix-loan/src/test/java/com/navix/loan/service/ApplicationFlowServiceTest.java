@@ -89,6 +89,8 @@ class ApplicationFlowServiceTest {
     private PricingService pricing;
     @Mock
     private CreditLevelService creditLevels;
+    @Mock
+    private com.navix.loan.repository.LoanDocumentRepository loanDocuments;
 
     private ApplicationFlowService flow;
     private final List<ApplicationEvent> events = new ArrayList<>();
@@ -101,7 +103,13 @@ class ApplicationFlowServiceTest {
                 loanRepository, paymentRepository, profileRepository, rejectionRepository,
                 documentRepository, verificationRepository, referenceRepository,
                 event -> {}, referralService, dsaCommissionService, featureFlags, mandateService,
-                pricing, creditLevels);
+                pricing, creditLevels, loanDocuments);
+        // Default: the borrower acknowledged the KFS for exactly the offer on file (the disbursal gate's other half).
+        lenient().when(loanDocuments.findFirstByApplicationIdAndTypeOrderByVersionDesc(any(),
+                org.mockito.ArgumentMatchers.eq(com.navix.loan.domain.LoanDocumentType.KFS))).thenAnswer(i -> {
+                    LoanApplication a = applicationRepository.findById(i.getArgument(0)).orElseThrow();
+                    return Optional.of(acknowledgedKfs(a));
+                });
         // Pricing and ladder rules have their own suites; here offers price on the navix terms.
         lenient().when(pricing.mathFor(any(LoanApplication.class))).thenReturn(new LoanMath());
         // Default: assignee passes activation gating; negative case overrides below.
@@ -439,6 +447,80 @@ class ApplicationFlowServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("Sign your sanction letter");
         assertThat(app.getStatus()).isEqualTo(ApplicationStatus.SANCTIONED);
+    }
+
+    /** An acknowledged KFS stating {@code a}'s current amount and pricing version. */
+    private static com.navix.loan.entity.LoanDocument acknowledgedKfs(LoanApplication a) {
+        com.navix.loan.entity.LoanDocument kfs = new com.navix.loan.entity.LoanDocument();
+        kfs.setType(com.navix.loan.domain.LoanDocumentType.KFS);
+        kfs.setAmountPaise(a.getAmountRequested() != null ? a.getAmountRequested() : a.getSanctionedAmountPaise());
+        kfs.setPricingVersionId(a.getPricingVersionId());
+        kfs.setAcceptedAt(Instant.now());
+        return kfs;
+    }
+
+    /**
+     * PLAN Phase 11 (compliance): no door into disbursement opens without a PASS e-sign AND an acknowledged KFS for
+     * this offer: the borrower's accept, the Disbursement Head's mandate override, the ADMIN force, and the legacy
+     * PRE_APPROVED apply (which now becomes an offer instead, see below).
+     */
+    @Test
+    void disbursalIsImpossibleWithoutAKfsAcknowledgementAndASignatureOnEveryPath() {
+        List<String> doors = List.of("ACCEPT", "MANDATE_OVERRIDE", "ADMIN_FORCE");
+        for (boolean signed : new boolean[] {false, true}) {
+            for (boolean acknowledged : new boolean[] {false, true}) {
+                if (signed && acknowledged) {
+                    continue;
+                }
+                for (String door : doors) {
+                    LoanApplication app = appAt(ApplicationStatus.SANCTIONED);
+                    app.setSanctionedAmountPaise(2_000_000L);
+                    lenient().when(verificationRepository.findByApplicationIdAndCheckType(1L,
+                            ApplicationVerificationService.ESIGN)).thenReturn(Optional.empty());
+                    if (signed) {
+                        esigned(1L);
+                    }
+                    com.navix.loan.entity.LoanDocument kfs = acknowledgedKfs(app);
+                    if (!acknowledged) {
+                        kfs.setAcceptedAt(null);
+                    }
+                    lenient().when(loanDocuments.findFirstByApplicationIdAndTypeOrderByVersionDesc(1L,
+                            com.navix.loan.domain.LoanDocumentType.KFS)).thenReturn(Optional.of(kfs));
+                    lenient().when(mandateService.isBankUnsupported(1L)).thenReturn(true);
+                    org.assertj.core.api.ThrowableAssert.ThrowingCallable call;
+                    if ("ACCEPT".equals(door)) {
+                        actor("7", "BORROWER");
+                        call = () -> flow.acceptOffer(1L, 1_000_000L);
+                    } else if ("MANDATE_OVERRIDE".equals(door)) {
+                        actor("disb1", "DISBURSEMENT_HEAD");
+                        call = () -> flow.mandateOverride(1L, "co-operative bank");
+                    } else {
+                        actor("1", "ADMIN");
+                        call = () -> flow.adminForceDisbursementPending(1L, "stuck in the journey");
+                    }
+                    assertThatThrownBy(call).as(door + " signed=" + signed + " kfs=" + acknowledged)
+                            .isInstanceOf(BusinessException.class)
+                            .extracting("code").isIn("ESIGN_REQUIRED", "AGREEMENT_NOT_SIGNED", "KFS_NOT_ACKNOWLEDGED");
+                    assertThat(app.getStatus()).isEqualTo(ApplicationStatus.SANCTIONED);
+                }
+            }
+        }
+        // A KFS acknowledged for another amount is not this offer's KFS.
+        LoanApplication app = appAt(ApplicationStatus.SANCTIONED);
+        app.setSanctionedAmountPaise(2_000_000L);
+        esigned(1L);
+        com.navix.loan.entity.LoanDocument other = acknowledgedKfs(app);
+        other.setAmountPaise(500_000L);
+        when(loanDocuments.findFirstByApplicationIdAndTypeOrderByVersionDesc(1L,
+                com.navix.loan.domain.LoanDocumentType.KFS)).thenReturn(Optional.of(other));
+        actor("7", "BORROWER");
+        assertThatThrownBy(() -> flow.acceptOffer(1L, 1_000_000L))
+                .hasFieldOrPropertyWithValue("code", "KFS_NOT_ACKNOWLEDGED");
+        // And the state machine has no edge from a pre-approval to disbursement at all.
+        assertThat(java.util.Arrays.stream(ApplicationStatus.values())
+                .filter(s -> s.canTransitionTo(ApplicationStatus.DISBURSEMENT_PENDING)))
+                .containsExactlyInAnyOrder(ApplicationStatus.SANCTIONED, ApplicationStatus.CREDIT_HEAD_APPROVED,
+                        ApplicationStatus.DISBURSEMENT_FAILED, ApplicationStatus.DISBURSAL_CONFIRMATION_PENDING);
     }
 
     /** Stand in for the borrower having eSigned their Key Fact Statement (V46). */
@@ -1209,29 +1291,36 @@ class ApplicationFlowServiceTest {
                 .hasMessageContaining("CREDIT_EXECUTIVE or CREDIT_HEAD");
     }
 
-    /** Pre-approved borrower applying skips the credit gates → straight to disbursement (fast-track). */
+    /**
+     * PLAN Phase 11: a legacy pre-approval applying skips credit but not the KFS or the signature. It becomes an
+     * offer on the stored limit with today's terms frozen, and walks the offer journey like any SANCTIONED file.
+     */
     @Test
-    void applyFromPreApprovedRoutesStraightToDisbursement() {
+    void applyFromPreApprovedBecomesAnOfferNotADisbursal() {
         LoanApplication app = appAt(ApplicationStatus.PRE_APPROVED);
+        app.setEligibleLimit(1_500_000L);
         // A genuine returning borrower: one fully repaid advance behind them.
         when(loanRepository.findByCustomerId(7L)).thenReturn(List.of(loanAt(50L, LoanStatus.CLOSED, LocalDate.now().minusDays(5))));
         actor("7", "BORROWER");
         flow.apply(1L, 1_000_000L, "medical", 1_500_000L, 30);
-        assertThat(app.getStatus()).isEqualTo(ApplicationStatus.DISBURSEMENT_PENDING);
-        assertThat(app.getAssignedExecutiveId()).isNull(); // the fast-track discriminator
+        assertThat(app.getStatus()).isEqualTo(ApplicationStatus.SANCTIONED);
+        assertThat(app.getSanctionedAmountPaise()).isEqualTo(1_500_000L);
+        assertThat(app.getAmountRequested()).isEqualTo(1_000_000L);
+        verify(pricing).freeze(app);
+        verify(pricing).requireAllowedAmount(app, 1_000_000L);
+        assertThat(app.getAssignedExecutiveId()).isNull(); // credit is still skipped
     }
 
-    /** F11: the fast-track never passes acceptOffer, so it carries the same mandate gate. */
     @Test
-    void applyFromPreApprovedIsBlockedWithoutAMandateWhenTheFlagIsOn() {
+    void applyFromPreApprovedCannotGoAboveTheCreditLevel() {
         LoanApplication app = appAt(ApplicationStatus.PRE_APPROVED);
         when(loanRepository.findByCustomerId(7L)).thenReturn(List.of(loanAt(50L, LoanStatus.CLOSED, LocalDate.now().minusDays(5))));
-        when(mandateService.mandateRequired(app)).thenReturn(true);
+        when(creditLevels.maxPaise(7L)).thenReturn(500_000L); // no stored limit: the credit level
         actor("7", "BORROWER");
 
         assertThatThrownBy(() -> flow.apply(1L, 1_000_000L, "medical", 1_500_000L, 30))
                 .isInstanceOf(BusinessException.class)
-                .hasFieldOrPropertyWithValue("code", "MANDATE_REQUIRED");
+                .hasFieldOrPropertyWithValue("code", "LIMIT_EXCEEDED");
         assertThat(app.getStatus()).isEqualTo(ApplicationStatus.PRE_APPROVED);
     }
 
@@ -1242,10 +1331,11 @@ class ApplicationFlowServiceTest {
         // A genuine returning borrower: one fully repaid advance behind them.
         when(loanRepository.findByCustomerId(7L)).thenReturn(List.of(loanAt(50L, LoanStatus.CLOSED, LocalDate.now().minusDays(5))));
         app.setSalaryCreditDay(15); // carried over by reborrow() from the borrower's first loan
+        app.setEligibleLimit(1_500_000L);
         actor("7", "BORROWER");
         flow.apply(1L, 1_000_000L, "medical", 1_500_000L, null);
         assertThat(app.getSalaryCreditDay()).isEqualTo(15); // not wiped by the null
-        assertThat(app.getStatus()).isEqualTo(ApplicationStatus.DISBURSEMENT_PENDING);
+        assertThat(app.getStatus()).isEqualTo(ApplicationStatus.SANCTIONED);
     }
 
     // ---- audit trail actor-name enrichment + status counts ------------------------

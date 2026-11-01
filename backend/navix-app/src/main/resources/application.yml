@@ -194,8 +194,9 @@ navix:
     refresh-ttl-days: ${NAVIX_APP_REFRESH_TTL_DAYS:30}
 
   # PLAN Phase 8: Play Integrity on app sign-in, switched by the play-integrity feature flag (seeded OFF).
-  # allow-android-without-check: with the flag OFF, may an X-Client: android request skip Turnstile? Default false
-  # (the header is client-supplied, so true lets any bot skip the challenge). Only matters where Turnstile is on.
+  # allow-android-without-check: with the flag OFF, may an X-Client: android request skip Turnstile on every surface?
+  # Default false, refused in prod (the header is client-supplied, so true lets any bot skip the challenge). Only matters
+  # where Turnstile is on. App password sign-in alone skips it with the flag OFF, capped per IP and device (Phase 11).
   integrity:
     package-name: ${NAVIX_INTEGRITY_PACKAGE:com.dhannow.app}
     allow-android-without-check: ${NAVIX_INTEGRITY_ALLOW_ANDROID_WITHOUT_CHECK:false}
@@ -218,17 +219,17 @@ navix:
     site-base-url: ${NAVIX_SITE_BASE_URL:https://dhannow.com}
     flags: loan-extension,emi-conversion,payment-gateway,play-integrity,push-fcm,digio-mandate,onboarding-paused
     legal:
-      - { key: terms, title: Terms and conditions, path: /terms.html }
-      - { key: consent, title: Consent, path: /consent.html }
-      - { key: privacy, title: Privacy policy, path: /privacy.html }
-      - { key: fair-practices, title: Fair practices code, path: /fair-practices.html }
-      - { key: faq, title: Questions and answers, path: /faq.html }
-      - { key: grievance, title: Grievance redressal, path: /grievance.html }
-      - { key: contact, title: Contact us, path: /contact.html }
-      - { key: cookie-policy, title: Cookie policy, path: /cookie-policy.html }
-      - { key: repayment-policy, title: Repayment policy, path: /repayment-policy.html }
-      - { key: payment-refund-policy, title: Payment and refund policy, path: /payment-refund-policy.html }
-      - { key: kfs-policy, title: Key fact statement policy, path: /kfs-policy.html }
+      - { key: terms, title: Terms and conditions, path: /terms.html, version: 1 }
+      - { key: consent, title: Consent, path: /consent.html, version: 1 }
+      - { key: privacy, title: Privacy policy, path: /privacy.html, version: 1 }
+      - { key: fair-practices, title: Fair practices code, path: /fair-practices.html, version: 1 }
+      - { key: faq, title: Questions and answers, path: /faq.html, version: 1 }
+      - { key: grievance, title: Grievance redressal, path: /grievance.html, version: 1 }
+      - { key: contact, title: Contact us, path: /contact.html, version: 1 }
+      - { key: cookie-policy, title: Cookie policy, path: /cookie-policy.html, version: 1 }
+      - { key: repayment-policy, title: Repayment policy, path: /repayment-policy.html, version: 1 }
+      - { key: payment-refund-policy, title: Payment and refund policy, path: /payment-refund-policy.html, version: 1 }
+      - { key: kfs-policy, title: Key fact statement policy, path: /kfs-policy.html, version: 1 }
 
   # PII field encryption (PLAN Phase 9): Aadhaar, PAN and bank account numbers, AES-256-GCM. Cloud: the data key
   # wrapped by KMS (aws kms generate-data-key --key-id <id> --key-spec AES_256 → CiphertextBlob, base64) plus the

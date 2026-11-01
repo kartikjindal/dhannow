@@ -1022,7 +1022,7 @@ class MandateServiceTest {
     @Test
     void invitePublishesALinkToOurOwnPageAndFilesNothing() {
         String link = service.invite(1L);
-        assertThat(link).isEqualTo("http://localhost:3000/loan/mandate");
+        assertThat(link).isEqualTo("http://localhost:3000/app/open");
         var c = ArgumentCaptor.forClass(com.navix.common.notification.event.MandateInviteEvent.class);
         verify(eventPublisher).publishEvent(c.capture());
         assertThat(c.getValue().link()).isEqualTo(link);

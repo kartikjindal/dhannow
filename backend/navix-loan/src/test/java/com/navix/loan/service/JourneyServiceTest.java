@@ -105,6 +105,24 @@ class JourneyServiceTest {
         lenient().when(documentRepository.findByApplicationIdOrderByIdAsc(APP)).thenReturn(rows);
     }
 
+    /** PLAN Phase 11 (A13): the journey says when a bureau question is waiting, and stops once it is skipped. */
+    @Test
+    void bureauChallengePendingFollowsTheBureauRow() {
+        through(JourneyService.Step.BANK);
+        assertThat(journey.current(APP).bureauChallengePending()).isFalse();
+
+        ApplicationVerification row = new ApplicationVerification();
+        row.setCheckType(ApplicationVerificationService.BUREAU);
+        row.setStatus(ApplicationVerificationService.REVIEW);
+        row.setDerived("{\"bureauChallenge\": true, \"bureauChallengeQuestion\": \"Which bank?\"}");
+        when(verificationRepository.findByApplicationIdAndCheckType(APP, ApplicationVerificationService.BUREAU))
+                .thenReturn(Optional.of(row));
+        assertThat(journey.current(APP).bureauChallengePending()).isTrue();
+
+        row.setDerived("{\"bureauChallenge\": true, \"bureauChallengeSkipped\": true}");
+        assertThat(journey.current(APP).bureauChallengePending()).isFalse();
+    }
+
     @Test
     void heldAtEmailUntilBothInboxesAreProven() {
         CustomerProfile p = through(JourneyService.Step.BANK);

@@ -32,6 +32,28 @@ class StorageAdapterTest {
         assertThat(key).matches("applications/1/aadhaar/\\d+\\.pdf");
     }
 
+    /** PLAN Phase 11: a submitted key must name a stored PDF/JPG/PNG of at most 5 MB (an S3 HEAD). */
+    @Test
+    void requireUploaded_checksTheStoredObjectsSizeAndType() {
+        StorageAdapter adapter = new StorageAdapter(storage);
+        long cap = com.navix.common.storage.DocumentStoragePort.MAX_UPLOAD_BYTES;
+        when(storage.head("ok")).thenReturn(java.util.Optional.of(new com.navix.common.storage.DocumentStoragePort.ObjectInfo(cap, "image/png")));
+        when(storage.head("big")).thenReturn(java.util.Optional.of(new com.navix.common.storage.DocumentStoragePort.ObjectInfo(cap + 1, "image/png")));
+        when(storage.head("heic")).thenReturn(java.util.Optional.of(new com.navix.common.storage.DocumentStoragePort.ObjectInfo(10, "image/heic")));
+        when(storage.head("gone")).thenReturn(java.util.Optional.empty());
+        when(storage.head("down")).thenThrow(new IllegalStateException("S3 403"));
+
+        adapter.requireUploaded("ok");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> adapter.requireUploaded("big"))
+                .hasFieldOrPropertyWithValue("code", "FILE_TOO_LARGE");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> adapter.requireUploaded("heic"))
+                .hasFieldOrPropertyWithValue("code", "UNSUPPORTED_FILE_TYPE");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> adapter.requireUploaded("gone"))
+                .hasFieldOrPropertyWithValue("code", "UPLOAD_NOT_FOUND");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> adapter.requireUploaded("down"))
+                .hasFieldOrPropertyWithValue("code", "UPLOAD_UNAVAILABLE");
+    }
+
     @Test
     void adapter_delegatesPresignUpload() {
         StorageAdapter adapter = new StorageAdapter(storage);

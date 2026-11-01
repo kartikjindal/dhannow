@@ -25,6 +25,8 @@ public class LoanExtensionView {
     private final LoanExtensionLedger ledger;
     private final PricingService pricing;
     private final Clock clock;
+    private final com.navix.common.staff.StaffDirectory staff;
+    private final com.navix.loan.repository.PaymentRepository payments;
 
     @Transactional(readOnly = true)
     public LoanView attach(Loan loan, LoanView view) {
@@ -36,12 +38,24 @@ public class LoanExtensionView {
         PendingExtension pending = open == null ? null : new PendingExtension(open.id(), open.status(), open.version(),
                 open.seq(), pricing.product(loan.getProductVersionId()).extensionMax(),
                 ledger.quote(loan, LocalDate.now(clock)), open.payBy(), open.expiresAt(), open.newDueDate(),
-                open.seenByBorrowerAt() != null);
+                open.seenByBorrowerAt() != null, firstName(open.proposedBy()));
+        java.util.Map<Long, Long> paid = new java.util.HashMap<>();
+        payments.findAllById(history.stream().map(ExtensionRef::paymentId).filter(java.util.Objects::nonNull).toList())
+                .forEach(p -> paid.put(p.getId(), p.getAmount()));
         List<ExtensionLine> lines = history.stream()
                 .map(e -> new ExtensionLine(e.id(), e.seq(), displayStatus(e), e.oldDueDate(), e.newDueDate(),
-                        e.activatedAt(), e.paymentId()))
+                        e.activatedAt(), e.paymentId(), paid.get(e.paymentId())))
                 .toList();
-        return view.withExtensions(pending, lines);
+        Integer daysLeft = loan.getDueDate() == null || loan.getClosedOn() != null ? null
+                : (int) java.time.temporal.ChronoUnit.DAYS.between(LocalDate.now(clock), loan.getDueDate());
+        return view.withExtensions(pending, lines, daysLeft);
+    }
+
+    /** The officer's first name for the borrower ("Ravi from collections"); never the full name or id. */
+    private String firstName(Long staffId) {
+        return staffId == null ? null : staff.findStaff(staffId)
+                .map(s -> s.name() == null ? "" : s.name().trim().split("\\s+")[0])
+                .filter(n -> !n.isEmpty()).orElse(null);
     }
 
     private String displayStatus(ExtensionRef e) {

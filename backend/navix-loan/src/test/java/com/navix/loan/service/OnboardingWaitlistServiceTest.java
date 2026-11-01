@@ -3,8 +3,6 @@ package com.navix.loan.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -160,27 +158,34 @@ class OnboardingWaitlistServiceTest {
         assertCode(new SubmitRequest("R", "a@b.co", "12345", "ABCDE1234F", VALID_AADHAAR), "INVALID_MOBILE");
         assertCode(new SubmitRequest("R", "a@b.co", "7000000105", "ABC123", VALID_AADHAAR), "INVALID_PAN");
         assertCode(new SubmitRequest("R", "a@b.co", "7000000105", "ABCDE1234F", "234123412345"), "INVALID_AADHAAR");
+        assertCode(new SubmitRequest("R", "a@b.co", "7000000105", "ABCDE1234F", "123"), "INVALID_AADHAAR");
         verify(waitlistRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
-    void refusesAPanOrAadhaarAnotherCustomerHolds() {
+    void refusesAPanAnotherCustomerHolds() {
         when(loanRepository.findByCustomerId(7L)).thenReturn(List.of());
         when(waitlistRepository.findByCustomerId(7L)).thenReturn(Optional.empty());
 
         when(profileRepository.existsPanForOtherCustomer("ABCDE1234F", 7L)).thenReturn(true);
         assertCode(good(), "DUPLICATE_PAN");
-
-        when(profileRepository.existsPanForOtherCustomer("ABCDE1234F", 7L)).thenReturn(false);
-        when(waitlistRepository.existsByPanAndCustomerIdNot("ABCDE1234F", 7L)).thenReturn(false);
-        when(profileRepository.findOtherCustomerIdsByAadhaar(eq(VALID_AADHAAR), eq(7L))).thenReturn(List.of(9L));
-        assertCode(good(), "DUPLICATE_AADHAAR");
-
-        when(profileRepository.findOtherCustomerIdsByAadhaar(eq(VALID_AADHAAR), eq(7L))).thenReturn(List.of());
-        when(waitlistRepository.existsByAadhaarAndCustomerIdNot(anyString(), eq(7L))).thenReturn(true);
-        assertCode(good(), "DUPLICATE_AADHAAR");
         verify(waitlistRepository, never()).save(any());
+    }
+
+    /** PLAN Phase 11 (A1b): the last four is enough, and only the last four is ever stored. */
+    @Test
+    void keepsOnlyTheAadhaarLastFour() {
+        when(loanRepository.findByCustomerId(7L)).thenReturn(List.of());
+        when(waitlistRepository.findByCustomerId(7L)).thenReturn(Optional.empty());
+        org.mockito.ArgumentCaptor<OnboardingWaitlist> saved = org.mockito.ArgumentCaptor.forClass(OnboardingWaitlist.class);
+
+        assertThat(service.submit(new SubmitRequest("Rinku", "rinku@example.com", "7000000105", "ABCDE1234F", "2346"))
+                .aadhaarLast4()).isEqualTo("2346");
+        assertThat(service.submit(new SubmitRequest("Rinku", "rinku@example.com", "7000000105", "ABCDE1234F",
+                VALID_AADHAAR)).aadhaarLast4()).isEqualTo("2346");
+        verify(waitlistRepository, times(2)).save(saved.capture());
+        assertThat(saved.getAllValues()).extracting(OnboardingWaitlist::getAadhaar).containsOnly("2346");
     }
 
     @Test

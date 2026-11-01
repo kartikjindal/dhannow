@@ -225,6 +225,22 @@ public class DocumentStorageService {
         }
     }
 
+    /** Size and content type of the object at {@code key}; empty when there is none. */
+    public java.util.Optional<com.navix.common.storage.DocumentStoragePort.ObjectInfo> head(String key) {
+        try {
+            var r = s3Client.headObject(HeadObjectRequest.builder().bucket(props.bucket()).key(key).build());
+            return java.util.Optional.of(new com.navix.common.storage.DocumentStoragePort.ObjectInfo(
+                    r.contentLength() == null ? 0L : r.contentLength(), r.contentType()));
+        } catch (NoSuchKeyException e) {
+            return java.util.Optional.empty();
+        } catch (software.amazon.awssdk.services.s3.model.S3Exception e) {
+            if (e.statusCode() == 404) {
+                return java.util.Optional.empty();
+            }
+            throw e;
+        }
+    }
+
     private Duration ttl() {
         long seconds = props.presignTtlSeconds() > 0 ? props.presignTtlSeconds() : 900;
         return Duration.ofSeconds(seconds);

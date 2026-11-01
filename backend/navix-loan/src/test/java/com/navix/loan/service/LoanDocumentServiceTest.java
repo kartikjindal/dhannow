@@ -386,7 +386,7 @@ class LoanDocumentServiceTest {
         assertThat(schedules).hasSize(1);
         assertThat(schedules.get(0).getLoanId()).isEqualTo(loan.getId());
         assertThat(text(stored.get(schedules.get(0).getS3Key()))).contains("REPAYMENT SCHEDULE",
-                "Loan account no. " + loan.getId(), "Disbursed on", "3 Nov 2026", "17 Nov 2026, by 23:59 IST",
+                "Loan account no. " + com.navix.common.util.CustomerIds.loanAccount(loan.getId()), "Disbursed on", "3 Nov 2026", "17 Nov 2026, by 23:59 IST",
                 "Single repayment of ₹1,000", "₹742");
     }
 
@@ -414,7 +414,7 @@ class LoanDocumentServiceTest {
 
         String t = text(new KfsPdfRenderer().renderClosureReceipt(service.facts(app, loan), c));
 
-        assertThat(t).contains("LOAN CLOSURE RECEIPT", "Loan account no. " + loan.getId(), "Repaid in full",
+        assertThat(t).contains("LOAN CLOSURE RECEIPT", "Loan account no. " + com.navix.common.util.CustomerIds.loanAccount(loan.getId()), "Repaid in full",
                 "19 Nov 2026, ref UTR77", "₹1,040", "Late charge", "₹40", "Principal",
                 "Nothing more is owed on this loan.", "No refund is due.");
         assertThat(t.toLowerCase()).doesNotContain("dhanboost", "nbfc", "pay early", "save interest");

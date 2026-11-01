@@ -47,9 +47,19 @@ import org.springframework.web.context.request.ServletRequestAttributes;
  * <p><b>The Android app (PLAN Phase 8).</b> A request carrying {@code X-Client: android} cannot answer a web
  * challenge, so with the {@code play-integrity} flag ON it is judged by its {@code X-Integrity-Token} instead
  * ({@link IntegrityVerifier}: our package, Play-recognised, {@code MEETS_DEVICE_INTEGRITY}). With the flag OFF it
- * falls back to Turnstile like any web request, which an app cannot pass when Turnstile is configured. The only
- * way round that is {@code navix.integrity.allow-android-without-check=true}, default {@code false}: the header
- * is client-supplied, so honouring it without a check would let any bot skip the challenge by sending it.
+ * falls back to Turnstile like any web request, which an app cannot pass when Turnstile is configured — with one
+ * exception, below. {@code navix.integrity.allow-android-without-check=true} (default {@code false}, refused in
+ * prod) skips the challenge on every surface: the header is client-supplied, so honouring it everywhere would let
+ * any bot skip the challenge by sending it.
+ *
+ * <p><b>App password sign-in with the flag OFF (PLAN Phase 11).</b> An {@code X-Client: android} request to
+ * {@code borrower-password-login} skips Turnstile ({@link #ANDROID_LIMITED_ACTIONS}) so the app can sign in by
+ * password before Play Integrity is switched on. It is not allow-all: {@code AuthController} holds every such
+ * request to per-IP and per-device caps on top of the per-mobile limiter (three wrong passwords, then a cool-off).
+ * The risk, stated plainly: a bot that sends the header trades the challenge for those caps, so online guessing of
+ * one account stays at the limiter's ~360 tries an hour and credential stuffing across accounts is bounded per
+ * source address. Password policy and BCrypt remain the defence. Turning {@code play-integrity} ON removes the
+ * exception (a failed verdict is then {@code INTEGRITY_FAILED}).
  */
 @Component
 public class CaptchaVerifier {
@@ -62,6 +72,8 @@ public class CaptchaVerifier {
     public static final String CLIENT_HEADER = "X-Client";
     public static final String INTEGRITY_HEADER = "X-Integrity-Token";
     public static final String PLAY_INTEGRITY_FLAG = "play-integrity";
+    /** Surfaces an app request may reach without Turnstile while {@code play-integrity} is OFF; each is rate-capped by source. */
+    static final Set<String> ANDROID_LIMITED_ACTIONS = Set.of("borrower-password-login");
 
     /** What the Android branch makes of the current request. */
     public enum AndroidCheck { NOT_ANDROID, OFF, PASSED, FAILED }
@@ -127,7 +139,7 @@ public class CaptchaVerifier {
             case FAILED -> throw new BusinessException("INTEGRITY_FAILED",
                     "We could not confirm this app and device. Update the app from Google Play, or sign in with an OTP.");
             case OFF -> {
-                if (androidWithoutCheck) {
+                if (androidWithoutCheck || ANDROID_LIMITED_ACTIONS.contains(expectedAction)) {
                     return;
                 }
             }

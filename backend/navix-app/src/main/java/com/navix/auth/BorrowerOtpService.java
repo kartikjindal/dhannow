@@ -46,6 +46,15 @@ public class BorrowerOtpService implements OtpVerifierPort {
     /** Generate + store an OTP for {@code mobile}, scoped to {@code purpose}, and send it via SMS. */
     @Override
     public OtpRequestResult request(String mobile, String purpose) {
+        return request(mobile, purpose, true);
+    }
+
+    /**
+     * As {@link #request(String, String)}, but with {@code deliver=false} nothing is stored or sent and the answer has
+     * the same shape (PLAN Phase 11, forgot password for a number with no account). The send cap still counts, so
+     * the limiter cannot tell the two apart either.
+     */
+    public OtpRequestResult request(String mobile, String purpose, boolean deliver) {
         String number = normalize(mobile);
         String storeKey = purpose + ":" + number;
         // Capped before the SMS goes out. This bounds two things at once: the gateway spend (and the
@@ -60,6 +69,11 @@ public class BorrowerOtpService implements OtpVerifierPort {
         // Keyed by purpose too, so a bureau-consent send doesn't burn the login send budget or vice versa.
         limiter.hit("otp:" + storeKey, MAX_SENDS, SEND_WINDOW, SEND_WINDOW,
                 "Too many OTP requests for this number.");
+        if (!deliver) {
+            boolean reveal = props.mock() || props.devEcho();
+            return new OtpRequestResult(props.mock() || props.enabled(),
+                    reveal ? (props.mock() ? mockCode() : generate()) : null, props.otpTtlSeconds());
+        }
         // Mock mode (demo/testing): a fixed code, no SMS, no DLT — testers just enter mockCode().
         String code = props.mock() ? mockCode() : generate();
         store.putChallenge(purpose, number, code, Instant.now().plusSeconds(props.otpTtlSeconds()));

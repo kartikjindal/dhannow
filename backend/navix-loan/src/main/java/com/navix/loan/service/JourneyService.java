@@ -122,10 +122,11 @@ public class JourneyService {
      * total} count against that shorter list rather than a fixed eleven.
      *
      * <p>{@code route} is the web path; {@code stepKey} (PLAN Phase 8) is what the app maps to its own screens, so
-     * the web's URLs can change without breaking it.
+     * the web's URLs can change without breaking it. {@code bureauChallengePending} (PLAN Phase 11): the bureau asked
+     * a security question the borrower has not answered, skipped or run out of tries on (board A13).
      */
     public record JourneyView(String step, String route, int index, int total, List<String> completed,
-                              List<String> steps, String stepKey) {
+                              List<String> steps, String stepKey, boolean bureauChallengePending) {
     }
 
     private final LoanApplicationRepository applicationRepository;
@@ -152,7 +153,7 @@ public class JourneyService {
             int index = steps.indexOf(step);
             return new JourneyView(step.name(), step.route(),
                     index >= 0 ? index : completed.size(), steps.size(), completed,
-                    steps.stream().map(Enum::name).toList(), step.stepKey());
+                    steps.stream().map(Enum::name).toList(), step.stepKey(), false);
         }
         Step step = currentStep(app);
         List<Step> steps = java.util.Arrays.stream(Step.values()).filter(s -> s != Step.DONE).toList();
@@ -161,7 +162,24 @@ public class JourneyService {
                 .map(Enum::name)
                 .toList();
         return new JourneyView(step.name(), step.route(), step.ordinal(), steps.size(), completed,
-                steps.stream().map(Enum::name).toList(), step.stepKey());
+                steps.stream().map(Enum::name).toList(), step.stepKey(), bureauChallengePending(appId));
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /** The BUREAU row holds an open security question (REVIEW, not answered away, skipped or exhausted). */
+    private boolean bureauChallengePending(Long appId) {
+        return verificationRepository.findByApplicationIdAndCheckType(appId, ApplicationVerificationService.BUREAU)
+                .filter(v -> ApplicationVerificationService.REVIEW.equals(v.getStatus()) && v.getDerived() != null)
+                .map(v -> {
+                    try {
+                        var d = JSON.readTree(v.getDerived());
+                        return d.path("bureauChallenge").asBoolean(false) && !d.path("bureauChallengeSkipped").asBoolean(false)
+                                && !d.path("bureauChallengeExhausted").asBoolean(false);
+                    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                        return false;
+                    }
+                }).orElse(false);
     }
 
     /**

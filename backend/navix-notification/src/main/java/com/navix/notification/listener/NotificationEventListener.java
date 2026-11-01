@@ -33,8 +33,6 @@ import com.navix.notification.dispatch.NotificationContext;
 import com.navix.notification.dispatch.NotificationDispatcher;
 import com.navix.notification.email.EmailAttachment;
 import com.navix.notification.template.NotificationFormat;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.ZoneId;
 import java.util.List;
 import org.slf4j.Logger;
@@ -141,8 +139,8 @@ public class NotificationEventListener {
     }
 
     /**
-     * Links straight to the live question screen, via {@code /login?next=} so a logged-out borrower
-     * lands back on it after signing in rather than on the dashboard.
+     * Opens the app (PLAN Phase 10a: no borrower web), which routes to the question from the journey
+     * ({@code bureauChallengePending}).
      */
     @Async("notificationExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -150,22 +148,20 @@ public class NotificationEventListener {
         dispatcher.dispatch(NotificationType.BUREAU_QUESTION_PENDING, NotificationContext.builder()
                 .customerId(e.customerId())
                 .applicationId(e.applicationId())
-                .put("questionLink",
-                        frontendBaseUrl + "/login?next=/credit-question%3FappId%3D" + e.applicationId())
+                .put("questionLink", com.navix.common.util.AppLinks.open(frontendBaseUrl, null))
                 .build());
     }
 
     /**
      * The credit team's "send a resume link" nudge for a failed/abandoned Phase-3 step
      * ({@code VerificationOutreachService.share}, EMAIL channel). {@code route} is the bare offer-step
-     * path (e.g. {@code /loan/selfie}); the borrower must log in first, so the link sent is the same
-     * {@code /login?next=<route>} shape as {@link #onBureauQuestionPending}.
+     * path (e.g. {@code /loan/selfie}); the link opens the app, which resumes the journey at that step
+     * (PLAN Phase 10a), the same as {@link #onBureauQuestionPending}.
      */
     @Async("notificationExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onVerificationStepLink(VerificationStepLinkEvent e) {
-        String stepLink = frontendBaseUrl + "/login?next="
-                + URLEncoder.encode(e.route(), StandardCharsets.UTF_8);
+        String stepLink = com.navix.common.util.AppLinks.open(frontendBaseUrl, null);
         dispatcher.dispatch(NotificationType.VERIFICATION_STEP_LINK, NotificationContext.builder()
                 .customerId(e.customerId())
                 .applicationId(e.applicationId())

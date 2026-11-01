@@ -3705,7 +3705,7 @@ export const staffReferralApi = {
 // Storage (presigned uploads) — routes under /api/storage
 // ---------------------------------------------------------------------------
 
-/** Result of asking for a presigned PUT URL (raw — the storage endpoint is NOT envelope-wrapped). */
+/** Result of asking for a presigned PUT URL (the `data` of the ApiResponse envelope since Phase 11). */
 export interface PresignUpload {
   key: string;
   url: string;
@@ -3750,7 +3750,9 @@ export const storageApi = {
       }
       throw new ApplicationApiError(message, code, res.status);
     }
-    return JSON.parse(text) as PresignUpload;
+    const parsed = JSON.parse(text) as ApiResponse<PresignUpload> | PresignUpload;
+    // Phase 11: the backend wraps this in the envelope; a bare body is still read during a mixed deploy.
+    return ("data" in parsed && parsed.data ? parsed.data : parsed) as PresignUpload;
   },
 
   /** PUT the file bytes straight to the presigned S3 URL (never through the BFF). */

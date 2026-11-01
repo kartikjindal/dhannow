@@ -1630,6 +1630,12 @@ class ApplicationFlowIntegrationTest {
         row.setStatus(ApplicationVerificationService.PASS);
         row.setProvider("TEST");
         verificationRepository.save(row);
+        // PLAN Phase 11: disbursal also needs the acknowledged KFS for this offer (the e-sign step would have demanded it).
+        jdbc.update("insert into loan_document (application_id, type, version, pricing_version_id, amount_paise, accepted_at)"
+                + " select id, 'KFS', 1 + (select count(*) from loan_document where application_id = ? and type = 'KFS'),"
+                + " pricing_version_id, coalesce(amount_requested, sanctioned_amount_paise), now()"
+                + " from loan_application where id = ? and not exists (select 1 from loan_document"
+                + " where application_id = ? and type = 'KFS' and accepted_at is not null)", appId, appId, appId);
     }
 
     private void act(long appId, String action, String actorId, String role, String body,

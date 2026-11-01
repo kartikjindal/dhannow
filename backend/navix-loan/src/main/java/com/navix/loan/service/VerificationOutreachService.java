@@ -17,8 +17,6 @@ import com.navix.loan.repository.ApplicationEventRepository;
 import com.navix.loan.repository.ApplicationVerificationRepository;
 import com.navix.loan.repository.CustomerProfileRepository;
 import com.navix.loan.repository.LoanApplicationRepository;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
@@ -236,7 +234,8 @@ public class VerificationOutreachService {
         CustomerProfile profile = profileRepo.findByApplicationId(appId).orElse(null);
         String maskedEmail = profile == null ? null : Masking.maskEmail(profile.getEmail());
         String maskedMobile = profile == null ? null : Masking.maskPhone(profile.getMobile());
-        String url = frontendBaseUrl + "/login?next=" + URLEncoder.encode(eligibility.route(), StandardCharsets.UTF_8);
+        // PLAN Phase 10a: the link opens the app, which resumes at the step from the journey; route stays for staff.
+        String url = com.navix.common.util.AppLinks.open(frontendBaseUrl, null);
         return new ResumeLink(url, eligibility.route(), STEP_LABELS.get(type), eligibility.willReopen(),
                 maskedEmail, maskedMobile, lastSentAt(appId, type));
     }

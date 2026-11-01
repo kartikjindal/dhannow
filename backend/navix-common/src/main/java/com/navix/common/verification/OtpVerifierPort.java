@@ -26,6 +26,8 @@ public interface OtpVerifierPort {
     String LOAN_EXTENSION = "LOAN_EXTENSION";
     /** The borrower accepting a recovery EMI conversion an ADMIN approved (PLAN Phase 6c). */
     String EMI_CONVERSION = "EMI_CONVERSION";
+    /** The borrower resetting a forgotten password in the app (PLAN Phase 11). Sent only to a registered number. */
+    String PASSWORD_RESET = "PASSWORD_RESET";
 
     /**
      * @param mobile  the number the code was sent to. For every purpose except

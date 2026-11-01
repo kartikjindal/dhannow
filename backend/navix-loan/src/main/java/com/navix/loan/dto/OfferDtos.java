@@ -29,6 +29,9 @@ public final class OfferDtos {
     /**
      * Screen 5. {@code ceilingPaise} is what credit sanctioned; {@code principalPaise} is what the
      * borrower chose to draw. {@code expectedDisbursalDate} is calendar-day, 18:00 IST cut-off.
+     * The three rates (basis points, from the frozen pricing version) are for the disclosure lines;
+     * every amount is still computed by {@code LoanMath}. {@code GET …/offer/quotes} returns one of
+     * these per ladder amount the borrower may draw.
      */
     public record OfferSummaryView(
             Long applicationId,
@@ -41,7 +44,10 @@ public final class OfferDtos {
             long totalRepayablePaise,
             int tenureDays,
             LocalDate repaymentDate,
-            LocalDate expectedDisbursalDate) {
+            LocalDate expectedDisbursalDate,
+            int feeRateBps,
+            int gstRateBps,
+            int dailyRateBps) {
     }
 
     /** Screen 8: the stored Key Fact Statement and a short-lived URL to read it. */

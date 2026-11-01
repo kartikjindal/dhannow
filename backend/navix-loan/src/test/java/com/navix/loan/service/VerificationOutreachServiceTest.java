@@ -59,7 +59,7 @@ class VerificationOutreachServiceTest {
                 eventPublisher, new ObjectMapper(), journeyService, bureauChallengeOutreach);
         Field field = VerificationOutreachService.class.getDeclaredField("frontendBaseUrl");
         field.setAccessible(true);
-        field.set(service, "https://dhanboost.com");
+        field.set(service, "https://dhannow.com");
 
         ActorContext.set(new CurrentActor("ce-1", "Credit Exec", "CREDIT_EXECUTIVE"));
         lenientDefaults();
@@ -100,7 +100,7 @@ class VerificationOutreachServiceTest {
         var link = service.preview(APP, "SELFIE");
 
         assertThat(link.route()).isEqualTo("/loan/selfie");
-        assertThat(link.url()).isEqualTo("https://dhanboost.com/login?next=%2Floan%2Fselfie");
+        assertThat(link.url()).isEqualTo("https://dhannow.com/app/open");
         assertThat(link.willReopen()).isFalse();
     }
 

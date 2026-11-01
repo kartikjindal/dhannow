@@ -51,6 +51,11 @@ public class StorageAdapter implements DocumentStoragePort {
     }
 
     @Override
+    public java.util.Optional<ObjectInfo> head(String key) {
+        return storage.head(key);
+    }
+
+    @Override
     public byte[] fetch(String key) {
         return storage.fetch(key);
     }

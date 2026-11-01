@@ -671,6 +671,8 @@ public class ApplicationVerificationService {
     @Transactional(readOnly = true)
     public PresignedUpload presignUpload(Long appId, String docType, String fileName, String contentType) {
         requireApplication(appId);
+        // PLAN Phase 11: PDF, JPG or PNG only; the 5 MB cap is checked on the stored object when the key comes back.
+        DocumentStoragePort.requireUploadType(contentType);
         String ext = extensionOf(fileName, contentType);
         String key = storage.buildApplicationKey(appId, docType, ext);
         try {
@@ -688,7 +690,9 @@ public class ApplicationVerificationService {
      *  monthly salary; this generic path is for documents with no accompanying verification step. */
     private static final java.util.Set<String> UPLOADABLE_DOC_TYPES =
             java.util.Set.of("BANK_STATEMENT", BANK_PROOF, AADHAAR_FRONT, AADHAAR_BACK,
-                    AADHAAR_CARD_FRONT, AADHAAR_CARD_BACK, PAN_CARD_FRONT, PAN_CARD_BACK);
+                    AADHAAR_CARD_FRONT, AADHAAR_CARD_BACK, PAN_CARD_FRONT, PAN_CARD_BACK,
+                    // PLAN Phase 11 (A12): the app's address proof. Documents for the credit team, no check row.
+                    "ELECTRICITY_BILL", "GAS_BILL", "RENT_AGREEMENT");
 
     /**
      * Persist already-uploaded S3 keys as {@link ApplicationDocument} rows under an arbitrary
@@ -707,7 +711,7 @@ public class ApplicationVerificationService {
         if (objectKeys == null || objectKeys.isEmpty()) {
             throw new BusinessException("INVALID_INPUT", "At least one uploaded file is required");
         }
-        requireOwnApplicationKeys(appId, objectKeys);
+        requireOwnUploads(appId, objectKeys);
         String password = normalizeFilePassword(filePassword);
         int seq = 0;
         for (String key : objectKeys) {
@@ -730,6 +734,12 @@ public class ApplicationVerificationService {
      * {@link #verifySelfie}; the prefix is spelled out rather than derived from the storage port so
      * it does not depend on the adapter.
      */
+    /** {@link #requireOwnApplicationKeys}, then each object is there, at most 5 MB, PDF/JPG/PNG (PLAN Phase 11). */
+    private void requireOwnUploads(Long appId, List<String> objectKeys) {
+        requireOwnApplicationKeys(appId, objectKeys);
+        objectKeys.stream().filter(k -> k != null && !k.isBlank()).forEach(storage::requireUploaded);
+    }
+
     static void requireOwnApplicationKeys(Long appId, List<String> objectKeys) {
         String ownFolder = "applications/" + appId + "/";
         for (String key : objectKeys) {
@@ -2101,7 +2111,7 @@ public class ApplicationVerificationService {
             throw new BusinessException("INVALID_SALARY", "Monthly salary must be positive");
         }
         if (slipObjectKeys != null) {
-            requireOwnApplicationKeys(appId, slipObjectKeys);
+            requireOwnUploads(appId, slipObjectKeys);
         }
         CustomerProfile profile = profile(appId);
         Long oldSalary = profile.getMonthlySalaryPaise();
@@ -2691,6 +2701,7 @@ public class ApplicationVerificationService {
         if (objectKey == null || !objectKey.startsWith(ownFolder) || objectKey.contains("..")) {
             throw new BusinessException("INVALID_SELFIE_KEY", "That selfie upload does not belong to this application");
         }
+        storage.requireUploaded(objectKey);
     }
 
     /** Captures counted on the SELFIE row; a row staff reopened starts again from zero. */
@@ -2815,12 +2826,23 @@ public class ApplicationVerificationService {
 
     /** Record agreement consent (the 3 documents the borrower accepted). */
     @Transactional
-    public StepResult recordAgreement(Long appId, List<String> versions) {
+    public StepResult recordAgreement(Long appId, List<com.navix.loan.dto.VerificationDtos.DocVersion> versions) {
+        List<Map<String, String>> accepted = new ArrayList<>();
+        for (var v : versions == null ? List.<com.navix.loan.dto.VerificationDtos.DocVersion>of() : versions) {
+            if (v == null || v.key() == null || v.key().isBlank()) {
+                throw new BusinessException("INVALID_INPUT", "Each accepted document needs its key");
+            }
+            Map<String, String> row = new LinkedHashMap<>();
+            row.put("key", v.key().trim());
+            row.put("version", v.version() == null ? null : v.version().trim());
+            accepted.add(row);
+        }
         CustomerProfile profile = profile(appId);
         profile.setAgreementAccepted(Boolean.TRUE);
         profileRepo.save(profile);
         Map<String, Object> derived = new LinkedHashMap<>();
-        derived.put("versions", versions != null ? versions : List.of());
+        // PLAN Phase 10a W2: {key, version} per page, so a later page change is provably not what was accepted.
+        derived.put("versions", accepted);
         return view(upsert(appId, AGREEMENT, PASS, INTERNAL_PROVIDER, null, ref(appId, AGREEMENT),
                 null, null, null, derived, "Agreement accepted"));
     }
