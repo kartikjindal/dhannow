@@ -1,5 +1,6 @@
 package com.navix.config;
 
+import com.navix.common.brand.LenderProperties;
 import com.navix.common.featureflag.FeatureFlagService;
 import com.navix.sms.SmsProperties;
 import jakarta.annotation.PostConstruct;
@@ -24,6 +25,8 @@ import org.springframework.stereotype.Component;
  *   <li>{@code navix.sms.dev-echo} — returns the OTP in the HTTP response, same class of bypass.</li>
  *   <li>{@code navix.esign.provider=mock} — reports every loan agreement as signed without anyone
  *       signing anything, so the file reaches disbursement on a signature that does not exist.</li>
+ *   <li>a blank or {@code [placeholder]} {@code navix.lender.*} value — every loan document names the
+ *       lender of record, and a document naming no real lender must never reach a borrower.</li>
  * </ul>
  *
  * <p>Thrown from {@code @PostConstruct}, so it fires during bean initialisation — before the web
@@ -45,6 +48,7 @@ public class ProductionConfigGuard {
 
     private final SmsProperties sms;
     private final FeatureFlagService featureFlags;
+    private final LenderProperties lender;
 
     @Value("${NAVIX_ENV:dev}")
     private String env;
@@ -87,6 +91,10 @@ public class ProductionConfigGuard {
             throw new IllegalStateException("NAVIX_ENV=prod with navix.esign.provider=mock — every loan "
                     + "agreement would be recorded as signed without a real Aadhaar e-signature. "
                     + "Unset NAVIX_ESIGN_PROVIDER.");
+        }
+        if (!lender.unset().isEmpty()) {
+            throw new IllegalStateException("NAVIX_ENV=prod with the lender of record unset or a placeholder: "
+                    + String.join(", ", lender.unset()) + " — set the NAVIX_LENDER_* values.");
         }
     }
 

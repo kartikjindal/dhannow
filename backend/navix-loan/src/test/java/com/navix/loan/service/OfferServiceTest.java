@@ -14,7 +14,6 @@ import static org.mockito.Mockito.when;
 import com.navix.common.exception.BusinessException;
 import com.navix.common.security.ActorContext;
 import com.navix.common.security.CurrentActor;
-import com.navix.common.storage.DocumentStoragePort;
 import com.navix.loan.domain.ApplicationStatus;
 import com.navix.loan.dto.OfferDtos.DisbursalAccountRequest;
 import com.navix.loan.dto.OfferDtos.ManualEsignRequest;
@@ -23,7 +22,6 @@ import com.navix.loan.dto.OfferDtos.ReferenceInput;
 import com.navix.loan.entity.CustomerProfile;
 import com.navix.loan.entity.ApplicationDocument;
 import com.navix.loan.entity.LoanApplication;
-import com.navix.loan.pdf.SanctionLetterPdfRenderer;
 import com.navix.loan.repository.ApplicationDocumentRepository;
 import com.navix.loan.repository.ApplicationReferenceRepository;
 import com.navix.loan.repository.CustomerProfileRepository;
@@ -37,7 +35,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Base64;
-import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -61,8 +58,7 @@ class OfferServiceTest {
     @Mock private ApplicationFlowService flow;
     @Mock private JourneyService journey;
     @Mock private ProfileChangeLogger changeLogger;
-    @Mock private SanctionLetterPdfRenderer letterRenderer;
-    @Mock private DocumentStoragePort storage;
+    @Mock private LoanDocumentService documents;
     @Mock private MandateService mandateService;
 
     private OfferService offer;
@@ -72,7 +68,7 @@ class OfferServiceTest {
     @BeforeEach
     void setUp() {
         offer = new OfferService(applicationRepo, profileRepo, referenceRepo, pennyDropGuard,
-                documentRepo, verification, flow, journey, changeLogger, letterRenderer, storage, TestPricing.navix(), mandateService);
+                documentRepo, verification, flow, journey, changeLogger, documents, TestPricing.navix(), mandateService);
 
         app = new LoanApplication();
         app.setId(APP);
@@ -251,31 +247,46 @@ class OfferServiceTest {
     }
 
     @Test
-    void manualSigningStoresAPdfContainingTheDrawnSignatureAndServerIdentity() {
+    void manualSigningStoresTheSignedPackAndRecordsTheAgreement() {
         app.setAmountRequested(1_500_000L);
         Instant signedAt = Instant.parse("2026-08-09T13:17:18Z");
         byte[] signature = new byte[] {1, 2, 3, 4};
-        byte[] signedPdf = new byte[] {9, 8, 7};
         when(verification.recordManualEsign(eq(APP), anyString(), eq(null), eq(null), eq(null)))
                 .thenReturn(new StepResult(ApplicationVerificationService.ESIGN,
                         ApplicationVerificationService.PASS, "signed",
                         Map.of("signedAt", signedAt.toString())));
-        when(letterRenderer.renderSigned(any(), eq(signature), eq("Asha Kumari"), eq(signedAt)))
-                .thenReturn(signedPdf);
-        when(documentRepo.findFirstByApplicationIdAndDocTypeOrderByIdDesc(
-                APP, ApplicationVerificationService.SIGNED_AGREEMENT)).thenReturn(Optional.empty());
 
         offer.manualEsign(APP, new ManualEsignRequest(
                 "data:image/png;base64," + Base64.getEncoder().encodeToString(signature),
-                null, null, null));
+                null, null, null), "203.0.113.9");
 
-        verify(storage).store("applications/1/signed_agreement/sanction-letter-signed.pdf",
-                signedPdf, "application/pdf");
-        ArgumentCaptor<ApplicationDocument> document = ArgumentCaptor.forClass(ApplicationDocument.class);
-        verify(documentRepo).save(document.capture());
-        assertThat(document.getValue().getDocType()).isEqualTo(ApplicationVerificationService.SIGNED_AGREEMENT);
-        assertThat(document.getValue().getS3ObjectKey())
-                .isEqualTo("applications/1/signed_agreement/sanction-letter-signed.pdf");
+        verify(documents).requireKfsAcknowledged(app);
+        verify(documents).storeDrawnSignature(app, signature, "Asha Kumari", signedAt);
+        verify(documents).recordSignedAgreement(eq(app), eq(signedAt), eq("203.0.113.9"),
+                org.mockito.ArgumentMatchers.argThat(e -> "DRAWN_SIGNATURE".equals(e.get("method"))));
+        verify(journey).advance(APP, JourneyService.OfferStep.OFFER_SANCTIONED);
+    }
+
+    /** PLAN Phase 5: no e-sign session is opened until the KFS of the open offer is acknowledged. */
+    @Test
+    void eSignInitIsRefusedWhileTheKfsIsUnacknowledged() {
+        org.mockito.Mockito.doThrow(new BusinessException("KFS_NOT_ACKNOWLEDGED", "Read the KFS"))
+                .when(documents).requireKfsAcknowledged(app);
+
+        assertThatThrownBy(() -> offer.esignInit(APP, new com.navix.loan.dto.OfferDtos.EsignInitRequest("a", "b")))
+                .hasFieldOrPropertyWithValue("code", "KFS_NOT_ACKNOWLEDGED");
+        assertThatThrownBy(() -> offer.manualEsign(APP, new ManualEsignRequest("data:image/png;base64,AQ==",
+                null, null, null), null)).hasFieldOrPropertyWithValue("code", "KFS_NOT_ACKNOWLEDGED");
+        verify(verification, never()).esignInit(any(), any(), any());
+        verify(verification, never()).recordManualEsign(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void acknowledgingTheKfsMovesTheJourneyToTheSelfie() {
+        offer.acknowledgeKfs(APP, "203.0.113.9", "ua");
+
+        verify(documents).acknowledgeKfs(app, "203.0.113.9", "ua");
+        verify(journey).advance(APP, JourneyService.OfferStep.OFFER_SELFIE);
     }
 
     // ---------------------------------------------------------------- disbursal account

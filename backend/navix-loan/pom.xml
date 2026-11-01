@@ -108,6 +108,13 @@
                                 <include>com/navix/loan/domain/ProductSnapshot*</include>
                                 <include>com/navix/loan/domain/LoanLifecycle*</include>
                                 <include>com/navix/loan/service/LoanLifecycleService*</include>
+                                <include>com/navix/loan/service/LoanDocumentService*</include>
+                                <include>com/navix/loan/service/AprCalculator*</include>
+                                <include>com/navix/loan/pdf/DocumentFacts*</include>
+                                <include>com/navix/loan/pdf/PdfKit*</include>
+                                <include>com/navix/loan/pdf/KfsPdfRenderer*</include>
+                                <include>com/navix/loan/pdf/SanctionLetterPdfRenderer*</include>
+                                <include>com/navix/loan/pdf/LoanAgreementPdfRenderer*</include>
                             </includes>
                             <rules>
                                 <rule>

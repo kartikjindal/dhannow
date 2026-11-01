@@ -24,6 +24,9 @@ public interface DocumentStoragePort {
     /** Presigned URL for a direct GET download of {@code key} (short TTL). */
     String presignDownload(String key);
 
+    /** Presigned GET of {@code key} valid for {@code ttl} (loan documents: 5 minutes). */
+    String presignDownload(String key, java.time.Duration ttl);
+
     /** Server-side upload of bytes already in hand. */
     void store(String key, byte[] content, String contentType);
 

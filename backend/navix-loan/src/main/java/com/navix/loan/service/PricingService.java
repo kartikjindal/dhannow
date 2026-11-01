@@ -10,6 +10,8 @@ import com.navix.loan.entity.PricingConfig;
 import com.navix.loan.entity.ProductConfig;
 import com.navix.loan.repository.PricingConfigRepository;
 import com.navix.loan.repository.ProductConfigRepository;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
@@ -53,11 +55,16 @@ public class PricingService {
                 .orElseThrow(() -> new BusinessException("PRICING_NOT_CONFIGURED", "No active product version"));
     }
 
-    /** Freeze the ACTIVE versions onto an offer. Called when the application is sanctioned. */
+    /**
+     * Freeze the ACTIVE versions onto an offer and open its validity window (CC-02). Called when the
+     * application is sanctioned or re-applied, and by the KFS re-quote of a lapsed offer.
+     */
     @Transactional(readOnly = true)
     public void freeze(LoanApplication app) {
+        ProductSnapshot product = activeProduct();
         app.setPricingVersionId(activePricing().versionId());
-        app.setProductVersionId(activeProduct().versionId());
+        app.setProductVersionId(product.versionId());
+        app.setOfferValidUntil(Instant.now().plus(Duration.ofDays(product.offerValidityDays())));
     }
 
     /** The pricing version {@code versionId}; null → the navix terms. */

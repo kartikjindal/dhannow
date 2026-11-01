@@ -55,12 +55,16 @@ public class ProductConfig extends BaseAuditEntity {
     @Column(name = "overdue_review_dpd", nullable = false)
     private Integer overdueReviewDpd;
 
+    /** Days an offer stays open before the next KFS re-quotes it (V100, CC-02). */
+    @Column(name = "offer_validity_days", nullable = false)
+    private int offerValidityDays = 3;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
     private ConfigStatus status;
 
     public ProductSnapshot toSnapshot() {
         return new ProductSnapshot(getId(), Arrays.asList(allowedAmountsPaise), minPaise, maxPaise,
-                dueCutoffTime, ZoneId.of(timezone), overdueReviewDpd);
+                dueCutoffTime, ZoneId.of(timezone), overdueReviewDpd, offerValidityDays);
     }
 }

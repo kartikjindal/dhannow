@@ -31,6 +31,11 @@ public class StorageAdapter implements DocumentStoragePort {
     }
 
     @Override
+    public String presignDownload(String key, java.time.Duration ttl) {
+        return storage.presignDownload(key, ttl);
+    }
+
+    @Override
     public void store(String key, byte[] content, String contentType) {
         storage.store(key, content, contentType);
     }

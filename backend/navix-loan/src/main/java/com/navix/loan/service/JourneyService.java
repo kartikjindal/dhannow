@@ -78,6 +78,8 @@ public class JourneyService {
         OFFER_DIGILOCKER("digilocker"),
         OFFER_REFERENCES("references"),
         OFFER_SUMMARY("summary"),
+        /** The Key Fact Statement, acknowledged before e-sign (PLAN Phase 5, board KfsView). */
+        OFFER_KFS("kfs"),
         OFFER_SELFIE("selfie"),
         OFFER_ADDRESS("address"),
         OFFER_SANCTION_LETTER("sanction-letter"),
@@ -116,6 +118,7 @@ public class JourneyService {
     private final ApplicationReferenceRepository referenceRepository;
     private final ApplicationDocumentRepository documentRepository;
     private final MandateService mandateService;
+    private final com.navix.loan.repository.LoanDocumentRepository loanDocumentRepository;
 
     @Transactional(readOnly = true)
     public JourneyView current(Long appId) {
@@ -315,7 +318,11 @@ public class JourneyService {
         // signature: a pointer already on the disbursal account (which the old derivation allowed for
         // an abandoned Signzy session) must not override an unsigned letter.
         if (resolved.ordinal() > OfferStep.OFFER_SANCTION_LETTER.ordinal() && !signed(app.getId())) {
-            return OfferStep.OFFER_SANCTION_LETTER;
+            return kfsAcknowledged(app) ? OfferStep.OFFER_SANCTION_LETTER : OfferStep.OFFER_KFS;
+        }
+        // Nor past an unacknowledged KFS while the pack is unsigned (e-sign refuses it anyway).
+        if (resolved.ordinal() > OfferStep.OFFER_KFS.ordinal() && !signed(app.getId()) && !kfsAcknowledged(app)) {
+            return OfferStep.OFFER_KFS;
         }
         // Signing now lives on the agreement page. Historical rows may still hold the retired
         // OFFER_ESIGN pointer; normalize them instead of reopening a separate signing screen.
@@ -352,6 +359,9 @@ public class JourneyService {
         if (referenceRepository.findByApplicationIdOrderBySlotAsc(app.getId()).size() < 2) {
             return OfferStep.OFFER_REFERENCES;
         }
+        if (!signed(app.getId()) && !kfsAcknowledged(app)) {
+            return OfferStep.OFFER_KFS;
+        }
         if (!checks.contains(ApplicationVerificationService.SELFIE)) {
             return OfferStep.OFFER_SELFIE;
         }
@@ -381,6 +391,13 @@ public class JourneyService {
                 .filter(v -> v.getReopenedAt() == null)
                 .map(ApplicationVerification::getCheckType)
                 .collect(Collectors.toSet());
+    }
+
+    /** Whether the offer's current KFS is acknowledged (same amount, pricing, unexpired offer). */
+    private boolean kfsAcknowledged(LoanApplication app) {
+        return LoanDocumentService.kfsAcknowledged(app, loanDocumentRepository
+                .findFirstByApplicationIdAndTypeOrderByVersionDesc(app.getId(), com.navix.loan.domain.LoanDocumentType.KFS)
+                .orElse(null), java.time.Instant.now());
     }
 
     /** Whether the sanction letter is actually signed — an ESIGN row in {@code PASS}, nothing less. */

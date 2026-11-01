@@ -67,7 +67,7 @@ public class SignzyContractWebhookController {
         }
         Long appId = rows.get(0).getApplicationId();
         try {
-            offer.esignStatus(appId);
+            offer.esignStatus(appId, null); // no borrower IP on a provider callback
         } catch (RuntimeException resolveFailure) {
             // Never fail a callback: the borrower's own poll is the path that has to work.
             log.warn("Signzy contract callback could not resolve application {}: {}",

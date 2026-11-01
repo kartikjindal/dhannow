@@ -3,7 +3,6 @@ package com.navix.loan.service;
 import com.navix.common.exception.BusinessException;
 import com.navix.common.exception.ResourceNotFoundException;
 import com.navix.common.security.ActorContext;
-import com.navix.common.storage.DocumentStoragePort;
 import com.navix.loan.domain.ApplicationStatus;
 import com.navix.loan.dto.OfferDtos.DisbursalAccountRequest;
 import com.navix.loan.dto.OfferDtos.DisbursalAccountView;
@@ -12,12 +11,11 @@ import com.navix.loan.dto.OfferDtos.OfferSummaryView;
 import com.navix.loan.dto.OfferDtos.ManualEsignRequest;
 import com.navix.loan.dto.OfferDtos.ReferenceInput;
 import com.navix.loan.dto.OfferDtos.ReferenceView;
+import com.navix.loan.dto.LoanDocumentDtos.KfsView;
 import com.navix.loan.dto.OfferDtos.SanctionLetterView;
-import com.navix.loan.entity.ApplicationDocument;
 import com.navix.loan.entity.ApplicationReference;
 import com.navix.loan.entity.CustomerProfile;
 import com.navix.loan.entity.LoanApplication;
-import com.navix.loan.pdf.SanctionLetterPdfRenderer;
 import com.navix.loan.repository.ApplicationDocumentRepository;
 import com.navix.loan.repository.ApplicationReferenceRepository;
 import com.navix.loan.repository.CustomerProfileRepository;
@@ -31,11 +29,11 @@ import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -67,19 +65,9 @@ public class OfferService {
     private final ApplicationFlowService flow;
     private final JourneyService journey;
     private final ProfileChangeLogger changeLogger;
-    private final SanctionLetterPdfRenderer letterRenderer;
-    private final DocumentStoragePort storage;
+    private final LoanDocumentService documents;
     private final PricingService pricing;
     private final MandateService mandateService;
-
-    @Value("${navix.grievance.officer-name:Lalit Kumar}")
-    private String grievanceOfficerName;
-
-    @Value("${navix.grievance.officer-phone:8510028510}")
-    private String grievanceOfficerPhone;
-
-    @Value("${navix.grievance.officer-email:grievance@dhanboost.com}")
-    private String grievanceOfficerEmail;
 
     // ---------------------------------------------------------------- 1. amount
 
@@ -221,114 +209,105 @@ public class OfferService {
                 : nowIst.toLocalDate().plusDays(1);
     }
 
+    // ---------------------------------------------------------------- 6. KFS
+
+    /**
+     * The Key Fact Statement for this offer (PLAN Phase 5, journey step KFS after the summary): a link
+     * to read it and whether it is acknowledged. A lapsed offer is re-quoted here (CC-02).
+     */
+    @Transactional
+    public KfsView kfs(Long appId) {
+        KfsView view = documents.kfs(requireSanctioned(appId));
+        journey.advance(appId, JourneyService.OfferStep.OFFER_KFS);
+        return view;
+    }
+
+    /** The borrower acknowledges the KFS; required before e-sign. */
+    @Transactional
+    public KfsView acknowledgeKfs(Long appId, String ip, String userAgent) {
+        KfsView view = documents.acknowledgeKfs(requireSanctioned(appId), ip, userAgent);
+        journey.advance(appId, JourneyService.OfferStep.OFFER_SELFIE);
+        return view;
+    }
+
     // ---------------------------------------------------------------- 8. sanction letter
 
     /**
-     * Render (or re-render) the Key Fact Statement and store it to S3 as a {@code SANCTION_LETTER}
-     * document, returning a presigned URL for the borrower to read (screen 8).
-     *
-     * <p>Regenerated on every visit rather than cached: the borrower may have changed their drawdown
-     * amount since they last looked, and a stale letter is one they'd then eSign.
+     * Issue the sanction letter and loan agreement (screen 8) and return a short-lived link to the
+     * pack the borrower signs. Re-issued on every visit: the borrower may have changed their drawdown
+     * amount since they last looked, and a stale pack is one they'd then e-sign.
      */
     @Transactional
     public SanctionLetterView sanctionLetter(Long appId) {
-        LoanApplication app = requireSanctioned(appId);
-        CustomerProfile p = profileRepo.findByApplicationId(appId).orElse(null);
-        byte[] pdf = letterRenderer.render(agreementFacts(app, p));
-
-        String key = "applications/" + appId + "/sanction_letter/sanction-letter.pdf";
-        try {
-            storage.store(key, pdf, "application/pdf");
-        } catch (RuntimeException storageFailure) {
-            // Unlike the credit brief, this one must NOT degrade quietly: the borrower has to read
-            // and sign this document, so a letter they can't open has to say so rather than let
-            // them walk into an eSign screen with nothing behind it.
-            log.error("Sanction letter storage failed for application {}: {}", appId, storageFailure.toString());
-            throw new BusinessException("SANCTION_LETTER_UNAVAILABLE",
-                    "We couldn't prepare your sanction letter just now. Please try again in a moment.");
-        }
-        ApplicationDocument doc = documentRepo
-                .findFirstByApplicationIdAndDocTypeOrderByIdDesc(appId,
-                        ApplicationVerificationService.SANCTION_LETTER)
-                .orElseGet(ApplicationDocument::new);
-        doc.setApplicationId(appId);
-        doc.setDocType(ApplicationVerificationService.SANCTION_LETTER);
-        doc.setFileName("sanction-letter.pdf");
-        doc.setContentType("application/pdf");
-        doc.setSizeBytes((long) pdf.length);
-        doc.setS3ObjectKey(key);
-        doc.setData(null); // S3-backed: keep the "exactly one of data / s3ObjectKey" invariant
-        documentRepo.save(doc);
-
+        SanctionLetterView view = documents.signingPack(requireSanctioned(appId));
         journey.advance(appId, JourneyService.OfferStep.OFFER_SANCTION_LETTER);
-        return new SanctionLetterView(doc.getId(), storage.presignDownload(key));
+        return view;
     }
 
     // ---------------------------------------------------------------- 9. eSign
 
     /**
-     * Start Aadhaar e-sign of the letter (screen 9) — returns the provider URL to redirect the borrower
+     * Start Aadhaar e-sign of the pack (screen 9) — returns the provider URL to redirect the borrower
      * to in {@code derived.url}, or {@code derived.fallback=true} when the provider is unavailable and
-     * they should draw a signature instead. The verification service owns the port call and audit rows.
+     * they should draw a signature instead. The KFS must be acknowledged on an open offer first.
      */
     @Transactional
     public StepResult esignInit(Long appId, EsignInitRequest req) {
-        requireSanctioned(appId);
+        documents.requireKfsAcknowledged(requireSanctioned(appId));
         return verification.esignInit(appId, req.successRedirectUrl(), req.failureRedirectUrl());
     }
 
     /**
      * Poll the signing session. The journey only advances once the signature is actually captured — a
-     * PENDING poll must not let the borrower past the one step that gates disbursement.
+     * PENDING poll must not let the borrower past the one step that gates disbursement. The signed
+     * copy is then recorded as the {@code AGREEMENT} document.
      */
     @Transactional
-    public StepResult esignStatus(Long appId) {
-        requireSanctioned(appId);
+    public StepResult esignStatus(Long appId, String ip) {
+        LoanApplication app = requireSanctioned(appId);
         StepResult result = verification.esignStatus(appId);
         if (ApplicationVerificationService.PASS.equals(result.status())) {
+            documents.recordSignedAgreement(app, signedAt(result), ip, evidence("AADHAAR_ESIGN", result));
             journey.advance(appId, JourneyService.OfferStep.OFFER_SANCTIONED);
         }
         return result;
     }
 
     @Transactional
-    public StepResult manualEsign(Long appId, ManualEsignRequest req) {
+    public StepResult manualEsign(Long appId, ManualEsignRequest req, String ip) {
         LoanApplication app = requireSanctioned(appId);
+        documents.requireKfsAcknowledged(app);
         StepResult result = verification.recordManualEsign(appId, req.signatureDataUrl(),
                 req.latitude(), req.longitude(), req.accuracyMeters());
 
         CustomerProfile profile = profileRepo.findByApplicationId(appId).orElse(null);
-        String signedAtValue = String.valueOf(result.derived().get("signedAt"));
-        Instant signedAt = Instant.parse(signedAtValue);
+        Instant signedAt = signedAt(result);
         byte[] signature = Base64.getDecoder().decode(
                 req.signatureDataUrl().substring(req.signatureDataUrl().indexOf(',') + 1));
-        byte[] signedPdf = letterRenderer.renderSigned(
-                agreementFacts(app, profile), signature,
-                profile != null ? profile.getFullName() : "Borrower", signedAt);
-        String key = "applications/" + appId + "/signed_agreement/sanction-letter-signed.pdf";
-        try {
-            storage.store(key, signedPdf, "application/pdf");
-        } catch (RuntimeException storageFailure) {
-            log.error("Signed agreement storage failed for application {}: {}",
-                    appId, storageFailure.toString());
-            throw new BusinessException("SIGNED_AGREEMENT_UNAVAILABLE",
-                    "We couldn't save your signed agreement just now. Please try again.");
-        }
-        ApplicationDocument document = documentRepo
-                .findFirstByApplicationIdAndDocTypeOrderByIdDesc(
-                        appId, ApplicationVerificationService.SIGNED_AGREEMENT)
-                .orElseGet(ApplicationDocument::new);
-        document.setApplicationId(appId);
-        document.setDocType(ApplicationVerificationService.SIGNED_AGREEMENT);
-        document.setFileName("sanction-letter-signed.pdf");
-        document.setContentType("application/pdf");
-        document.setSizeBytes((long) signedPdf.length);
-        document.setS3ObjectKey(key);
-        document.setData(null);
-        documentRepo.save(document);
+        documents.storeDrawnSignature(app, signature, profile != null ? profile.getFullName() : "Borrower", signedAt);
+        documents.recordSignedAgreement(app, signedAt, ip, evidence("DRAWN_SIGNATURE", result));
 
         journey.advance(appId, JourneyService.OfferStep.OFFER_SANCTIONED);
         return result;
+    }
+
+    private static Instant signedAt(StepResult result) {
+        Object at = result.derived() == null ? null : result.derived().get("signedAt");
+        return at == null ? null : Instant.parse(String.valueOf(at));
+    }
+
+    /** What the signature record keeps: how it was signed and the provider's reference, never the URL. */
+    private static Map<String, Object> evidence(String method, StepResult result) {
+        Map<String, Object> e = new LinkedHashMap<>();
+        e.put("method", method);
+        if (result.derived() != null) {
+            result.derived().forEach((k, v) -> {
+                if (!"url".equals(k)) {
+                    e.put(k, v);
+                }
+            });
+        }
+        return e;
     }
 
     // ---------------------------------------------------------------- 11. disbursal account
@@ -579,38 +558,8 @@ public class OfferService {
      * disbursal; the final date is fixed when the disbursal is confirmed (CC-01). Navix: the credit
      * team's approved date.
      */
-    private static LocalDate repaymentDate(LoanApplication app, LoanMath math, LocalDate expectedDisbursal) {
+    static LocalDate repaymentDate(LoanApplication app, LoanMath math, LocalDate expectedDisbursal) {
         return math.pricing().upfront() ? math.dueDate(expectedDisbursal, null) : app.getApprovedRepaymentDate();
-    }
-
-    private SanctionLetterPdfRenderer.Facts agreementFacts(
-            LoanApplication app, CustomerProfile profile) {
-        LoanMath math = pricing.mathFor(app);
-        long principal = drawdownOf(app);
-        int tenure = tenureDays(app, math);
-        return new SanctionLetterPdfRenderer.Facts(
-                app.getId(),
-                profile != null ? profile.getFullName() : null,
-                profile != null ? profile.getPan() : null,
-                profile != null ? profile.getMobile() : null,
-                principal,
-                math.processingFeePaise(principal),
-                math.gstPaise(principal),
-                math.netDisbursedPaise(principal),
-                math.interestPaise(principal, tenure),
-                math.totalRepayablePaise(principal, tenure),
-                tenure,
-                app.getSanctionedAt() != null
-                        ? LocalDate.ofInstant(app.getSanctionedAt(), IST) : LocalDate.now(IST),
-                repaymentDate(app, math, expectedDisbursalDate(ZonedDateTime.now(IST))),
-                maskAccount(firstNonBlank(app.getDisbursalAccountNumber(),
-                        profile != null ? profile.getSalaryAccountNumber() : null)),
-                grievanceOfficerName, grievanceOfficerPhone, grievanceOfficerEmail);
-    }
-
-    private static String maskAccount(String account) {
-        String digits = digits(account);
-        return digits.length() < 4 ? null : "•••• " + digits.substring(digits.length() - 4);
     }
 
     private static String digits(String s) {

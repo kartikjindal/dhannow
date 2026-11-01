@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import static org.mockito.Mockito.mock;
 
+import com.navix.common.brand.LenderProperties;
 import com.navix.common.featureflag.FeatureFlagService;
 import com.navix.sms.SmsProperties;
 import org.junit.jupiter.api.Test;
@@ -25,7 +26,15 @@ class ProductionConfigGuardTest {
 
     private static ProductionConfigGuard guard(String env, String secret, boolean mock, boolean devEcho,
                                                String esignProvider) {
-        ProductionConfigGuard g = new ProductionConfigGuard(sms(mock, devEcho), flags(false));
+        return guard(env, secret, mock, devEcho, esignProvider, LENDER);
+    }
+
+    private static final LenderProperties LENDER = new LenderProperties("Example Lender Private Limited",
+            "1 Example Road, Gurugram 122001", "Registration EX-0001", "1800 000 000, care@lender.example");
+
+    private static ProductionConfigGuard guard(String env, String secret, boolean mock, boolean devEcho,
+                                               String esignProvider, LenderProperties lender) {
+        ProductionConfigGuard g = new ProductionConfigGuard(sms(mock, devEcho), flags(false), lender);
         ReflectionTestUtils.setField(g, "env", env);
         ReflectionTestUtils.setField(g, "secret", secret);
         ReflectionTestUtils.setField(g, "esignProvider", esignProvider);
@@ -88,7 +97,7 @@ class ProductionConfigGuardTest {
     }
 
     private static ProductionConfigGuard digioGuard(String env, boolean flagOn) {
-        ProductionConfigGuard g = new ProductionConfigGuard(sms(false, false), flags(flagOn));
+        ProductionConfigGuard g = new ProductionConfigGuard(sms(false, false), flags(flagOn), LENDER);
         ReflectionTestUtils.setField(g, "env", env);
         ReflectionTestUtils.setField(g, "secret", STRONG_SECRET);
         ReflectionTestUtils.setField(g, "esignProvider", "signzy");
@@ -124,6 +133,32 @@ class ProductionConfigGuardTest {
     @Test
     void prod_bootsWhenProperlyConfigured() {
         assertThatCode(() -> guard("prod", STRONG_SECRET, false, false).check())
+                .doesNotThrowAnyException();
+    }
+
+    /** PLAN Phase 5: every loan document names the lender, so a placeholder or blank lender fails the boot. */
+    @Test
+    void prod_rejectsAPlaceholderLender() {
+        LenderProperties placeholder = new LenderProperties("[lender legal name]", LENDER.address(),
+                LENDER.registration(), LENDER.contact());
+        assertThatThrownBy(() -> guard("prod", STRONG_SECRET, false, false, "signzy", placeholder).check())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("navix.lender.legal-name");
+    }
+
+    @Test
+    void prod_rejectsABlankLenderValue() {
+        LenderProperties blank = new LenderProperties(LENDER.legalName(), LENDER.address(), " ", null);
+        assertThatThrownBy(() -> guard("prod", STRONG_SECRET, false, false, "signzy", blank).check())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("navix.lender.registration")
+                .hasMessageContaining("navix.lender.contact");
+    }
+
+    @Test
+    void dev_bootsWithThePlaceholderLender() {
+        LenderProperties placeholder = new LenderProperties("[lender legal name]", "[a]", "[r]", "[c]");
+        assertThatCode(() -> guard("dev", STRONG_SECRET, false, false, "signzy", placeholder).check())
                 .doesNotThrowAnyException();
     }
 }

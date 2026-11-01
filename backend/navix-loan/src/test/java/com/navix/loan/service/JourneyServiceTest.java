@@ -41,6 +41,8 @@ class JourneyServiceTest {
     private com.navix.loan.repository.ApplicationDocumentRepository documentRepository;
     @Mock
     private MandateService mandateService;
+    @Mock
+    private com.navix.loan.repository.LoanDocumentRepository loanDocumentRepository;
 
     private JourneyService journey;
     private LoanApplication app;
@@ -48,7 +50,7 @@ class JourneyServiceTest {
     @BeforeEach
     void setUp() {
         journey = new JourneyService(applicationRepository, profileRepository, verificationRepository,
-                referenceRepository, documentRepository, mandateService);
+                referenceRepository, documentRepository, mandateService, loanDocumentRepository);
         app = new LoanApplication();
         app.setId(APP);
         app.setCustomerId(7L);
@@ -302,7 +304,7 @@ class JourneyServiceTest {
 
         assertThat(journey.current(APP).step()).isEqualTo("OFFER_AMOUNT");
         assertThat(journey.current(APP).route()).isEqualTo("/loan/amount");
-        assertThat(journey.current(APP).total()).isEqualTo(10);
+        assertThat(journey.current(APP).total()).isEqualTo(11);
         assertThat(journey.current(APP).steps()).doesNotContain("OFFER_ESIGN");
     }
 
@@ -320,7 +322,46 @@ class JourneyServiceTest {
         when(referenceRepository.findByApplicationIdOrderBySlotAsc(APP))
                 .thenReturn(List.of(new com.navix.loan.entity.ApplicationReference(),
                         new com.navix.loan.entity.ApplicationReference()));
+        // PLAN Phase 5: the KFS (after the summary) holds until it is acknowledged.
+        assertThat(journey.current(APP).step()).isEqualTo("OFFER_KFS");
+        assertThat(journey.current(APP).route()).isEqualTo("/loan/kfs");
+
+        kfsAcknowledged();
         assertThat(journey.current(APP).step()).isEqualTo("OFFER_SELFIE");
+    }
+
+    /** PLAN Phase 5: a pointer past the KFS never carries an unsigned borrower past an unacknowledged KFS. */
+    @Test
+    void anUnacknowledgedKfsHoldsTheBorrowerBeforeTheSanctionLetter() {
+        app.setStatus(ApplicationStatus.SANCTIONED);
+        app.setAmountRequested(1_500_000L);
+        app.setJourneyStep("OFFER_DISBURSAL_ACCOUNT");
+        when(verificationRepository.findByApplicationIdOrderByIdAsc(APP)).thenReturn(List.of(
+                check(ApplicationVerificationService.AADHAAR),
+                check(ApplicationVerificationService.SELFIE),
+                check(ApplicationVerificationService.ADDRESS)));
+        when(referenceRepository.findByApplicationIdOrderBySlotAsc(APP)).thenReturn(List.of(
+                new com.navix.loan.entity.ApplicationReference(),
+                new com.navix.loan.entity.ApplicationReference()));
+
+        assertThat(journey.current(APP).step()).isEqualTo("OFFER_KFS");
+        app.setJourneyStep("OFFER_ADDRESS");
+        assertThat(journey.current(APP).step()).isEqualTo("OFFER_KFS");
+
+        kfsAcknowledged();
+        assertThat(journey.current(APP).step()).isEqualTo("OFFER_SANCTION_LETTER");
+        // An acknowledgement for another amount is not this offer's.
+        app.setAmountRequested(1_000_000L);
+        assertThat(journey.current(APP).step()).isEqualTo("OFFER_KFS");
+    }
+
+    private void kfsAcknowledged() {
+        com.navix.loan.entity.LoanDocument kfs = new com.navix.loan.entity.LoanDocument();
+        kfs.setType(com.navix.loan.domain.LoanDocumentType.KFS);
+        kfs.setAmountPaise(1_500_000L);
+        kfs.setAcceptedAt(Instant.now());
+        when(loanDocumentRepository.findFirstByApplicationIdAndTypeOrderByVersionDesc(APP,
+                com.navix.loan.domain.LoanDocumentType.KFS)).thenReturn(Optional.of(kfs));
     }
 
     /** A FAILED check still counts as attempted — Phase 3 failures pass through (decision 11). */
@@ -358,6 +399,7 @@ class JourneyServiceTest {
         app.setStatus(ApplicationStatus.SANCTIONED);
         app.setAmountRequested(1_500_000L);
         app.setJourneyStep("OFFER_ESIGN");
+        kfsAcknowledged();
         when(verificationRepository.findByApplicationIdOrderByIdAsc(APP)).thenReturn(List.of(
                 check(ApplicationVerificationService.AADHAAR),
                 check(ApplicationVerificationService.SELFIE),
@@ -384,7 +426,7 @@ class JourneyServiceTest {
 
         assertThat(journey.current(APP).steps())
                 .doesNotContain("OFFER_DIGILOCKER", "OFFER_SELFIE", "OFFER_ADDRESS", "OFFER_REFERENCES", "OFFER_ESIGN");
-        assertThat(journey.current(APP).total()).isEqualTo(6);
+        assertThat(journey.current(APP).total()).isEqualTo(7);
     }
 
     // ---- V74: staff "send the customer a link" reopen -----------------------
@@ -432,6 +474,7 @@ class JourneyServiceTest {
         app.setStatus(ApplicationStatus.SANCTIONED);
         app.setAmountRequested(1_500_000L);
         app.setJourneyStep("OFFER_DISBURSAL_ACCOUNT"); // the pointer the old derivation let them reach
+        kfsAcknowledged();
         ApplicationVerification pending = check(ApplicationVerificationService.ESIGN);
         pending.setStatus(ApplicationVerificationService.PENDING);
         when(verificationRepository.findByApplicationIdOrderByIdAsc(APP)).thenReturn(List.of(

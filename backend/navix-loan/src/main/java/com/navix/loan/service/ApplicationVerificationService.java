@@ -258,6 +258,10 @@ public class ApplicationVerificationService {
     private final RiskPort risk;
     private final EligibilityService eligibilityService;
     private final ObjectMapper objectMapper;
+
+    /** The brand on the provider's signing page (navix.brand.name, the one brand config). */
+    @org.springframework.beans.factory.annotation.Value("${navix.brand.name:DhanNow}")
+    private String brandName = "DhanNow";
     private final CreditBriefService creditBriefService;
     private final ApplicationEventPublisher eventPublisher;
     private final ProfileChangeLogger changeLogger;
@@ -2771,7 +2775,7 @@ public class ApplicationVerificationService {
                     ref,
                     successRedirectUrl,
                     failureRedirectUrl,
-                    "DhanBoost Loan Agreement — application " + appId,
+                    brandName + " loan agreement, application " + appId,
                     null));
         } catch (RuntimeException providerUnavailable) {
             // A silent catch here is why every eSign failure looked identical from the outside — the

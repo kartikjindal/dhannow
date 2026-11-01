@@ -4,6 +4,7 @@ import com.navix.common.exception.BusinessException;
 import com.navix.common.security.ActorContext;
 import com.navix.common.web.ApiResponse;
 import com.navix.loan.dto.ApplicationDtos.ApplicationView;
+import com.navix.loan.dto.LoanDocumentDtos.KfsView;
 import com.navix.loan.dto.OfferDtos.ChooseAmountRequest;
 import com.navix.loan.dto.OfferDtos.DisbursalAccountRequest;
 import com.navix.loan.dto.OfferDtos.DisbursalAccountView;
@@ -16,6 +17,7 @@ import com.navix.loan.dto.OfferDtos.ManualEsignRequest;
 import com.navix.loan.service.ApplicationFlowService;
 import com.navix.loan.service.ApplicationVerificationService.StepResult;
 import com.navix.loan.service.OfferService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -67,7 +69,21 @@ public class OfferController {
         return ApiResponse.ok(offer.summary(id));
     }
 
-    /** Renders the Key Fact Statement to S3 and returns a short-lived URL to read it. */
+    /** The offer's Key Fact Statement (issued or reused) and whether it is acknowledged. */
+    @PostMapping("/kfs")
+    public ApiResponse<KfsView> kfs(@PathVariable Long id) {
+        authorize(id);
+        return ApiResponse.ok(offer.kfs(id));
+    }
+
+    /** Acknowledge the Key Fact Statement; required before e-sign. */
+    @PostMapping("/kfs/ack")
+    public ApiResponse<KfsView> acknowledgeKfs(@PathVariable Long id, HttpServletRequest request) {
+        authorize(id);
+        return ApiResponse.ok(offer.acknowledgeKfs(id, clientIp(request), request.getHeader("User-Agent")));
+    }
+
+    /** Issues the sanction letter and agreement and returns a short-lived URL to the pack to sign. */
     @PostMapping("/sanction-letter")
     public ApiResponse<SanctionLetterView> sanctionLetter(@PathVariable Long id) {
         authorize(id);
@@ -84,9 +100,9 @@ public class OfferController {
 
     /** Poll the Aadhaar e-sign session after the provider redirects the borrower back. */
     @GetMapping("/esign/status")
-    public ApiResponse<StepResult> esignStatus(@PathVariable Long id) {
+    public ApiResponse<StepResult> esignStatus(@PathVariable Long id, HttpServletRequest request) {
         authorize(id);
-        return ApiResponse.ok(offer.esignStatus(id));
+        return ApiResponse.ok(offer.esignStatus(id, clientIp(request)));
     }
 
     /** Register (or reuse) the Digio eMandate — {@code derived.url} is where to send the borrower. */
@@ -105,9 +121,10 @@ public class OfferController {
 
     /** Fallback: record a signature the borrower drew in the app. */
     @PostMapping("/esign")
-    public ApiResponse<StepResult> esign(@PathVariable Long id, @RequestBody ManualEsignRequest req) {
+    public ApiResponse<StepResult> esign(@PathVariable Long id, @RequestBody ManualEsignRequest req,
+                                         HttpServletRequest request) {
         authorize(id);
-        return ApiResponse.ok(offer.manualEsign(id, req));
+        return ApiResponse.ok(offer.manualEsign(id, req, clientIp(request)));
     }
 
     @GetMapping("/disbursal-account")
@@ -122,6 +139,19 @@ public class OfferController {
             @PathVariable Long id, @Valid @RequestBody DisbursalAccountRequest req) {
         authorize(id);
         return ApiResponse.ok(ApplicationView.of(offer.confirmDisbursalAccount(id, req)));
+    }
+
+    /**
+     * The borrower's IP for the acceptance record: the last X-Forwarded-For hop (the one the load
+     * balancer appended, so not client-supplied), else the socket peer.
+     */
+    static String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            String[] hops = forwarded.split(",");
+            return hops[hops.length - 1].trim();
+        }
+        return request.getRemoteAddr();
     }
 
     /** Borrower-only + ownership: a BORROWER may act only on their own application; ADMIN on any. */

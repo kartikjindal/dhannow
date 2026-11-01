@@ -178,6 +178,10 @@ public class LoanApplication {
     @Column(name = "product_version_id")
     private Long productVersionId;
 
+    /** When this offer lapses (CC-02, V100): set with the frozen versions; null = no expiry (pre-V100). */
+    @Column(name = "offer_valid_until")
+    private Instant offerValidUntil;
+
     @PrePersist
     void defaultCreatedAt() {
         if (createdAt == null) {

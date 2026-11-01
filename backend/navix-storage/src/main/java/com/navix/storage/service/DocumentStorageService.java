@@ -88,12 +88,17 @@ public class DocumentStorageService {
 
     /** Presigned URL for a direct GET download of the given key. */
     public String presignDownload(String key) {
+        return presignDownload(key, ttl());
+    }
+
+    /** Presigned URL for a direct GET download of the given key, valid for {@code ttl}. */
+    public String presignDownload(String key, Duration ttl) {
         GetObjectRequest objectRequest = GetObjectRequest.builder()
                 .bucket(props.bucket())
                 .key(key)
                 .build();
         GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
-                .signatureDuration(ttl())
+                .signatureDuration(ttl)
                 .getObjectRequest(objectRequest)
                 .build();
         return s3Presigner.presignGetObject(presignRequest).url().toString();

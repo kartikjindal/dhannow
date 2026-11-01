@@ -9,14 +9,12 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.navix.common.storage.DocumentStoragePort;
 import com.navix.loan.domain.ApplicationStatus;
 import com.navix.loan.dto.OfferDtos.DisbursalAccountRequest;
 import com.navix.loan.entity.ApplicationDocument;
 import com.navix.loan.entity.ApplicationVerification;
 import com.navix.loan.entity.CustomerProfile;
 import com.navix.loan.entity.LoanApplication;
-import com.navix.loan.pdf.SanctionLetterPdfRenderer;
 import com.navix.loan.repository.ApplicationDocumentRepository;
 import com.navix.loan.repository.ApplicationReferenceRepository;
 import com.navix.loan.repository.ApplicationVerificationRepository;
@@ -49,8 +47,8 @@ class MandateJourneyTest {
     @Mock private ApplicationFlowService flow;
     @Mock private JourneyService journeyMock;
     @Mock private ProfileChangeLogger changeLogger;
-    @Mock private SanctionLetterPdfRenderer letterRenderer;
-    @Mock private DocumentStoragePort storage;
+    @Mock private LoanDocumentService documents;
+    @Mock private com.navix.loan.repository.LoanDocumentRepository loanDocumentRepo;
     @Mock private MandateService mandateService;
 
     private OfferService offer;
@@ -60,10 +58,10 @@ class MandateJourneyTest {
     @BeforeEach
     void setUp() {
         offer = new OfferService(applicationRepo, profileRepo, referenceRepo, pennyDropGuard, documentRepo,
-                verification, flow, journeyMock, changeLogger, letterRenderer, storage, TestPricing.navix(),
+                verification, flow, journeyMock, changeLogger, documents, TestPricing.navix(),
                 mandateService);
         journey = new JourneyService(applicationRepo, profileRepo, verificationRepo, referenceRepo,
-                documentRepo, mandateService);
+                documentRepo, mandateService, loanDocumentRepo);
 
         app = new LoanApplication();
         app.setId(APP);

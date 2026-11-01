@@ -66,6 +66,10 @@ class ApplicationFlowIntegrationTest {
     @MockBean
     private ApplicationVerificationService verificationService;
 
+    /** S3 is offline in tests; documents are stored "nowhere" and read back as a stub PDF. */
+    @MockBean
+    private com.navix.common.storage.DocumentStoragePort storage;
+
     @BeforeEach
     void allowSubmitKyc() {
         when(verificationService.allRequiredPassed(anyLong())).thenReturn(true);
@@ -73,6 +77,164 @@ class ApplicationFlowIntegrationTest {
         // V76 seeds onboarding-paused ON (the business decision for prod); this test walks the full
         // intake lifecycle, which that flag deliberately refuses. Dev-only flags are SQL-only.
         jdbc.update("update feature_flag set enabled = false where flag_key = 'onboarding-paused'");
+        when(storage.presignDownload(org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(i -> "https://s3.test/" + i.getArgument(0));
+        when(storage.presignDownload(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(i -> "https://s3.test/" + i.getArgument(0));
+        when(storage.fetch(org.mockito.ArgumentMatchers.anyString())).thenReturn("%PDF-signed".getBytes());
+    }
+
+    // ---- PLAN Phase 5: documents ------------------------------------------------------
+
+    private static final String ESIGN_INIT =
+            "{\"successRedirectUrl\":\"https://app/ok\",\"failureRedirectUrl\":\"https://app/no\"}";
+
+    /**
+     * KFS → acknowledge → e-sign → the signed pack is the AGREEMENT; after the Accountant confirms, the
+     * SCHEDULE is issued, and the loan's documents are listed for the owner only, with 5-minute links.
+     */
+    @Test
+    void documents_kfsAckGatesESignAndEveryDocumentIsOnTheLoan() throws Exception {
+        long appId = sanctioned(60L);
+        String b = bearer("60", "BORROWER");
+
+        expectCode(post("/api/applications/{id}/offer/esign/init", appId).header("Authorization", b)
+                .contentType(MediaType.APPLICATION_JSON).content(ESIGN_INIT), "KFS_NOT_ACKNOWLEDGED");
+        expectCode(post("/api/applications/{id}/offer/kfs/ack", appId).header("Authorization", b), "KFS_NOT_ISSUED");
+
+        mvc.perform(post("/api/applications/{id}/offer/kfs", appId).header("Authorization", b))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value(1))
+                .andExpect(jsonPath("$.data.acknowledged").value(false))
+                .andExpect(jsonPath("$.data.url").value("https://s3.test/applications/" + appId + "/documents/kfs-v1.pdf"));
+        mvc.perform(post("/api/applications/{id}/offer/kfs/ack", appId).header("Authorization", b)
+                        .header("X-Forwarded-For", "198.51.100.7, 203.0.113.9"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.acknowledged").value(true));
+        assertThat(jdbc.queryForMap("select accepted_ip, pricing_version_id, amount_paise, length(sha256) as hash"
+                        + " from loan_document where application_id = ? and type = 'KFS'", appId))
+                .containsEntry("accepted_ip", "203.0.113.9").containsEntry("pricing_version_id", 1L)
+                .containsEntry("amount_paise", 100000L).containsEntry("hash", 64);
+
+        mvc.perform(post("/api/applications/{id}/offer/esign/init", appId).header("Authorization", b)
+                .contentType(MediaType.APPLICATION_JSON).content(ESIGN_INIT)).andExpect(status().isOk());
+        mvc.perform(post("/api/applications/{id}/offer/sanction-letter", appId).header("Authorization", b))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.url").value("https://s3.test/applications/" + appId
+                        + "/sanction_letter/sanction-letter.pdf"));
+        when(verificationService.recordManualEsign(org.mockito.ArgumentMatchers.eq(appId),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new ApplicationVerificationService.StepResult(ApplicationVerificationService.ESIGN,
+                        ApplicationVerificationService.PASS, "signed",
+                        java.util.Map.of("signedAt", "2026-11-01T07:47:18Z")));
+        mvc.perform(post("/api/applications/{id}/offer/esign", appId).header("Authorization", b)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"signatureDataUrl\":\"data:image/png;base64," + signaturePngBase64() + "\"}"))
+                .andExpect(status().isOk());
+        assertThat(jdbc.queryForMap("select s3_key, accepted_at is not null as accepted, acceptance_evidence::text as ev"
+                        + " from loan_document where application_id = ? and type = 'AGREEMENT'", appId))
+                .containsEntry("s3_key", "applications/" + appId + "/signed_agreement/sanction-letter-signed.pdf")
+                .containsEntry("accepted", true)
+                .hasEntrySatisfying("ev", ev -> assertThat((String) ev).contains("DRAWN_SIGNATURE"));
+
+        recordEsign(appId); // the ESIGN row the mocked verification service would have written
+        act(appId, "accept-offer", "60", "BORROWER", "{\"amountPaise\":100000}", "DISBURSEMENT_PENDING");
+        act(appId, "disbursement-decision", "6", "DISBURSEMENT_HEAD",
+                "{\"decision\":true,\"txnRef\":\"UTR-DOC-60\"}", "DISBURSAL_CONFIRMATION_PENDING");
+        confirm(appId, "3", "ACCOUNTANT", "ACTIVE");
+        long loanId = loanIdOf(appId);
+
+        MvcResult list = mvc.perform(get("/api/loans/{id}/documents", loanId).header("Authorization", b))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(data(list).findValuesAsText("type")).containsExactly("KFS", "SANCTION", "AGREEMENT", "SCHEDULE");
+        long scheduleId = data(list).get(3).get("id").asLong();
+        assertThat(jdbc.queryForObject("select loan_id from loan_document where id = ?", Long.class, scheduleId))
+                .isEqualTo(loanId);
+        mvc.perform(get("/api/loans/{id}/documents/{doc}/url", loanId, scheduleId).header("Authorization", b))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.expiresInSeconds").value(300));
+        org.mockito.Mockito.verify(storage).presignDownload(
+                "applications/" + appId + "/documents/schedule-v1.pdf", java.time.Duration.ofMinutes(5));
+        assertThat(jdbc.queryForObject("select count(*) from loan_document_access where loan_document_id = ?",
+                Long.class, scheduleId)).isZero();
+
+        // Another borrower: 422 FORBIDDEN_OWNER on the list and on the link.
+        expectCode(get("/api/loans/{id}/documents", loanId).header("Authorization", bearer("61", "BORROWER")),
+                "FORBIDDEN_OWNER");
+        expectCode(get("/api/loans/{id}/documents/{doc}/url", loanId, scheduleId)
+                .header("Authorization", bearer("61", "BORROWER")), "FORBIDDEN_OWNER");
+
+        // Staff may read it, and the read is audited.
+        mvc.perform(get("/api/loans/{id}/documents/{doc}/url", loanId, scheduleId)
+                        .header("Authorization", bearer("3", "ACCOUNTANT")))
+                .andExpect(status().isOk());
+        assertThat(jdbc.queryForMap("select actor_id, actor_role from loan_document_access where loan_document_id = ?",
+                scheduleId)).containsEntry("actor_id", "3").containsEntry("actor_role", "ACCOUNTANT");
+    }
+
+    /** CC-02: a lapsed offer cannot be signed on its old KFS; the next KFS re-quotes and must be acknowledged. */
+    @Test
+    void cc02_aLapsedOfferIsReQuotedAndItsOldKfsCanNeverBeSigned() throws Exception {
+        long appId = sanctioned(62L);
+        String b = bearer("62", "BORROWER");
+        assertThat(jdbc.queryForObject("select offer_valid_until > now() + interval '71 hours'"
+                + " and offer_valid_until <= now() + interval '72 hours' from loan_application where id = ?",
+                Boolean.class, appId)).isTrue();
+        mvc.perform(post("/api/applications/{id}/offer/kfs", appId).header("Authorization", b)).andExpect(status().isOk());
+        mvc.perform(post("/api/applications/{id}/offer/kfs/ack", appId).header("Authorization", b)).andExpect(status().isOk());
+
+        jdbc.update("update loan_application set offer_valid_until = now() - interval '1 minute' where id = ?", appId);
+
+        expectCode(post("/api/applications/{id}/offer/esign/init", appId).header("Authorization", b)
+                .contentType(MediaType.APPLICATION_JSON).content(ESIGN_INIT), "OFFER_EXPIRED");
+        mvc.perform(post("/api/applications/{id}/offer/kfs", appId).header("Authorization", b))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value(2))
+                .andExpect(jsonPath("$.data.acknowledged").value(false));
+        expectCode(post("/api/applications/{id}/offer/esign/init", appId).header("Authorization", b)
+                .contentType(MediaType.APPLICATION_JSON).content(ESIGN_INIT), "KFS_NOT_ACKNOWLEDGED");
+        mvc.perform(post("/api/applications/{id}/offer/kfs/ack", appId).header("Authorization", b)).andExpect(status().isOk());
+        mvc.perform(post("/api/applications/{id}/offer/esign/init", appId).header("Authorization", b)
+                .contentType(MediaType.APPLICATION_JSON).content(ESIGN_INIT)).andExpect(status().isOk());
+    }
+
+    /** V100: a document belongs to an application or a loan; offers carry a validity (3 days seeded). */
+    @Test
+    void v100_aLoanDocumentBelongsToAnApplicationOrALoan() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        jdbc.update("insert into loan_document (type) values ('KFS')"))
+                .hasMessageContaining("loan_document_owner_check");
+        assertThat(jdbc.queryForObject("select offer_validity_days from product_config where version = 1",
+                Integer.class)).isEqualTo(3);
+    }
+
+    /** A first loan (₹1,000) sanctioned and waiting on the borrower's offer journey. */
+    private long sanctioned(long customerId) throws Exception {
+        long appId = createApplication(customerId);
+        String c = String.valueOf(customerId);
+        act(appId, "submit-kyc", c, "BORROWER", null, "KYC_PENDING");
+        act(appId, "assign", "5", "CREDIT_HEAD", "{\"executiveId\":2}", "CREDIT_EXEC_PENDING");
+        act(appId, "sanction", "2", "CREDIT_EXECUTIVE",
+                "{\"sanctionedAmountPaise\":100000,\"salaryCreditDay\":28}", "SANCTIONED");
+        return appId;
+    }
+
+    private void expectCode(org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request,
+                            String code) throws Exception {
+        mvc.perform(request)
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.error.code").value(code));
+    }
+
+    private static String signaturePngBase64() throws java.io.IOException {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(120, 40,
+                java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        img.setRGB(10, 10, 0xff0c2540);
+        java.io.ByteArrayOutputStream png = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(img, "png", png);
+        return java.util.Base64.getEncoder().encodeToString(png.toByteArray());
     }
 
     @Test

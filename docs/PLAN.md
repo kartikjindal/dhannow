@@ -432,6 +432,39 @@ Deviations:
   - No "DhanBoost" string in any output.
   - Cross-customer access → 422 `FORBIDDEN_OWNER`.
 
+**Status (2026-11-01): done.** `mvn verify` is green (1,889 unit) and `mvn verify -Pit` is green (78 integration, up from 75; V100 applied to Testcontainers Postgres). Migration:
+- **V100:** `loan_document` gains `application_id`, `version`, `pricing_version_id`, `amount_paise`, `s3_key`, `sha256`, `created_at`, `accepted_at`, `accepted_ip` and `acceptance_evidence jsonb`; `loan_id` becomes nullable with a check that a row belongs to an application or a loan, and `(application_id, type, version)` is unique. Also `loan_application.offer_valid_until`, `product_config.offer_validity_days` (default 3, frozen by the existing trigger) and an append-only `loan_document_access` table.
+
+Code:
+- **One set of facts.** `DocumentFacts` is built by `LoanDocumentService.facts` from the frozen pricing and product snapshots through `LoanMath` and `AprCalculator`; the renderers only format. `KfsPdfRenderer` (KFS + the repayment schedule), `SanctionLetterPdfRenderer` (rewritten on the DhanNow template) and `LoanAgreementPdfRenderer` share their layout and wording through `PdfKit`. Inter is embedded so ₹ renders. The "no auto-debit mandate" line is gone.
+- **APR.** `AprCalculator` (interface) with `Method.IRR` (default: (principal / net)^(365/14) − 1, the IRR of −net at day 0 and +principal at day 14, compounded) and `Method.SIMPLE`, chosen by `navix.apr.method`. ₹1,000 → ₹742 / ₹1,000 / 14 days pins **239,096.78%** (IRR) and 906.53% (simple); every ladder amount has the same APR.
+- **Config.** `navix.brand.*`, `navix.grievance.*` (Dharmendra Rajput / 9211331170 / grievance@dhannow.com) and `navix.lender.*` are `@ConfigurationProperties` records in `navix-common` (`com.navix.common.brand`), with the defaults in `application.yml` only. The lender defaults are `[placeholder]`s; `ProductionConfigGuard` refuses to start with `NAVIX_ENV=prod` while any lender value is blank or a placeholder.
+- **KFS flow.** `POST /api/applications/{id}/offer/kfs` issues or reuses the KFS and returns a 5-minute link; `POST …/offer/kfs/ack` records `accepted_at`, the IP (last `X-Forwarded-For` hop) and evidence. New journey step `OFFER_KFS` (route `/loan/kfs`) after SUMMARY; the journey holds an unsigned borrower there until the KFS is acknowledged. `esign/init` and the drawn-signature fallback refuse with 422 `KFS_NOT_ACKNOWLEDGED` (or `OFFER_EXPIRED`). An acknowledgement binds to the offer it was shown for: same amount, same pricing version, offer still open.
+- **CC-02.** `PricingService.freeze` (sanction and re-apply) opens the validity window. A lapsed offer is re-quoted on the ACTIVE pricing the next time the KFS is opened, which issues a new KFS version to acknowledge; the old one can never be signed.
+- **Signing.** `POST …/offer/sanction-letter` issues the `SANCTION` document and stores the pack the borrower signs (sanction letter + agreement) as the navix `SANCTION_LETTER` application document, so the Signzy flow runs unchanged. On PASS (status poll, webhook or drawn signature) the signed copy is recorded once as `AGREEMENT` (S3 key, SHA-256 of the stored bytes, `accepted_at`, method and provider reference) and the sanction letter is stamped accepted.
+- **CC-01 schedule.** When the Accountant's confirmation commits (`ACTIVATE`), a `SCHEDULE` document with the confirmed due date is issued on the loan, in its own transaction; a storage failure is logged and never undoes the confirmation.
+- **Access.** `GET /api/loans/{id}/documents` (list, the offer's documents plus the loan's) and `GET /api/loans/{id}/documents/{docId}/url` (presigned GET, 5 minutes; `DocumentStoragePort.presignDownload(key, ttl)` added). A borrower reading another customer's loan gets 422 `FORBIDDEN_OWNER`, DSA gets `FORBIDDEN_ROLE`, and each staff link is written to `loan_document_access`.
+- The e-sign document title on the provider page uses `navix.brand.name`.
+
+Tests:
+- `AprCalculatorTest` (APR pinned, every ladder amount, simple method).
+- `LoanDocumentServiceTest`: money parity of the facts with `LoanMath` for all seven amounts; golden text (OpenPDF `PdfTextExtractor`) of the KFS, sanction letter, agreement pack, signed pack and schedule with every required field and the ₹ figures; no "DhanBoost", "NBFC", auto-debit, salary or pay-early wording in any output; KFS acknowledgement gate; acknowledgement bound to the amount; `cc02_aLapsedOfferIsRequotedAndItsOldKfsCanNeverBeSigned`; the signed agreement recorded once; `cc01_theScheduleIsIssuedOnceWithTheConfirmedDueDate`; schedule failure does not undo confirmation; cross-customer `FORBIDDEN_OWNER`; 5-minute link and staff audit.
+- `OfferServiceTest` (e-sign refused without acknowledgement, drawn signature records the agreement, ack advances the journey), `JourneyServiceTest` (KFS step and hold), `ProductionConfigGuardTest` (placeholder and blank lender fail prod, dev boots).
+- `ApplicationFlowIntegrationTest`: `documents_kfsAckGatesESignAndEveryDocumentIsOnTheLoan` (KFS → ack → e-sign → AGREEMENT → confirm → SCHEDULE → list for the owner, 5-minute link, `FORBIDDEN_OWNER` for another borrower, staff read audited), `cc02_aLapsedOfferIsReQuotedAndItsOldKfsCanNeverBeSigned`, and the V100 checks.
+
+JaCoCo's 80% gate now also covers `LoanDocumentService`, `AprCalculator` and the document renderers.
+
+Deviations:
+- **Documents on the offer.** The KFS, sanction letter and agreement are issued before any loan exists, so `loan_document` rows carry `application_id`; the loan's list joins them through the application. `amount_paise` was added to tell which offer a KFS describes.
+- **One e-sign for two documents.** The borrower signs one pack (sanction letter + agreement); its acceptance stamps both. The navix `SANCTION_LETTER` / `SIGNED_AGREEMENT` application documents are still written, because the e-sign flow, the staff console and the signed-letter email read them.
+- **PDFBox not added.** OpenPDF (already a dependency) extracts the text, ₹ included, so no new test dependency.
+- **Indian digit grouping.** Java's `NumberFormat` groups in threes even for `en-IN`, so the APR reads 239,096.78%. Ladder amounts (≤ ₹10,000) are unaffected.
+- **Prod switch.** The lender check runs on `NAVIX_ENV=prod`, the switch the existing guard uses, rather than a Spring `prod` profile.
+- **Step-up OTP (`X-Step-Up`).** Not built: it needs the Phase 8 auth work. Documents are owner-checked and links live 5 minutes.
+- **Copy.** The grievance line uses the RBI 30-day escalation (cms.rbi.org.in); the 15-day SLA waits for the Phase 7 complaint ticket. Cooling-off reads "Not applicable to this loan" (none in v1). Lender wording is a draft pending Legal.
+- **CC-01 partly done.** The `SCHEDULE` document is issued; the SMS/push of the final due date waits for the notification work. Other "DhanBoost" strings in notification templates and internal provider labels are not part of the documents and are left for the brand sweep.
+- **Navix (ACCRUED) offers.** Pre-V92 offers render on the navix terms with the sanctioned tenure; they are not shown to DhanNow borrowers.
+
 ## Phase 6: Payments, closure, loan extension, EMI (weeks 6–8)
 
 **Payments:**

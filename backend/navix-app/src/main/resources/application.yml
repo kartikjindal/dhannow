@@ -298,12 +298,27 @@ navix:
   # Marketing "Contact us" form — where website enquiries are emailed (via the shared EmailClient).
   contact:
     recipient: ${NAVIX_CONTACT_RECIPIENT:support@dhannow.com}
-  # Grievance Redressal Officer — named on the Key Fact Statement the borrower eSigns, and mirrored
-  # by BRAND.grievanceOfficer in the frontend. Regulatory copy: change both together.
+  # PLAN Phase 5: the one brand config. Brand, support, grievance officer and lender of record come from
+  # here onto every loan document (KFS, sanction letter, agreement, schedule). Never copy them by hand.
+  brand:
+    name: ${NAVIX_BRAND_NAME:DhanNow}
+    website: ${NAVIX_BRAND_WEBSITE:www.dhannow.com}
+    support-phone: ${NAVIX_SUPPORT_PHONE:9211331169}
+    support-email: ${NAVIX_SUPPORT_EMAIL:support@dhannow.com}
   grievance:
-    officer-name: ${NAVIX_GRIEVANCE_NAME:Lalit Kumar}
-    officer-phone: ${NAVIX_GRIEVANCE_PHONE:8510028510}
-    officer-email: ${NAVIX_GRIEVANCE_EMAIL:grievance@dhanboost.com}
+    officer-name: ${NAVIX_GRIEVANCE_NAME:Dharmendra Rajput}
+    officer-phone: ${NAVIX_GRIEVANCE_PHONE:9211331170}
+    officer-email: ${NAVIX_GRIEVANCE_EMAIL:grievance@dhannow.com}
+  # The lender of record. Placeholders until Legal confirms the lender: with NAVIX_ENV=prod the app
+  # refuses to start while any of these is blank or still a [placeholder] (ProductionConfigGuard).
+  lender:
+    legal-name: ${NAVIX_LENDER_LEGAL_NAME:[lender legal name]}
+    address: ${NAVIX_LENDER_ADDRESS:[lender registered address]}
+    registration: ${NAVIX_LENDER_REGISTRATION:[lender registration]}
+    contact: ${NAVIX_LENDER_CONTACT:[lender support and grievance contact]}
+  # How the documents' APR is worked out: IRR (cash flows, compounded) or SIMPLE (rate x 365/days).
+  apr:
+    method: ${NAVIX_APR_METHOD:IRR}
   # SES bounce/complaint ingestion (SES config-set -> SNS -> SQS -> SesEventSqsListener). Off by
   # default so the app boots without an SQS queue; flip on in AWS environments.
   ses:
