@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>Back to the app – DhanNow</title>
+<link rel="icon" href="../../logo.jpeg">
+<style>
+/* Board E15 (docs/wireframes/WebCallback.dc.html). The provider's return URL (PLAN Phase 8 allowlist
+   https://dhannow.com/app/cb/*). Android normally opens the app through the verified app link
+   (/.well-known/assetlinks.json) and this page never loads. It holds no data and loads nothing from
+   other sites: the app re-reads the status from the server. */
+:root{--page:#F2F3F3;--surface:#FAFAFA;--ink:#0B0B0C;--soft:#4A4D52;--line:#E5E7E8;--cobalt:#1F5BDB;--cobalt-dark:#1A4BB8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:16px/1.6 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--cobalt-dark)}
+:focus-visible{outline:3px solid var(--cobalt);outline-offset:3px}
+main{max-width:480px;margin:0 auto;padding:48px 16px}
+img{height:44px;display:block;margin-bottom:32px}
+h1{font-size:26px;line-height:1.25;margin:0 0 8px}
+p{margin:0 0 16px;color:var(--soft)}
+.btn{display:flex;align-items:center;justify-content:center;min-height:52px;border-radius:999px;background:var(--cobalt);color:#fff;font-weight:600;text-decoration:none;margin:24px 0 16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:20px;margin-top:32px}
+.card p{margin:0}
+</style>
+</head>
+<body>
+<main>
+<img src="../../logo.jpeg" alt="DhanNow">
+<h1 id="title">Agreement signed</h1>
+<p id="lede">Taking you back to the DhanNow app to continue your application.</p>
+<a class="btn" id="open" data-app-intent="/app/cb/esign" href="intent://dhannow.com/app/cb/esign#Intent;scheme=https;package=com.dhannow.app;end">Open DhanNow app</a>
+<p>If nothing happens, open the DhanNow app yourself. It continues from this step.</p>
+<div class="card"><p>Don’t have the app on this phone? <a href="../../download.html">Download DhanNow</a></p></div>
+</main>
+<script>
+// The app asked for ?outcome=success|failure; only the heading uses it. The app reads the real status
+// from the server. Then clear the parameters from the address bar and try the app once (never again).
+if (/[?&]outcome=failure(&|$)/.test(location.search)) {
+  document.getElementById('title').textContent = 'Signing didn’t finish';
+  document.getElementById('lede').textContent = 'Taking you back to the DhanNow app. You can try signing again there.';
+}
+try { history.replaceState(null, '', location.pathname); } catch (e) {}
+location.href = document.getElementById('open').href;
+</script>
+</body>
+</html>

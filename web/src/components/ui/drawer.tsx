@@ -1,0 +1,143 @@
+"use client";
+
+import * as React from "react";
+import { createPortal } from "react-dom";
+import { cn } from "@/lib/utils";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
+
+/**
+ * Right slide-over panel, sibling to {@link Dialog}. Used for the application
+ * Journey (and any secondary detail surface) launched from a queue row.
+ *
+ * Behaviour: Escape and backdrop-click close; body scroll is locked while open;
+ * the panel slides in from the right (full-screen sheet below `sm`). It enforces a **focus trap**
+ * (Tab/Shift+Tab wrap) and **focus restore** to the trigger on close, via {@link useFocusTrap} —
+ * as does {@link Dialog}.
+ *
+ * Rendered through a portal to `document.body`, for the same reason Dialog is: the application
+ * Journey mounts its Drawer from inside a queue row's `position: sticky` actions cell
+ * (`pipeline/app-row.tsx`), and a positioned ancestor with a non-`auto` `z-index` establishes a
+ * stacking context — so the panel's `z-index: 200` was being resolved *inside* the cell's
+ * `z-index: 2` and the navy sticky header cells (`z-index: 3`, globals.css) painted straight over
+ * the open drawer. Making the whole `thead` sticky widens that from two corner cells to the entire
+ * header row, so the portal is what makes the sticky header safe. Dialog's own doc comment records
+ * the identical bug and fix; this is the same defect, found later.
+ *
+ * Provide an accessible name with `aria-label` or `aria-labelledby`.
+ */
+export interface DrawerProps {
+  open: boolean;
+  onClose: () => void;
+  children?: React.ReactNode;
+  className?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+}
+
+export function Drawer({
+  open,
+  onClose,
+  children,
+  className,
+  "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
+}: DrawerProps) {
+  const panelRef = useFocusTrap<HTMLDivElement>(open);
+  const [entered, setEntered] = React.useState(false);
+
+  // Escape closes.
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Only the topmost modal reacts, so Esc on a drawer over a dialog leaves the dialog open.
+      const modals = document.querySelectorAll('[aria-modal="true"]');
+      if (modals[modals.length - 1] !== panelRef.current) return;
+      onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose, panelRef]);
+
+  // Lock body scroll while open (scoped to this drawer).
+  React.useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  // Drive the slide-in on the next frame after mount.
+  React.useEffect(() => {
+    if (!open) {
+      setEntered(false);
+      return;
+    }
+    const raf = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(raf);
+  }, [open]);
+
+  // Portals need a DOM target, which does not exist during SSR or the first render pass.
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+
+  if (!open || !mounted) return null;
+
+  return createPortal(
+    <div
+      className={cn(
+        "fixed inset-0 z-[200] bg-navy/50 transition-opacity duration-300",
+        entered ? "opacity-100" : "opacity-0",
+      )}
+      onClick={onClose}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={ariaLabel}
+        aria-labelledby={ariaLabelledBy}
+        tabIndex={-1}
+        className={cn(
+          "absolute inset-y-0 right-0 flex h-full w-full flex-col bg-white shadow-xl outline-none",
+          "border-l border-line sm:max-w-md lg:max-w-lg",
+          "transition-transform duration-300 ease-out",
+          entered ? "translate-x-0" : "translate-x-full",
+          className,
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+export function DrawerHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      className={cn("flex flex-col gap-1.5 border-b border-line px-5 py-4", className)}
+      {...props}
+    />
+  );
+}
+
+export function DrawerTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
+  return <h2 className={cn("font-serif text-xl text-navy", className)} {...props} />;
+}
+
+export function DrawerBody({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("flex-1 overflow-y-auto px-5 py-4", className)} {...props} />;
+}
+
+export function DrawerFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      className={cn("flex justify-end gap-2 border-t border-line px-5 py-3", className)}
+      {...props}
+    />
+  );
+}

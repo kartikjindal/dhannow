@@ -1,0 +1,46 @@
+{
+  "_readme": "The one brand config (CLAUDE.md, PLAN Phase 10a W5). Edit only here, then run `python site/build_brand.py` (site pages, web/src/lib/brand.ts, app/lib/core/brand.dart, backend application.yml defaults) and `python site/check_all.py`. Values in [square brackets] are placeholders that `python site/check_all.py --release` refuses.",
+  "name": "DhanNow",
+  "wordmark": "DHAN NOW",
+  "tagline": "Financial support made simple",
+  "fileSlug": "dhannow",
+  "site": "dhannow.com",
+  "website": "https://dhannow.com",
+  "documentWebsite": "www.dhannow.com",
+  "staffUrl": "https://staff.dhannow.com",
+  "support": {
+    "phone": "9211331169",
+    "email": "support@dhannow.com",
+    "hours": "Mon to Sat, 9:30 am to 6:30 pm"
+  },
+  "generalEmail": "info@dhannow.com",
+  "grievance": {
+    "name": "Dharmendra Rajput",
+    "phone": "9211331170",
+    "email": "grievance@dhannow.com"
+  },
+  "company": {
+    "legalName": "NAVIX Finance Private Limited",
+    "cin": "U64990HR2026PTC144926",
+    "registeredOffice": "Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001"
+  },
+  "lender": {
+    "legalName": "[lender legal name]",
+    "address": "[lender registered address]",
+    "registration": "[lender registration]",
+    "contact": "[lender support and grievance contact]"
+  },
+  "app": {
+    "package": "com.dhannow.app",
+    "distribution": "apk",
+    "playUrl": "https://play.google.com/store/apps/details?id=com.dhannow.app",
+    "minAndroid": "Android 7.0 or newer",
+    "apk": {
+      "url": "[APK_URL]",
+      "version": "[VERSION]",
+      "sizeMb": "[SIZE]",
+      "sha256": "[SHA-256 OF SIGNED APK]"
+    },
+    "signingCertSha256": ["[PLAY APP SIGNING KEY SHA-256, AA:BB:..]"]
+  }
+}

@@ -3,11 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="dn-doc-version" content="1">
 <title>Loan eligibility – DhanNow</title>
 <link rel="icon" href="logo.jpeg">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bebas+Neue&display=swap">
 <style>
-:root{--ink:#0B0B0C;--soft:#4A4D52;--line:#E5E7E8;--field:#EEF3FF;--cobalt:#1F5BDB;--cobalt-dark:#1A4BB8}
+:root{--ink:#0B0B0C;--soft:#4A4D52;--line:#E5E7E8;--field:#EEF3FF;--cobalt:#1F5BDB;--cobalt-dark:#1A4BB8;--warn:#8A6200;--warn-bg:#FEF6D8}
 *{box-sizing:border-box}
 body{margin:0;background:#F2F3F3;color:var(--ink);font:16px/1.65 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 a{color:var(--cobalt-dark);text-underline-offset:3px}
@@ -33,22 +34,23 @@ table{width:100%;border-collapse:collapse;font-size:15px}
 th,td{text-align:left;vertical-align:top;padding:10px 12px 10px 0;border-bottom:1px solid var(--line)}
 th{font-weight:600}
 .note{background:var(--field);border-radius:16px;padding:16px 20px;font-size:15px;margin-bottom:40px}
+.note.warn{background:var(--warn-bg);color:var(--warn);margin-bottom:24px}
 footer{background:#fff;border-top:1px solid var(--line);color:var(--soft);font-size:14px}
 footer div{max-width:1120px;margin:0 auto;padding:32px 20px}
 @media (max-width:560px){body{font-size:16px}article{margin:16px 12px;padding:32px 18px 48px}header .home{display:none}header .btn{margin-left:auto}}
 </style>
 </head>
 <body>
-<div class="bar">Our website is still being built. For now, apply in the DhanNow Android app. <a href="index.html#app">Get the app</a></div>
+<div class="bar">Our website is still being built. For now, apply in the DhanNow Android app. <a href="download.html">Get the app</a></div>
 <header><div>
   <a href="index.html" aria-label="DhanNow home"><img src="logo.jpeg" alt="DhanNow"></a>
   <a class="home" href="index.html">Home</a>
-  <a class="btn" href="index.html#app">Get the app</a>
+  <a class="btn" href="download.html">Get the app</a>
 </div></header>
 <main>
 <article>
 <h1>Loan eligibility</h1>
-<p class="note">This page is a draft and is being reviewed before publication. Questions? Call 92113 31169 or email <a href="mailto:support@dhannow.com">support@dhannow.com</a>.</p>
+<p class="note">This page is a draft and is being reviewed before publication. Questions? Call <a data-brand="support.phone" data-brand-href="support.phone" href="tel:+919211331169">92113 31169</a> or email <a data-brand="support.email" data-brand-href="support.email" href="mailto:support@dhannow.com">support@dhannow.com</a>.</p>
 <p>Check Your Eligibility for a DHAN NOW Personal Loan</p>
 <ul>
 <li>Overview</li>
@@ -274,6 +276,6 @@ footer div{max-width:1120px;margin:0 auto;padding:32px 20px}
 <p>12. Ensure that eligibility information matches the Loan Information and How It Works pages.</p>
 </article>
 </main>
-<footer><div>DhanNow is the customer brand of NAVIX Finance Private Limited (CIN U64990HR2026PTC144926), Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001, India. <a href="index.html">Back to home</a></div></footer>
+<footer><div>DhanNow is the customer brand of <span data-brand="company.legalName">NAVIX Finance Private Limited</span> (CIN <span data-brand="company.cin">U64990HR2026PTC144926</span>), <span data-brand="company.registeredOffice">Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001</span>, India. <a href="index.html">Back to home</a></div></footer>
 </body>
 </html>

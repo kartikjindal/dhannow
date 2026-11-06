@@ -1,0 +1,627 @@
+"use client";
+
+import * as React from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import { Lock, Loader2, RefreshCw, AlertTriangle, ChevronDown, ChevronRight, Receipt } from "lucide-react";
+import { PageHeader, RefreshButton } from "@/components/staff/staff-ui";
+import { SearchBar } from "@/components/staff/search-bar";
+import { can, type StaffRole } from "@/lib/auth/rbac";
+import { staffApi, isLoanOverdue, type ApplicationView } from "@/lib/api/applications";
+import {
+  useStaffMe,
+  ReviewLookup,
+  StatusQueue,
+  CreditWorkbench,
+  CreditDecisionActions,
+  DisbursementActions,
+  QueueTable,
+  errMessage,
+  ROLE_LABEL,
+  PIPELINE_ROLES,
+} from "@/components/staff/live-pipeline";
+import { RepaymentVerifyQueue } from "@/components/staff/repayment-verify-queue";
+import {
+  CollectionPaymentApprovalQueue,
+  CollectionPaymentValidationQueue,
+} from "@/components/staff/collection-payments";
+import { CollectionAssignActions } from "@/components/staff/pipeline/collection-actions";
+import { useQueueRegister } from "@/components/staff/pipeline/queue-register";
+import {
+  HistoryQueue,
+  PAST_DISBURSED_STATUSES,
+  PAST_SANCTIONED_STATUSES,
+  QueueTabs,
+  useQueueTab,
+  useStatusApps,
+} from "@/components/staff/pipeline/queue-tabs";
+import { pageTitleFor } from "@/components/staff/staff-nav";
+import { AdminLogPaymentButton } from "@/components/staff/admin-log-payment";
+import {
+  QueueDateFilter,
+  QueueRangeProvider,
+  rangeFor,
+  useQueueRange,
+  useQueueQuery,
+  type QueuePeriod,
+  type QueueRange,
+} from "@/components/staff/pipeline/queue-date-filter";
+import { EmptyState, ErrorState, InfoTooltip, Skeleton } from "@/components/ui";
+
+/** Roles that don't drive the credit/disbursement pipeline but do need the repayment/closed
+ * back-office panels (see `RoleQueues`) — previously left with "no application-pipeline queue". */
+const BACK_OFFICE_ROLES: StaffRole[] = ["COLLECTION_HEAD", "COLLECTION_EXECUTIVE"];
+
+export default function StaffApplicationsPage() {
+  return (
+    <React.Suspense fallback={<div className="h-64 rounded border border-line bg-white" />}>
+      <StaffApplicationsPageInner />
+    </React.Suspense>
+  );
+}
+
+function StaffApplicationsPageInner() {
+  const me = useStaffMe();
+  // Deep link from the global-search palette: `?q=1042` lands here with the box already narrowed to
+  // that one file, so selecting an application in the palette opens its queue row rather than the
+  // whole pipeline.
+  const initialQuery = useSearchParams().get("q") ?? "";
+  // One global Today/Yesterday/Custom/All-time filter, page-wide (not per-panel) — a decided
+  // product requirement (see the queue-date-filter module doc).
+  const [period, setPeriod] = React.useState<QueuePeriod>("ALL");
+  const [custom, setCustom] = React.useState<QueueRange>({});
+  const range = React.useMemo(() => rangeFor(period, custom), [period, custom]);
+
+  // The page-wide search box — commits on Enter/Search, not on keystroke. Narrows WITHIN the date
+  // window above; folded into `QueueRangeProvider` alongside `range` rather than a second provider,
+  // so every panel already reading `useQueueRange()` picks up `useQueueQuery()` the same way.
+  const [query, setQuery] = React.useState(initialQuery);
+
+  if (me.isLoading) {
+    return <div className="h-64 rounded border border-line bg-white" />;
+  }
+
+  const session = me.data;
+  if (!session) {
+    return (
+      <div className="rounded border border-warning-100 bg-warning-50 p-6 text-sm text-warning-800">
+        No live staff session. Sign in via the staff console to use the live application queues.
+      </div>
+    );
+  }
+
+  const role = session.role;
+  const isPipeline = PIPELINE_ROLES.includes(role) || BACK_OFFICE_ROLES.includes(role);
+
+  return (
+    <div>
+      <PageHeader
+        title={pageTitleFor("/staff/applications", role, "Live applications")}
+        subtitle="Every queue your role can act on, in one place. Real backend state machine — walk loans through to ACTIVE."
+      >
+        <span className="rounded-full bg-navy-tint px-3 py-1 text-sm font-semibold text-navy">{ROLE_LABEL[role]}</span>
+        {isPipeline && (
+          <>
+            <QueueDateFilter period={period} setPeriod={setPeriod} custom={custom} setCustom={setCustom} />
+            <SearchBar
+              initialValue={query}
+              onSearch={setQuery}
+              placeholder="Search name, mobile, PAN, application or loan #"
+              ariaLabel="Search applications"
+              inputClassName="w-72"
+            />
+          </>
+        )}
+        <RefreshButton
+          queryKeys={[["staff-queue"], ["staff-dashboard-stats"], ["staff-dashboard-queue"], ["staff-pending-repayments"]]}
+        />
+        {/* Carried over from the removed accounting page's header — the ledger is the accountant's
+            other destination and has no other entry point outside the Administration nav group. */}
+        {can(session.realRole, role, "loan:activate") && (
+          <Link
+            href="/staff/accounting/transactions"
+            className="inline-flex items-center gap-1.5 rounded border border-line px-3 py-1.5 text-sm font-semibold text-navy hover:bg-grey-100"
+          >
+            <Receipt size={15} /> All transactions
+          </Link>
+        )}
+      </PageHeader>
+
+      <div className="space-y-8">
+        {/* Available to EVERY staff role. */}
+        <ReviewLookup />
+
+        {isPipeline ? (
+          <QueueRangeProvider value={{ range, query }}>
+            <RoleQueues role={role} realRole={session.realRole} meId={Number(session.id)} />
+          </QueueRangeProvider>
+        ) : (
+          <div className="flex items-start gap-2 rounded border border-line bg-grey-50 p-4 text-sm text-muted">
+            <Lock size={16} className="mt-0.5 flex-shrink-0" />
+            The {ROLE_LABEL[role]} role has no application-pipeline queue. Use &ldquo;Review an application&rdquo;
+            above to open any application by ID and view the customer&apos;s details and documents.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Working role -> the queue panels it sees. A real ADMIN works as one of the seven roles via the header switcher.
+ *
+ * This is now the single workbench: every panel that used to live on the dedicated
+ * /staff/kyc-approvals and /staff/kyc-review pages (both since removed) is rendered here, with
+ * the same titles, info text and actions — including the instant-loan credit fast-path and the
+ * reborrow queue's inline loan history. The disbursement fast-track/standard/failed split and the
+ * accountant's repayment-verify queue are mirrored here too, so a role never has to visit a second
+ * page to see its own work.
+ */
+function RoleQueues({ role, realRole, meId }: { role: StaffRole; realRole: StaffRole; meId: number }) {
+  // "Awaiting repayment" (ACTIVE+OVERDUE) and "Closed" are back-office, not credit-pipeline,
+  // panels: ACCOUNTANT gets both; the Collection Head sees what's still owed. The Collection
+  // Executive gets their own tabbed repayment book instead (see CollectionExecutiveDesk).
+  const showBothRepaymentPanels = role === "ACCOUNTANT";
+  const showAwaitingRepayment = showBothRepaymentPanels || role === "COLLECTION_HEAD";
+
+  return (
+    <div className="space-y-8">
+      {/* The Credit Head's only lifecycle step (V45): hand a submitted intake to an executive. */}
+      {role === "CREDIT_HEAD" && <CreditWorkbench />}
+
+      {role === "CREDIT_EXECUTIVE" && <CreditExecutiveDesk meId={meId} />}
+
+      {role === "DISBURSEMENT_HEAD" && <DisbursementDesk mineOnly={realRole !== "ADMIN"} />}
+
+      {/* The Accountant no longer touches disbursement at all (V48): the Disbursement Head's
+          transaction id IS the validation. What's left is money coming back in — borrower
+          repayments and what collections took in the field. */}
+      {role === "ACCOUNTANT" && (
+        <>
+          <RepaymentVerifyQueue />
+          <CollectionPaymentValidationQueue />
+        </>
+      )}
+
+      {role === "COLLECTION_HEAD" && <CollectionPaymentApprovalQueue />}
+
+      {role === "COLLECTION_EXECUTIVE" && <CollectionExecutiveDesk />}
+
+      {showAwaitingRepayment && <AwaitingRepaymentPanel />}
+      {showBothRepaymentPanels && <ClosedPanel />}
+    </div>
+  );
+}
+
+/** Slower poll for the read-only "past cases" tabs — history changes only when a file moves on. */
+const HISTORY_POLL = 60_000;
+
+/**
+ * "My credit files" — the Credit Executive's desk as tabs: the two live queues (credit review and
+ * sanctioned-but-borrower-still-completing) plus their own past decisions (sanctioned files that
+ * moved on to disbursement / repayment / closure, and rejections). The backend already scopes every
+ * one of these lists to files assigned to the executive; the filter keeps an ADMIN working as one
+ * to their own files as well.
+ */
+function CreditExecutiveDesk({ meId }: { meId: number }) {
+  const mine = React.useCallback((a: ApplicationView) => a.assignedExecutiveId === meId, [meId]);
+  const review = useStatusApps(["CREDIT_EXEC_PENDING"], { filter: mine });
+  const sanctioned = useStatusApps(["SANCTIONED"], { filter: mine });
+  const past = useStatusApps(PAST_SANCTIONED_STATUSES, { filter: mine, poll: HISTORY_POLL });
+  const rejected = useStatusApps(["REJECTED"], { filter: mine, poll: HISTORY_POLL });
+  const [tab, setTab] = useQueueTab("credit-executive", "review");
+  const count = (d: { apps: ApplicationView[]; isLoading: boolean }) => (d.isLoading ? undefined : d.apps.length);
+
+  return (
+    <div className="space-y-4">
+      <QueueTabs
+        active={tab}
+        onChange={setTab}
+        tabs={[
+          { key: "review", label: "Credit review", count: count(review), live: true },
+          { key: "sanctioned", label: "Sanctioned — borrower completing journey", count: count(sanctioned), live: true },
+          { key: "past", label: "Past sanctioned", count: count(past) },
+          { key: "rejected", label: "Rejected", count: count(rejected) },
+        ]}
+      />
+      {tab === "review" && (
+        <StatusQueue
+          title="Credit review — accept, reject or park"
+          registerId="queue-credit-review"
+          status="CREDIT_EXEC_PENDING"
+          filter={mine}
+          actions={(app) => <CreditDecisionActions app={app} compact />}
+          info="Files assigned to a credit executive. Accepting sets the sanctioned amount and repayment date — that decision is final and goes straight to disbursement, so there is no second approval behind it."
+        />
+      )}
+      {tab === "sanctioned" && (
+        <StatusQueue
+          title="Sanctioned — borrower completing their journey"
+          registerId="queue-sanctioned"
+          status="SANCTIONED"
+          filter={mine}
+          info="Credit has decided. The borrower is finishing the post-approval steps; the file reaches the Disbursement Head once they accept the offer."
+        />
+      )}
+      {tab === "past" && (
+        <HistoryQueue
+          title="Past sanctioned"
+          registerId="queue-credit-past-sanctioned"
+          data={past}
+          info="Files you sanctioned that have moved on — awaiting or past disbursal, repaying, or closed. Read-only."
+        />
+      )}
+      {tab === "rejected" && (
+        <HistoryQueue
+          title="Rejected"
+          registerId="queue-credit-rejected"
+          data={rejected}
+          info="Files assigned to you that were rejected. Read-only."
+        />
+      )}
+    </div>
+  );
+}
+
+const isFastTrack = (app: ApplicationView) => app.fastTrack === true;
+const isStandard = (app: ApplicationView) => app.fastTrack !== true;
+
+/**
+ * The Disbursement Head's desk as tabs: fast-track, standard and failed releases (live), plus the
+ * files they already released ("Past disbursed" — active, overdue and closed loans). A real ADMIN
+ * working as the Head sees every released file; a real Head sees only their own.
+ */
+function DisbursementDesk({ mineOnly }: { mineOnly: boolean }) {
+  const fast = useStatusApps(["DISBURSEMENT_PENDING"], { filter: isFastTrack });
+  const standard = useStatusApps(["DISBURSEMENT_PENDING"], { filter: isStandard });
+  const failed = useStatusApps(["DISBURSEMENT_FAILED"]);
+  const past = useStatusApps(PAST_DISBURSED_STATUSES, { mine: mineOnly, poll: HISTORY_POLL });
+  const [tab, setTab] = useQueueTab("disbursement", "standard");
+  const count = (d: { apps: ApplicationView[]; isLoading: boolean }) => (d.isLoading ? undefined : d.apps.length);
+
+  return (
+    <div className="space-y-4">
+      <QueueTabs
+        active={tab}
+        onChange={setTab}
+        tabs={[
+          { key: "fast", label: "Pre-approved fast-track", count: count(fast), live: true },
+          { key: "standard", label: "Standard disbursement", count: count(standard), live: true },
+          { key: "failed", label: "Failed — retry", count: count(failed), live: true },
+          { key: "past", label: "Past disbursed", count: count(past) },
+        ]}
+      />
+      {tab === "fast" && (
+        <StatusQueue
+          title="Pre-approved — fast-track release"
+          registerId="queue-disbursement-fast-track"
+          status="DISBURSEMENT_PENDING"
+          filter={isFastTrack}
+          actions={(app) => <DisbursementActions app={app} compact />}
+          info="Returning borrowers pre-approved on a clean repayment history — these skipped credit review and came straight to you. Release the funds as usual."
+          bulk={{ rejectMode: "disbursement" }}
+        />
+      )}
+      {tab === "standard" && (
+        <StatusQueue
+          title="Standard disbursement"
+          registerId="queue-disbursement-pending"
+          status="DISBURSEMENT_PENDING"
+          filter={isStandard}
+          actions={(app) => <DisbursementActions app={app} compact />}
+          info="Credit-approved loans awaiting release. Make the transfer, then enter its bank/UPI transaction id here — that releases and activates the loan straight away. There is no accountant step behind you."
+          bulk={{ rejectMode: "disbursement" }}
+        />
+      )}
+      {tab === "failed" && (
+        <StatusQueue
+          title="Disbursement failed — retry"
+          registerId="queue-disbursement-failed"
+          status="DISBURSEMENT_FAILED"
+          actions={(app) => <DisbursementActions app={app} compact />}
+          info="Transfers that were marked failed. Re-release them here once the bank issue is resolved."
+          bulk={{ rejectMode: "disbursement" }}
+        />
+      )}
+      {tab === "past" && (
+        <HistoryQueue
+          title="Past disbursed"
+          registerId="queue-disbursement-past"
+          data={past}
+          info={
+            mineOnly
+              ? "Loans you released — active, overdue and closed. Read-only."
+              : "Every released loan — active, overdue and closed. Read-only."
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * "My repayment book" — the Collection Executive's loans as tabs: overdue, active, and the closed
+ * (fully repaid) cases. Every list is scoped server-side to the loans whose collections case is
+ * assigned to this executive, so nothing from another officer's book reaches the page.
+ */
+function CollectionExecutiveDesk() {
+  const { overdueApps, activeApps, isLoading, error } = useRepaymentBook();
+  const closed = useStatusApps(["CLOSED"], { poll: HISTORY_POLL });
+  const [tab, setTab] = useQueueTab("collection-executive", "overdue");
+  return (
+    <div className="space-y-4">
+      <QueueTabs
+        active={tab}
+        onChange={setTab}
+        tabs={[
+          { key: "overdue", label: "Overdue", count: isLoading ? undefined : overdueApps.length, live: true },
+          { key: "active", label: "Active", count: isLoading ? undefined : activeApps.length, live: true },
+          { key: "closed", label: "Closed (repaid)", count: closed.isLoading ? undefined : closed.apps.length },
+        ]}
+      />
+      {error != null && (tab === "overdue" || tab === "active") && (
+        <p className="flex items-center gap-1.5 rounded border border-warning-100 bg-warning-50 px-5 py-2 text-xs font-semibold text-warning-800">
+          <AlertTriangle size={12} /> Couldn&apos;t load part of this book — {errMessage(error)}
+        </p>
+      )}
+      {tab === "overdue" && (
+        <section className="rounded border border-line bg-white shadow-sm">
+          <RepaymentColumn
+            title="Overdue"
+            tone="error"
+            note="Your loans past the due date — the 2%/day late charge applies (capped at 30 days)."
+            apps={overdueApps}
+            isLoading={isLoading}
+            emptyText="Nothing overdue in your book."
+          />
+        </section>
+      )}
+      {tab === "active" && (
+        <section className="rounded border border-line bg-white shadow-sm">
+          <RepaymentColumn
+            title="Active"
+            tone="navy"
+            note="Your loans disbursed and still inside the due date. Interest was deducted at disbursal; no late charge yet."
+            apps={activeApps}
+            isLoading={isLoading}
+            emptyText="No active loans in your book."
+          />
+        </section>
+      )}
+      {tab === "closed" && (
+        <HistoryQueue
+          title="Closed (fully repaid)"
+          registerId="queue-collection-closed"
+          data={closed}
+          info="Cases assigned to you whose loan has been fully repaid. Read-only."
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Awaiting repayment" — ACTIVE and OVERDUE side by side in **separate columns**, not one
+ * interleaved list: the two populations are worked differently (an overdue loan is accruing a
+ * 2%/day penalty and needs collections; an active one only needs a pre-due reminder), so mixing
+ * them into a single scroll made the urgent set impossible to size at a glance.
+ *
+ * Rows carry the collections action cluster ({@link CollectionAssignActions}), so a Collection
+ * Head can put an executive on a loan straight from here — no detour through a "collectible
+ * loans" list to create a case first.
+ */
+/** ACTIVE + OVERDUE applications, split into overdue / active by the loan's due date. */
+function useRepaymentBook() {
+  const range = useQueueRange();
+  const query = useQueueQuery();
+  // A minute, where the maker-checker queues above still poll every 8s. This panel is a "who owes
+  // money" reference view, not a desk: its membership changes only when a disbursement activates a
+  // loan or an accountant verifies a repayment, and both of those now invalidate `["staff-queue"]`
+  // explicitly (see `useRefreshAfterAction` and the repayment verify queue), so the panel updates
+  // on the action rather than waiting for a poll to notice.
+  const activeQ = useQuery({
+    queryKey: ["staff-queue", "ACTIVE", range.from ?? "", range.to ?? "", query],
+    queryFn: () => staffApi.listByStatus("ACTIVE", range, query || undefined),
+    refetchInterval: 60_000,
+  });
+  const overdueQ = useQuery({
+    queryKey: ["staff-queue", "OVERDUE", range.from ?? "", range.to ?? "", query],
+    queryFn: () => staffApi.listByStatus("OVERDUE", range, query || undefined),
+    refetchInterval: 60_000,
+  });
+
+  // Split on the LOAN's due date, not the application status. LoanStatus.OVERDUE is
+  // compute-on-read — nothing in the codebase ever writes it, and the aggregate's own status stays
+  // ACTIVE for the whole repayment window — so grouping by `app.status` put every past-due loan in
+  // the "active" bucket and left "overdue" permanently empty. Both queues are still fetched: an
+  // application CAN legitimately sit in the OVERDUE status, it just usually doesn't.
+  //
+  // Memoised on the two result sets: React Query keeps a poll's `data` reference when nothing
+  // changed, so an unchanged 60s poll no longer re-filters and re-sorts both lists.
+  const { overdueApps, activeApps } = React.useMemo(() => {
+    const all = [...(overdueQ.data ?? []), ...(activeQ.data ?? [])];
+    // Newest application first within each column, using the real created_at (V53) — falls back
+    // to id when createdAt is somehow absent, since id is still monotonic.
+    const byNewest = (a: ApplicationView, b: ApplicationView) =>
+      (b.createdAt ?? "").localeCompare(a.createdAt ?? "") || b.id - a.id;
+    return {
+      overdueApps: all.filter((a) => isLoanOverdue(a)).sort(byNewest),
+      activeApps: all.filter((a) => !isLoanOverdue(a)).sort(byNewest),
+    };
+  }, [overdueQ.data, activeQ.data]);
+  const isLoading = activeQ.isLoading || overdueQ.isLoading;
+  return {
+    overdueApps,
+    activeApps,
+    isLoading,
+    error: overdueQ.error ?? activeQ.error,
+    refetch: () => {
+      void activeQ.refetch();
+      void overdueQ.refetch();
+    },
+  };
+}
+
+function AwaitingRepaymentPanel() {
+  const { overdueApps, activeApps, isLoading, error, refetch } = useRepaymentBook();
+
+  return (
+    <section className="rounded border border-line bg-white shadow-sm">
+      <header className="flex items-center justify-between gap-3 border-b border-line px-5 py-3">
+        <div className="flex items-center gap-2">
+          <h2 className="font-serif text-lg font-semibold text-navy">Awaiting repayment</h2>
+          {isLoading && <Loader2 size={15} className="animate-spin text-muted" />}
+          <span className="rounded-full bg-navy-tint px-2.5 py-0.5 text-xs font-semibold text-navy">
+            {overdueApps.length + activeApps.length}
+          </span>
+        </div>
+        <button
+          onClick={refetch}
+          className="flex items-center gap-1.5 rounded border border-line px-3 py-1.5 text-xs text-muted hover:bg-grey-100 hover:text-ink"
+        >
+          <RefreshCw size={13} /> Refresh
+        </button>
+      </header>
+
+      {/* Both queries feed both columns (the split is by due date, not by source), so a failure in
+          either is reported once here rather than blanking a column that has valid rows. */}
+      {error != null && (
+        <p className="flex items-center gap-1.5 border-b border-line bg-warning-50 px-5 py-2 text-xs font-semibold text-warning-800">
+          <AlertTriangle size={12} /> Couldn&apos;t load part of this queue —{" "}
+          {errMessage(error)}
+        </p>
+      )}
+
+      <div className="grid xl:grid-cols-2 xl:divide-x xl:divide-line">
+        <RepaymentColumn
+          title="Overdue"
+          tone="error"
+          note="Past the due date — the 2%/day late charge applies (capped at 30 days). Put a collections executive on these."
+          apps={overdueApps}
+          isLoading={isLoading}
+          emptyText="Nothing overdue."
+        />
+        <RepaymentColumn
+          title="Active"
+          tone="navy"
+          note="Disbursed and still inside the due date. Interest was deducted at disbursal; no late charge yet."
+          apps={activeApps}
+          isLoading={isLoading}
+          emptyText="No active loans."
+        />
+      </div>
+    </section>
+  );
+}
+
+/** One side of {@link AwaitingRepaymentPanel} — its own header, count and rows. */
+function RepaymentColumn({
+  title,
+  tone,
+  note,
+  apps,
+  isLoading,
+  emptyText,
+}: {
+  title: string;
+  tone: "error" | "navy";
+  note: string;
+  apps: ApplicationView[];
+  /** First load of either source query — both columns draw from both, so both wait on both. */
+  isLoading: boolean;
+  emptyText: string;
+}) {
+  const register = useQueueRegister(apps, tone === "error" ? "queue-repayment-overdue" : "queue-repayment-active");
+  return (
+    <div className="min-w-0">
+      <div
+        className={`flex items-center gap-2 border-b border-line px-5 py-2 ${
+          tone === "error" ? "bg-error-50" : "bg-grey-50"
+        }`}
+      >
+        {tone === "error" && <AlertTriangle size={13} className="text-error-700" />}
+        <h3 className={`text-sm font-semibold ${tone === "error" ? "text-error-700" : "text-navy"}`}>{title}</h3>
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+            tone === "error" ? "bg-error-100 text-error-700" : "bg-navy-tint text-navy"
+          }`}
+        >
+          {apps.length}
+        </span>
+        <InfoTooltip content={note} />
+      </div>
+      {isLoading ? (
+        <Skeleton variant="table" rows={5} cols={18} />
+      ) : apps.length === 0 ? (
+        <EmptyState title={emptyText} />
+      ) : (
+        <QueueTable
+          register={register}
+          caption={`Awaiting repayment — ${title}`}
+          actions={(a) => (
+            <>
+              {/* ADMIN-only, and only on a live loan: log money that already came in, on the date it
+                  came in. Sits beside the collections cluster because this is the same row a Head
+                  works when chasing the borrower. */}
+              <AdminLogPaymentButton loanId={a.loanId} loanStatus={a.loanStatus} compact />
+              <CollectionAssignActions app={a} compact />
+            </>
+          )}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Closed (fully repaid)" queue — collapsed by default via a native `<details>`. The `useQuery`
+ * stays `enabled: false` (and its 8s poll off) until the staffer expands it, so this console never
+ * polls the whole closed-application archive in the background — only the panels a role actually
+ * looks at should cost a request every 8s.
+ */
+function ClosedPanel() {
+  const [open, setOpen] = React.useState(false);
+  const range = useQueueRange();
+  const query = useQueueQuery();
+  const q = useQuery({
+    queryKey: ["staff-queue", "CLOSED", range.from ?? "", range.to ?? "", query],
+    queryFn: () => staffApi.listByStatus("CLOSED", range, query || undefined),
+    refetchInterval: open ? 8000 : false,
+    enabled: open,
+  });
+  const apps = React.useMemo(() => q.data ?? [], [q.data]);
+  const register = useQueueRegister(apps, "queue-closed");
+
+  return (
+    <details
+      className="rounded border border-line bg-white shadow-sm"
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-3 [&::-webkit-details-marker]:hidden">
+        <div className="flex items-center gap-2">
+          <h2 className="font-serif text-lg font-semibold text-navy">Closed (fully repaid)</h2>
+          {open && q.isLoading && <Loader2 size={15} className="animate-spin text-muted" />}
+          {open && (
+            <span className="rounded-full bg-navy-tint px-2.5 py-0.5 text-xs font-semibold text-navy">{apps.length}</span>
+          )}
+        </div>
+        {open ? <ChevronDown size={16} className="text-muted" /> : <ChevronRight size={16} className="text-muted" />}
+      </summary>
+
+      {open && (
+        <div className="border-t border-line">
+          {q.isLoading ? (
+            <Skeleton variant="table" rows={5} cols={18} />
+          ) : q.error ? (
+            <ErrorState error={q.error} onRetry={() => void q.refetch()} />
+          ) : apps.length === 0 ? (
+            <EmptyState title="Nothing in the CLOSED queue." />
+          ) : (
+            <QueueTable register={register} actions={() => null} caption="Closed (fully repaid)" />
+          )}
+        </div>
+      )}
+    </details>
+  );
+}

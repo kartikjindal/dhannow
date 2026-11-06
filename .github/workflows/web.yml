@@ -1,0 +1,181 @@
+# Staff console gates (PLAN Phase 12): tsc, lint, vitest, next build, npm audit; Playwright against
+# the docker-compose backend (nightly and on demand, it needs the whole stack); Vercel deploy on demand.
+name: web
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/web.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - ".github/workflows/web.yml"
+  schedule:
+    - cron: "30 20 * * *" # 02:00 IST, Playwright
+  workflow_dispatch:
+    inputs:
+      e2e:
+        description: Run the Playwright job
+        type: boolean
+        default: true
+      deploy:
+        description: Deploy the staff console to Vercel (needs the VERCEL_* secrets)
+        type: choice
+        options: [none, staging, prod]
+        default: none
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: web
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  check:
+    name: tsc, lint, vitest, next build
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: tsc --noEmit
+        run: npx tsc --noEmit
+      - name: next lint
+        run: npm run lint
+      - name: vitest
+        run: npm test
+      - name: next build
+        run: npm run build
+
+  audit:
+    name: npm audit (high)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      # Shipped dependencies only. PLAN Phase 12: no high findings.
+      - run: npm audit --audit-level=high --omit=dev
+
+  e2e:
+    name: Playwright (docker-compose backend)
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: backend/**/pom.xml
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Secrets for this run only
+        working-directory: .
+        run: |
+          s="$(openssl rand -hex 32)"; echo "::add-mask::$s"; echo "AUTH_SECRET=$s" >> "$GITHUB_ENV"
+          p="E2e-$(openssl rand -hex 12)"; echo "::add-mask::$p"; echo "E2E_STAFF_PASSWORD=$p" >> "$GITHUB_ENV"
+      - name: Package the backend jar
+        working-directory: backend
+        run: sh mvnw -B -ntp -DskipTests -pl navix-app -am package
+      - name: Start Postgres + backend
+        working-directory: .
+        run: |
+          docker compose -f docker-compose.ci.yml up -d --build
+          sh scripts/ci/wait_for_url.sh http://localhost:8080/actuator/health 240 UP
+      - name: Give the demo staff a password (CI database only)
+        working-directory: .
+        run: |
+          pip install --disable-pip-version-check bcrypt==4.2.1
+          python scripts/ci/seed_e2e_staff.py "$E2E_STAFF_PASSWORD" \
+            | docker compose -f docker-compose.ci.yml exec -T db psql -v ON_ERROR_STOP=1 -U navix -d navix
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Build and start the console
+        env:
+          BACKEND_BASE_URL: http://localhost:8080
+          NEXT_PUBLIC_API_BASE_URL: /api
+        run: |
+          npm run build
+          nohup npm start > ../build-web.log 2>&1 &
+          sh ../scripts/ci/wait_for_url.sh http://localhost:3000/staff 180
+      - name: playwright test
+        env:
+          E2E_BASE_URL: http://localhost:3000
+        run: npx playwright test
+      - name: Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-traces
+          path: web/test-results/
+          retention-days: 7
+      - name: Logs
+        if: failure()
+        working-directory: .
+        run: |
+          tail -200 build-web.log || true
+          docker compose -f docker-compose.ci.yml logs --no-color backend | tail -300
+
+  deploy:
+    name: Deploy staff console (Vercel)
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy != 'none'
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Environment protection (required reviewers for prod) is set on the GitHub environment.
+    environment: staff-console-${{ inputs.deploy }}
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Check the Vercel settings are present
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "::error::Set secret VERCEL_TOKEN and vars VERCEL_ORG_ID / VERCEL_PROJECT_ID on this environment."
+            exit 1
+          fi
+      # The console's runtime env (BACKEND_BASE_URL, AUTH_SECRET, NEXT_PUBLIC_*) lives in the Vercel
+      # project, per environment (infra/ENV.md). NEXT_PUBLIC_ROLE_SWITCHER must stay unset in prod.
+      - name: vercel pull / build / deploy
+        run: |
+          target=preview; [ "${{ inputs.deploy }}" = "prod" ] && target=production
+          npx --yes vercel@65.9.0 pull --yes --environment="$target" --token="$VERCEL_TOKEN"
+          if [ "$target" = production ]; then
+            npx --yes vercel@65.9.0 build --prod --token="$VERCEL_TOKEN"
+            npx --yes vercel@65.9.0 deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+          else
+            npx --yes vercel@65.9.0 build --token="$VERCEL_TOKEN"
+            npx --yes vercel@65.9.0 deploy --prebuilt --token="$VERCEL_TOKEN"
+          fi

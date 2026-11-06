@@ -1,0 +1,54 @@
+# CI stack (PLAN Phase 12): Postgres 16 + the backend with every provider mocked. Used by the
+# OpenAPI export (backend.yml) and the Playwright job (web.yml). Not for real environments.
+#
+#   (cd backend && sh mvnw -B -DskipTests -pl navix-app -am package)
+#   AUTH_SECRET=$(openssl rand -hex 32) docker compose -f docker-compose.ci.yml up -d --build
+#   curl -fsS localhost:8080/actuator/health
+#
+# No secret lives here: AUTH_SECRET must come from the caller (the workflows generate a random one).
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: navix
+      POSTGRES_USER: navix
+      POSTGRES_PASSWORD: navix
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U navix -d navix"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.runtime
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      NAVIX_ENV: ci
+      AWS_REGION: ap-south-1
+      # The S3 client and presigner are built at boot; nothing reaches AWS in CI.
+      AWS_ACCESS_KEY_ID: ci
+      AWS_SECRET_ACCESS_KEY: ci
+      DB_URL: jdbc:postgresql://db:5432/navix
+      DB_USERNAME: navix
+      DB_PASSWORD: navix
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET must be set (openssl rand -hex 32)}
+      NAVIX_S3_BUCKET: dhannow-ci-documents
+      NAVIX_STAFF_MFA_ENFORCE: "false"
+      NAVIX_ESIGN_PROVIDER: mock
+      NAVIX_DIGIO_PROVIDER: mock
+      NAVIX_SMS_MOCK: "true"
+      NAVIX_SMS_DEV_ECHO: "true"
+      NAVIX_WHATSAPP_ENABLED: "false"
+      NAVIX_WHATSAPP_MOCK: "true"
+      NAVIX_EMAIL_PROVIDER: log
+      NAVIX_CORS_DEV_ORIGINS: http://localhost:3000
+      NAVIX_APP_BASE_URL: http://localhost:3000
+      JAVA_OPTS: "-XX:MaxRAMPercentage=75.0"

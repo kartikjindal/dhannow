@@ -1,0 +1,28 @@
+{
+  "_readme": "Calculator parity (PLAN Phase 10a W6). Every figure in paise for the seven ladder amounts on the seed DhanNow terms (pricing_config v1). site/parity/calc.test.js checks site/calc.js against it; backend LoanMath (and ExtensionQuote) must assert the same file so the website, app and PDFs never disagree. Change it only together with a pricing change.",
+  "terms": {
+    "processingFeeRate": "0.10",
+    "gstRate": "0.18",
+    "dailyInterestRate": "0.01",
+    "tenureDays": 14,
+    "lateDailyRate": "0.02",
+    "lateCapDays": 30,
+    "extensionDays": 14,
+    "extensionCap": 3
+  },
+  "ladder": [
+    {"level": 1, "borrowPaise": 100000, "feePaise": 10000, "gstPaise": 1800, "interestPaise": 14000, "deductionsPaise": 25800, "netPaise": 74200, "repayPaise": 100000, "extensionChargePaise": 25800, "latePerDayPaise": 2000},
+    {"level": 2, "borrowPaise": 200000, "feePaise": 20000, "gstPaise": 3600, "interestPaise": 28000, "deductionsPaise": 51600, "netPaise": 148400, "repayPaise": 200000, "extensionChargePaise": 51600, "latePerDayPaise": 4000},
+    {"level": 3, "borrowPaise": 300000, "feePaise": 30000, "gstPaise": 5400, "interestPaise": 42000, "deductionsPaise": 77400, "netPaise": 222600, "repayPaise": 300000, "extensionChargePaise": 77400, "latePerDayPaise": 6000},
+    {"level": 4, "borrowPaise": 400000, "feePaise": 40000, "gstPaise": 7200, "interestPaise": 56000, "deductionsPaise": 103200, "netPaise": 296800, "repayPaise": 400000, "extensionChargePaise": 103200, "latePerDayPaise": 8000},
+    {"level": 5, "borrowPaise": 500000, "feePaise": 50000, "gstPaise": 9000, "interestPaise": 70000, "deductionsPaise": 129000, "netPaise": 371000, "repayPaise": 500000, "extensionChargePaise": 129000, "latePerDayPaise": 10000},
+    {"level": 6, "borrowPaise": 700000, "feePaise": 70000, "gstPaise": 12600, "interestPaise": 98000, "deductionsPaise": 180600, "netPaise": 519400, "repayPaise": 700000, "extensionChargePaise": 180600, "latePerDayPaise": 14000},
+    {"level": 7, "borrowPaise": 1000000, "feePaise": 100000, "gstPaise": 18000, "interestPaise": 140000, "deductionsPaise": 258000, "netPaise": 742000, "repayPaise": 1000000, "extensionChargePaise": 258000, "latePerDayPaise": 20000}
+  ],
+  "extensionExamples": [
+    {"borrowPaise": 100000, "daysLate": 0, "totalPaise": 25800},
+    {"borrowPaise": 100000, "daysLate": 3, "totalPaise": 31800},
+    {"borrowPaise": 100000, "daysLate": 45, "totalPaise": 85800},
+    {"borrowPaise": 1000000, "daysLate": 3, "totalPaise": 318000}
+  ]
+}

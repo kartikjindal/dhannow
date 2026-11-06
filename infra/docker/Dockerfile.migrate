@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1
+#
+# DhanNow schema migrations as a one-off ECS task (deploy-backend.yml runs it before each rollout).
+# The same Flyway scripts the backend carries, run by the Flyway CLI of the version Spring Boot 3.4
+# manages (10.20.x), so checksums and history rows match what the app validates on boot.
+#
+# Build (repo root): docker build -f infra/docker/Dockerfile.migrate -t dhannow-migrate .
+# Env (from the task definition): FLYWAY_URL, FLYWAY_USER, FLYWAY_PASSWORD, FLYWAY_LOCATIONS.
+FROM flyway/flyway:10.20.1
+COPY backend/navix-app/src/main/resources/db/migration/ /flyway/sql/
+CMD ["migrate"]

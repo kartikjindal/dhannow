@@ -1,0 +1,171 @@
+"use client";
+
+import * as React from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Loader2, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
+import { EmptyState, ErrorState, Input, Select, Skeleton, toast } from "@/components/ui";
+import { PageHeader } from "@/components/staff/staff-ui";
+import { errMessage, useStaffMe, useCan, NoAccessNotice } from "@/components/staff/live-pipeline";
+import { ExportMenu } from "@/components/staff/export-menu";
+import { adminApi, type BlocklistType, type BlocklistResponse } from "@/lib/api/applications";
+import { PaginationBar } from "@/components/staff/pipeline/pagination";
+import { type FilterColumn } from "@/components/staff/column-filter";
+import { useRegisterQuery } from "@/lib/staff/register-query";
+import { useClientRegister } from "@/lib/staff/use-client-register";
+import { Th, thBag, describeRegister } from "@/lib/staff/register-th";
+
+const TYPES: { value: BlocklistType; label: string }[] = [
+  { value: "PAN", label: "PAN" },
+  { value: "AADHAAR_REF", label: "Aadhaar ref" },
+  { value: "PHONE", label: "Phone" },
+  { value: "DEVICE", label: "Device" },
+  { value: "BANK_ACCOUNT", label: "Bank account" },
+];
+
+/** Type and reason filter; the blocked value is identity (a PAN, a phone, a device id), so it does not. */
+const SORT_KEYS = ["type", "reason"] as const;
+
+const COLUMN_LABEL: Record<string, string> = { type: "Type", reason: "Reason" };
+
+/** Admin · fraud blocklist — list / add / remove blocked identifiers (live /api/admin/blocklist). ADMIN only. */
+export default function AdminBlocklistPage() {
+  const me = useStaffMe().data;
+  const myRole = me?.role;
+  const can = useCan();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["admin-blocklist"], queryFn: adminApi.listBlocklist });
+  const [type, setType] = React.useState<BlocklistType>("PAN");
+  const [value, setValue] = React.useState("");
+  const [reason, setReason] = React.useState("");
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["admin-blocklist"] });
+  const add = useMutation({
+    mutationFn: () => adminApi.addBlocklist({ type, value: value.trim(), reason: reason.trim() || undefined }),
+    onSuccess: () => { setValue(""); setReason(""); invalidate(); toast.success("Added to blocklist"); },
+  });
+  const remove = useMutation({
+    mutationFn: (id: number) => adminApi.removeBlocklist(id),
+    onSuccess: () => {
+      toast.success("Removed from blocklist");
+      // Returned so the mutation stays pending until the refetch lands, as before.
+      return invalidate();
+    },
+  });
+
+  const rows = React.useMemo(() => q.data ?? [], [q.data]);
+
+  const rq = useRegisterQuery({
+    registerId: "blocklist",
+    staffId: me?.id,
+    sortKeys: SORT_KEYS,
+    filterKeys: SORT_KEYS,
+    defaults: { sort: { key: "type", dir: "asc" } },
+  });
+
+  const filterColumns = React.useMemo<Array<FilterColumn<BlocklistResponse>>>(
+    () => [
+      { key: "type", value: (b) => TYPES.find((t) => t.value === b.type)?.label ?? b.type, raw: (b) => b.type },
+      { key: "reason", kind: "text", value: (b) => b.reason ?? "" },
+    ],
+    [],
+  );
+
+  const cr = useClientRegister(rows, filterColumns, rq);
+  const { pageRows, total, pageCount } = cr;
+  const th = thBag(rq, cr, filterColumns, COLUMN_LABEL);
+  const page = rq.state.page;
+  const pageSize = rq.state.size;
+
+  if (myRole && !can("staff:manage")) {
+    return <NoAccessNotice message="Admin access only." />;
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Fraud blocklist"
+        subtitle={["Blocked PAN, Aadhaar ref, phone, device and bank account identifiers.", describeRegister(th)]
+          .filter(Boolean)
+          .join(" · ")}
+      >
+        <ExportMenu
+          title="Fraud blocklist"
+          fileBase="dhannow-blocklist"
+          columns={[
+            { header: "Type", value: (b: BlocklistResponse) => b.type },
+            { header: "Value", value: (b) => b.value },
+            { header: "Reason", value: (b) => b.reason ?? "" },
+            { header: "Active", value: (b) => (b.active ? "yes" : "no") },
+          ]}
+          rows={cr.rows}
+          scope="all"
+        />
+        <button
+          onClick={() => q.refetch()}
+          className="flex items-center gap-1.5 rounded border border-line px-3 py-1.5 text-xs text-muted hover:bg-grey-100 hover:text-ink"
+        >
+          {q.isFetching ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Refresh
+        </button>
+      </PageHeader>
+
+      <div className="mb-6 rounded border border-line bg-white p-5 shadow-sm">
+        <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-navy"><ShieldAlert size={16} /> Add to blocklist</div>
+        <div className="flex flex-wrap items-end gap-3">
+          <Select label="Type" value={type} onChange={(e) => setType(e.target.value as BlocklistType)} options={TYPES} className="!mb-0" />
+          <Input label="Value" value={value} onChange={(e) => setValue(e.target.value)} placeholder="ABCDE1234F" className="!mb-0" inputClassName="w-48" />
+          <Input label="Reason (optional)" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Confirmed fraud" className="!mb-0" inputClassName="w-56" />
+          <button onClick={() => add.mutate()} disabled={add.isPending || !value.trim()} className="btn btn-gold disabled:opacity-50">
+            {add.isPending ? <Loader2 size={14} className="animate-spin" /> : null} Add
+          </button>
+        </div>
+        {add.error && <p className="mt-2 text-sm text-error-700">{errMessage(add.error)}</p>}
+      </div>
+
+      {q.isLoading ? (
+        <Skeleton variant="table" rows={8} cols={5} className="rounded border border-line bg-white" />
+      ) : q.error ? (
+        <ErrorState error={q.error} onRetry={() => void q.refetch()} />
+      ) : (
+        <div className="rounded border border-line bg-white shadow-sm">
+          <div className="staff-table-scroll">
+            <table className="staff-data-table">
+              <thead>
+                <tr>
+                  <th>S.No.</th>
+                  <Th th={th} col="type" />
+                  <th>Value</th>
+                  <Th th={th} col="reason" />
+                  <th className="text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {pageRows.map((b: BlocklistResponse, i) => (
+                  <tr key={b.id}>
+                    <td className="text-muted">{(page - 1) * pageSize + i + 1}</td>
+                    <td><span className="rounded-full bg-navy-tint text-xs font-semibold text-navy">{b.type}</span></td>
+                    <td className="font-mono text-ink">{b.value}</td>
+                    <td className="text-muted">{b.reason || "—"}</td>
+                    <td className="text-right">
+                      <button onClick={() => remove.mutate(b.id)} disabled={remove.isPending}
+                        className="btn btn-sm btn-outline disabled:opacity-50">
+                        <Trash2 size={13} /> Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {total === 0 && (
+                  // In-table so the headers survive an emptying filter and it can still be cleared.
+                  <EmptyState
+                    title={rq.activeCount > 0 && rows.length > 0 ? "No blocklist entries match the column filters." : "No active blocklist entries."}
+                    inTable={5}
+                  />
+                )}
+              </tbody>
+            </table>
+          </div>
+          <PaginationBar page={page} pageCount={pageCount} setPage={rq.setPage} total={total} pageSize={pageSize} setPageSize={rq.setSize} />
+        </div>
+      )}
+    </div>
+  );
+}

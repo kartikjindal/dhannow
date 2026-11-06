@@ -1,0 +1,664 @@
+package com.navix.loan.service;
+
+import com.navix.common.exception.BusinessException;
+import com.navix.common.exception.ResourceNotFoundException;
+import com.navix.common.security.ActorContext;
+import com.navix.common.security.CurrentActor;
+import com.navix.common.storage.DocumentStoragePort;
+import com.navix.common.util.Aadhaar;
+import com.navix.common.util.Masking;
+import com.navix.loan.dto.ReviewDtos.DocumentRequest;
+import com.navix.loan.dto.ReviewDtos.EditProfileRequest;
+import com.navix.loan.dto.ReviewDtos.ProfileRequest;
+import com.navix.loan.entity.CustomerProfile;
+import com.navix.loan.entity.ApplicationDocument;
+import com.navix.loan.entity.LoanApplication;
+import com.navix.loan.entity.ProfileChangeLog;
+import com.navix.loan.repository.CustomerProfileRepository;
+import com.navix.loan.repository.ApplicationDocumentRepository;
+import com.navix.loan.repository.ApplicationVerificationRepository;
+import com.navix.loan.repository.LoanApplicationRepository;
+import com.navix.loan.repository.ProfileChangeLogRepository;
+import com.navix.loan.domain.ApplicationStatus;
+import com.navix.loan.entity.ApplicationVerification;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Owns the customer-review data attached to an application: the KYC profile and uploaded
+ * documents. Profile writes are borrower-only (ADMIN may act for the borrower) and document
+ * uploads additionally allow the two credit roles; reads are open to any
+ * authenticated actor so every reviewing staff role can view them. Document bytes are base64 in /
+ * base64 out, kept inline ({@code bytea}) for the demo.
+ */
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class CustomerReviewService {
+
+    /** Inline document cap — keeps base64-over-JSON sane for the demo. */
+    static final int MAX_DOC_BYTES = 5 * 1024 * 1024;
+
+    /**
+     * Who may attach a document to an application. The borrower uploads their own; the two credit
+     * roles upload on their behalf while reviewing the file (ADMIN bypasses the gate entirely).
+     * Mirrored in the UI by the {@code document:upload} permission.
+     */
+    static final Set<String> DOCUMENT_UPLOAD_ROLES =
+            Set.of("BORROWER", "CREDIT_EXECUTIVE", "CREDIT_HEAD");
+
+    private final LoanApplicationRepository applicationRepository;
+    private final CustomerProfileRepository profileRepository;
+    private final ApplicationDocumentRepository documentRepository;
+    private final DocumentStoragePort storage;
+    private final VerificationInvalidationService verificationInvalidation;
+    private final EligibilityService eligibilityService;
+    private final ProfileChangeLogRepository changeLogRepository;
+    /** Changed-only writer — used for the onboarding-wizard slices (see {@link #saveProfile}). */
+    private final ProfileChangeLogger changeLogger;
+    /** Read-only here: decides whether the Aadhaar number is still editable (see {@link #saveProfile}). */
+    private final ApplicationVerificationRepository verificationRepository;
+
+    /** CC-24: no detail changes in v1, by the borrower or by staff. The self-edit below stays for a later version. */
+    static final boolean DETAIL_CHANGES_ALLOWED = false;
+
+    @Transactional
+    public CustomerProfile saveProfile(Long appId, ProfileRequest req) {
+        requireRole("BORROWER");
+        LoanApplication app = applicationRepository.findById(appId)
+                .orElseThrow(() -> new ResourceNotFoundException("LoanApplication", String.valueOf(appId)));
+        Long customerId = app.getCustomerId();
+
+        String pan = normalizePan(req.pan());
+        String mobile = normalizeMobile(req.mobile());
+        String aadhaar = normalizeAadhaar(req.aadhaar());
+
+        // A mobile / PAN may belong to only one customer. Uniqueness is enforced ACROSS customers
+        // (not per-application): the same customer re-onboarding through a NEW application — which
+        // creates a fresh profile row carrying the same identity — is allowed, while a different person
+        // reusing the identifier is still rejected. The Aadhaar number (captured again since V75 — see
+        // CustomerProfile#aadhaar) is deliberately NOT a hard block: a collision becomes an
+        // AADHAAR_DUPLICATE review row for staff (see flagAadhaarDuplicate), so the borrower learns
+        // nothing from the response and a returning borrower on a new mobile is not refused.
+        if (pan != null && profileRepository.existsPanForOtherCustomer(pan, customerId)) {
+            throw new BusinessException("DUPLICATE_PAN",
+                    "This PAN is already registered with another customer.");
+        }
+        if (mobile != null && profileRepository.existsMobileForOtherCustomer(mobile, customerId)) {
+            throw new BusinessException("DUPLICATE_MOBILE",
+                    "This mobile number is already registered with another customer.");
+        }
+
+        CustomerProfile p = profileRepository.findByApplicationId(appId).orElseGet(CustomerProfile::new);
+        p.setApplicationId(appId);
+        // PARTIAL MERGE: onboarding saves the profile in slices (name on the email step, salary on
+        // the salary step, bank on the penny-drop step, …). Only overwrite a field when this request
+        // actually provides it, so a later slice never wipes an earlier one — otherwise the profile
+        // ends up holding only the last slice's fields (e.g. name/salary null on re-login).
+        //
+        // Each slice also LOGS the value it lands, but only when it actually changes
+        // (ProfileChangeLogger.logIfChanged). That one rule covers both cases we want on the staff
+        // activity timeline: null → value is the borrower's INITIAL data entry ("Entered PAN"), and
+        // value → other value is a mid-onboarding correction ("Updated PAN"), while a re-save of the
+        // same slice logs nothing — so the repeated partial saves never spam the timeline.
+        // PII: sensitive identifiers (PAN, salary account number, mobiles) are logged MASKED — the
+        // timeline is staff-visible and is not masked at render time.
+        String fullName = trimToNull(req.fullName());
+        if (fullName != null) {
+            log(customerId, appId, "fullName", p.getFullName(), fullName);
+            p.setFullName(fullName);
+        }
+        if (pan != null) {
+            log(customerId, appId, "pan", Masking.maskPan(p.getPan()), Masking.maskPan(pan));
+            p.setPan(pan);
+        }
+        if (mobile != null) {
+            log(customerId, appId, "mobile", Masking.maskPhone(p.getMobile()), Masking.maskPhone(mobile));
+            p.setMobile(mobile);
+        }
+        if (aadhaar != null && !aadhaar.equals(p.getAadhaar())) {
+            // The number is what the fraud rule compares against the PAN record (consent step) and
+            // DigiLocker (offer journey). Once either check has run, or the file has left DRAFT, a change
+            // would let a borrower swap in a different number behind a verdict already recorded against
+            // the old one — so it is locked. Before that, a typo may be corrected freely: nothing has
+            // been compared yet, and the check reads whatever is stored when it runs.
+            requireAadhaarEditable(app, p);
+            // Masked on the timeline like the PAN: the full number lives on the profile card only.
+            log(customerId, appId, "aadhaar", Masking.maskAadhaar(p.getAadhaar()), Masking.maskAadhaar(aadhaar));
+            p.setAadhaar(aadhaar);
+            flagAadhaarDuplicate(appId, profileRepository.findOtherCustomerIdsByAadhaar(aadhaar, customerId));
+        }
+        if (req.dob() != null) {
+            requireStorableDob(req.dob());
+            log(customerId, appId, "dob", str(p.getDob()), req.dob().toString());
+            p.setDob(req.dob());
+        }
+        String address = trimToNull(req.address());
+        if (address != null) {
+            log(customerId, appId, "address", p.getAddress(), address);
+            p.setAddress(address);
+        }
+        String employer = trimToNull(req.employer());
+        if (employer != null) {
+            log(customerId, appId, "employer", p.getEmployer(), employer);
+            p.setEmployer(employer);
+        }
+        String employmentStatus = trimToNull(req.employmentStatus());
+        if (employmentStatus != null) {
+            log(customerId, appId, "employmentStatus", p.getEmploymentStatus(), employmentStatus);
+            p.setEmploymentStatus(employmentStatus);
+        }
+        if (req.monthlySalaryPaise() != null) {
+            log(customerId, appId, "monthlySalaryPaise", str(p.getMonthlySalaryPaise()),
+                    req.monthlySalaryPaise().toString());
+            p.setMonthlySalaryPaise(req.monthlySalaryPaise());
+        }
+        String salaryBank = trimToNull(req.salaryBank());
+        if (salaryBank != null) {
+            log(customerId, appId, "salaryBank", p.getSalaryBank(), salaryBank);
+            p.setSalaryBank(salaryBank);
+        }
+        String email = trimToNull(req.email());
+        if (email != null) {
+            log(customerId, appId, "email", p.getEmail(), email);
+            p.setEmail(email);
+        }
+
+        // --- Phase 1 intake slices (V44) ---
+        String officialEmail = trimToNull(req.officialEmail());
+        if (officialEmail != null) {
+            log(customerId, appId, "officialEmail", p.getOfficialEmail(), officialEmail);
+            p.setOfficialEmail(officialEmail);
+        }
+        String accountNumber = trimToNull(req.salaryAccountNumber());
+        if (accountNumber != null) {
+            log(customerId, appId, "salaryAccountNumber",
+                    Masking.maskAccount(p.getSalaryAccountNumber()), Masking.maskAccount(accountNumber));
+            p.setSalaryAccountNumber(accountNumber);
+        }
+        String ifsc = trimToNull(req.salaryIfsc());
+        if (ifsc != null) {
+            log(customerId, appId, "salaryIfsc", p.getSalaryIfsc(), ifsc.toUpperCase());
+            p.setSalaryIfsc(ifsc.toUpperCase());
+        }
+        String accountMobile = normalizeMobile(req.salaryAccountMobile());
+        if (accountMobile != null) {
+            log(customerId, appId, "salaryAccountMobile",
+                    Masking.maskPhone(p.getSalaryAccountMobile()), Masking.maskPhone(accountMobile));
+            p.setSalaryAccountMobile(accountMobile);
+        }
+        if (req.annualSalaryPaise() != null) {
+            log(customerId, appId, "annualSalaryPaise", str(p.getAnnualSalaryPaise()),
+                    req.annualSalaryPaise().toString());
+            p.setAnnualSalaryPaise(req.annualSalaryPaise());
+        }
+        if (req.previousSalaryDate() != null) {
+            log(customerId, appId, "previousSalaryDate", str(p.getPreviousSalaryDate()),
+                    req.previousSalaryDate().toString());
+            p.setPreviousSalaryDate(req.previousSalaryDate());
+            // The recurring salary day drives the salary-linked due date; the borrower gives us the
+            // date they were last paid, so derive it here rather than asking twice.
+            app.setSalaryCreditDay(req.previousSalaryDate().getDayOfMonth());
+            applicationRepository.save(app);
+        }
+        // Consent timestamps are stamped server-side — the client sends only the version / the tick.
+        String termsVersion = trimToNull(req.termsVersion());
+        if (termsVersion != null) {
+            log(customerId, appId, "termsVersion", p.getTermsVersion(), termsVersion);
+            p.setTermsVersion(termsVersion);
+            p.setTermsAcceptedAt(Instant.now());
+        }
+        if (Boolean.TRUE.equals(req.pepDeclared())) {
+            log(customerId, appId, "pepDeclared",
+                    p.getPepDeclaredAt() != null ? "true" : null, "true");
+            p.setPepDeclaredAt(Instant.now());
+        }
+        return profileRepository.save(p);
+    }
+
+    /**
+     * Log an onboarding-wizard slice value to the audited change log, ONLY when it differs from what
+     * the profile already holds. Field names are stable camelCase and intentionally match what
+     * {@link #editOwnProfile} logs, so the same field reads consistently on the activity timeline
+     * regardless of which path wrote it.
+     */
+    /**
+     * Rejects a date of birth no verification provider would accept.
+     *
+     * <p>Only the two impossible cases: a DOB in the future and one more than a century back. A typo
+     * of that shape used to travel all the way to the vendor, which answers with a format error, and
+     * the borrower was then told the check was unavailable rather than that their date was wrong —
+     * eleven applications in the Sep-2026 audit. The date input on the consent screen carries the same
+     * {@code min}/{@code max}; this is the half a client cannot skip.
+     *
+     * <p><b>Deliberately no age rule here.</b> {@code CustomerService.requirePlausibleDob} enforces
+     * "at least 18" on the ADMIN correction path, and whether an under-18 applicant is turned away at
+     * intake or routed to a human is a product decision, not a validation one. This method only
+     * refuses input that cannot be a date of birth at all.
+     */
+    private static void requireStorableDob(java.time.LocalDate dob) {
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
+        if (!dob.isBefore(today)) {
+            throw new BusinessException("INVALID_DOB", "Date of birth must be in the past");
+        }
+        if (dob.isBefore(today.minusYears(100))) {
+            throw new BusinessException("INVALID_DOB", "Please check your date of birth");
+        }
+    }
+
+    private void log(Long customerId, Long appId, String field, String oldVal, String newVal) {
+        changeLogger.logIfChanged(customerId, appId, field, oldVal, newVal);
+    }
+
+    /** {@code toString()} or null — for logging non-String slice values (dates, paise amounts). */
+    private static String str(Object v) {
+        return v == null ? null : v.toString();
+    }
+
+    /**
+     * Borrower self-edit of their own profile (Phase 2.2). Identity fields (name/PAN/Aadhaar/mobile/DOB)
+     * are <b>locked</b> — only contact, address, employment, salary, bank and emergency-contact fields
+     * are editable. Editing a verification-linked field resets the matching check to PENDING (re-
+     * verification required, via {@link VerificationInvalidationService}); a salary change recomputes
+     * the eligible limit. A null field is left unchanged (partial update). BORROWER-only (ADMIN bypass);
+     * ownership is enforced at the controller.
+     */
+    @Transactional
+    public CustomerProfile editOwnProfile(Long appId, EditProfileRequest req) {
+        requireRole("BORROWER");
+        if (!DETAIL_CHANGES_ALLOWED) {
+            throw new BusinessException("PROFILE_LOCKED", "Your details can't be changed in the app. "
+                    + "Please contact support if something is wrong.");
+        }
+        LoanApplication app = applicationRepository.findById(appId)
+                .orElseThrow(() -> new ResourceNotFoundException("LoanApplication", String.valueOf(appId)));
+        // Edit the application's own profile snapshot (must exist — onboarding created it).
+        CustomerProfile p = profileRepository.findByApplicationId(appId)
+                .orElseThrow(() -> new ResourceNotFoundException("CustomerProfile", "application:" + appId));
+        Long customerId = app.getCustomerId();
+
+        java.util.Set<String> changed = new java.util.HashSet<>();
+        String address = trimToNull(req.address());
+        if (address != null && !address.equals(p.getAddress())) {
+            logChange(customerId, appId, "address", p.getAddress(), address);
+            p.setAddress(address);
+            changed.add("address");
+        }
+        String employer = trimToNull(req.employer());
+        if (employer != null && !employer.equals(p.getEmployer())) {
+            logChange(customerId, appId, "employer", p.getEmployer(), employer);
+            p.setEmployer(employer);
+            changed.add("employer");
+        }
+        String employmentStatus = trimToNull(req.employmentStatus());
+        if (employmentStatus != null && !employmentStatus.equals(p.getEmploymentStatus())) {
+            logChange(customerId, appId, "employmentStatus", p.getEmploymentStatus(), employmentStatus);
+            p.setEmploymentStatus(employmentStatus);
+            changed.add("employmentStatus");
+        }
+        boolean salaryChanged = false;
+        if (req.monthlySalaryPaise() != null
+                && !req.monthlySalaryPaise().equals(p.getMonthlySalaryPaise())) {
+            logChange(customerId, appId, "monthlySalaryPaise",
+                    p.getMonthlySalaryPaise() != null ? p.getMonthlySalaryPaise().toString() : null,
+                    req.monthlySalaryPaise().toString());
+            p.setMonthlySalaryPaise(req.monthlySalaryPaise());
+            changed.add("monthlySalaryPaise");
+            salaryChanged = true;
+        }
+        String salaryBank = trimToNull(req.salaryBank());
+        if (salaryBank != null && !salaryBank.equals(p.getSalaryBank())) {
+            logChange(customerId, appId, "salaryBank", p.getSalaryBank(), salaryBank);
+            p.setSalaryBank(salaryBank);
+            changed.add("salaryBank");
+        }
+        String email = trimToNull(req.email());
+        if (email != null && !email.equals(p.getEmail())) {
+            logChange(customerId, appId, "email", p.getEmail(), email);
+            p.setEmail(email);
+            changed.add("email");
+        }
+        // Emergency contact — editable, not verified (no invalidation).
+        p.setEmergencyContactName(trimToNull(req.emergencyContactName()));
+        p.setEmergencyContactPhone(trimToNull(req.emergencyContactPhone()));
+        p.setEmergencyContactRelation(trimToNull(req.emergencyContactRelation()));
+        // UAN isn't itself verified (no invalidation) — it just sharpens the employment lookup.
+        String uan = trimToNull(req.uan());
+        if (uan != null && !uan.equals(p.getUan())) {
+            // Checked here rather than left to the vendor: a UAN that is not twelve digits makes the
+            // EPFO lookup fail its format validation, and the borrower is told the employment check is
+            // unavailable when the truth is a typo they could fix in a second. The frontend validates
+            // the same shape; this is the half that cannot be skipped.
+            if (!uan.matches("\\d{12}")) {
+                throw new BusinessException("INVALID_UAN", "UAN must be exactly 12 digits");
+            }
+            logChange(customerId, appId, "uan", p.getUan(), uan);
+            p.setUan(uan);
+        }
+
+        CustomerProfile saved = profileRepository.save(p);
+        // Re-verification + eligibility side effects.
+        verificationInvalidation.invalidateForFields(appId, changed);
+        if (salaryChanged) {
+            eligibilityService.recomputeForCustomer(app.getCustomerId(), saved.getMonthlySalaryPaise());
+        }
+        return saved;
+    }
+
+    /** Append a self-edit to the audited change log (so it shows in the customer activity timeline). */
+    private void logChange(Long customerId, Long appId, String field, String oldVal, String newVal) {
+        ProfileChangeLog entry = new ProfileChangeLog();
+        entry.setCustomerId(customerId);
+        entry.setApplicationId(appId);
+        entry.setField(field);
+        entry.setOldValue(oldVal);
+        entry.setNewValue(newVal);
+        changeLogRepository.save(entry);
+    }
+
+    /**
+     * Read the customer KYC snapshot for an application. A reborrow application has no profile row
+     * of its own (identity carries over from the prior loan), so fall back to the customer's most
+     * recent saved profile — this is what the KYC reviewer and the borrower's amount page see.
+     */
+    @Transactional(readOnly = true)
+    public CustomerProfile getProfile(Long appId) {
+        LoanApplication app = applicationRepository.findById(appId)
+                .orElseThrow(() -> new ResourceNotFoundException("LoanApplication", String.valueOf(appId)));
+        return profileRepository.findByApplicationId(appId)
+                .or(() -> latestProfileForCustomer(app.getCustomerId()))
+                .orElseThrow(() -> new ResourceNotFoundException("CustomerProfile", "application:" + appId));
+    }
+
+    /** Profiles for a set of applications, keyed by {@code applicationId} — to enrich list/queue views. */
+    @Transactional(readOnly = true)
+    public Map<Long, CustomerProfile> profilesByApplicationIds(Collection<Long> appIds) {
+        if (appIds == null || appIds.isEmpty()) {
+            return Map.of();
+        }
+        return profileRepository.findByApplicationIdIn(appIds).stream()
+                .collect(Collectors.toMap(CustomerProfile::getApplicationId, p -> p, (a, b) -> a));
+    }
+
+    /**
+     * Per-application <em>effective</em> profile keyed by {@code applicationId}: the application's own
+     * KYC snapshot when it has one, otherwise the customer's most recent saved profile. Mirrors the
+     * fallback in {@link #getProfile} so list / queue / customer views stay consistent — a reborrow (or
+     * any application without its own snapshot) still shows the customer's credit headline instead of a
+     * blank, matching the profile the single-application read returns.
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, CustomerProfile> effectiveProfilesByApplications(List<LoanApplication> apps) {
+        if (apps == null || apps.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, CustomerProfile> own = profilesByApplicationIds(
+                apps.stream().map(LoanApplication::getId).toList());
+        Map<Long, CustomerProfile> latestByCustomer = new HashMap<>();
+        Map<Long, CustomerProfile> out = new HashMap<>();
+        for (LoanApplication a : apps) {
+            CustomerProfile p = own.get(a.getId());
+            if (p == null) {
+                p = latestByCustomer.computeIfAbsent(a.getCustomerId(),
+                        aid -> latestProfileForCustomer(aid).orElse(null));
+            }
+            if (p != null) {
+                out.put(a.getId(), p);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The customer's most recent saved KYC profile, if any — public entry point for the
+     * notification {@code BorrowerContactDirectory} adapter (name + mobile + email by customer id).
+     */
+    @Transactional(readOnly = true)
+    public Optional<CustomerProfile> latestProfile(Long customerId) {
+        return latestProfileForCustomer(customerId);
+    }
+
+    /** The customer's most recent saved KYC profile (newest application first), if any. */
+    private Optional<CustomerProfile> latestProfileForCustomer(Long customerId) {
+        return applicationRepository.findByCustomerId(customerId).stream()
+                .sorted(Comparator.comparing(LoanApplication::getId).reversed())
+                .map(a -> profileRepository.findByApplicationId(a.getId()).orElse(null))
+                .filter(Objects::nonNull)
+                .findFirst();
+    }
+
+    /**
+     * Upload a supporting document for an application. The borrower's own onboarding uploads land
+     * here, and so do the credit roles': a reviewer routinely has to attach a payslip or bank
+     * statement the borrower mailed in or handed over on a call, and having to escalate to an ADMIN
+     * for that stalled files. Deleting is deliberately NOT widened — a credit user may add evidence
+     * to a category that has none, but replacing borrower-submitted evidence stays with ADMIN
+     * ({@link #deleteDocument}).
+     */
+    @Transactional
+    public ApplicationDocument addDocument(Long appId, DocumentRequest req) {
+        requireAnyRole(DOCUMENT_UPLOAD_ROLES);
+        requireApplication(appId);
+        byte[] bytes;
+        try {
+            bytes = Base64.getDecoder().decode(req.dataBase64());
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException("BAD_DOCUMENT", "Document data is not valid base64");
+        }
+        if (bytes.length == 0) {
+            throw new BusinessException("EMPTY_DOCUMENT", "Document is empty");
+        }
+        if (bytes.length > MAX_DOC_BYTES) {
+            throw new BusinessException("DOCUMENT_TOO_LARGE", "Document exceeds the 5 MB limit");
+        }
+        ApplicationDocument d = new ApplicationDocument();
+        d.setApplicationId(appId);
+        d.setDocType(req.docType());
+        d.setFileName(req.fileName());
+        d.setContentType(safeContentType(req.contentType()));
+        d.setSizeBytes((long) bytes.length);
+        d.setData(bytes);
+        d.setFilePassword(ApplicationVerificationService.normalizeFilePassword(req.filePassword()));
+        return documentRepository.save(d);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ApplicationDocument> listDocuments(Long appId) {
+        requireApplication(appId);
+        List<ApplicationDocument> docs = documentRepository.findByApplicationIdOrderByIdAsc(appId);
+        if (!isBorrower()) {
+            return docs;
+        }
+        return docs.stream().filter(d -> !STAFF_ONLY_DOC_TYPES.contains(d.getDocType())).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ApplicationDocument getDocument(Long appId, Long docId) {
+        requireApplication(appId);
+        return documentRepository.findByIdAndApplicationId(docId, appId)
+                .filter(d -> !isBorrower() || !STAFF_ONLY_DOC_TYPES.contains(d.getDocType()))
+                .orElseThrow(() -> new ResourceNotFoundException("ApplicationDocument", String.valueOf(docId)));
+    }
+
+    /**
+     * ADMIN removes an uploaded document (the delete half of the CRM "replace" flow — an admin deletes
+     * the existing document of a category before uploading a corrected one). Removes the document row
+     * (the CRM's source of truth for the document list). Any S3 object is left for lifecycle cleanup —
+     * it's no longer reachable once the row is gone.
+     */
+    @Transactional
+    public void deleteDocument(Long appId, Long docId) {
+        requireRole("ADMIN");
+        ApplicationDocument d = getDocument(appId, docId);
+        documentRepository.delete(d);
+    }
+
+    /**
+     * Short-lived presigned GET URL for an S3-backed document (the live path; staff never stream
+     * document bytes through the backend). Throws for legacy inline ({@code bytea}) rows — those are
+     * served via {@link #getDocument} as base64.
+     */
+    @Transactional(readOnly = true)
+    public String presignedUrl(Long appId, Long docId) {
+        ApplicationDocument d = getDocument(appId, docId);
+        if (d.getS3ObjectKey() == null) {
+            throw new BusinessException("NOT_S3_BACKED", "This document is stored inline; fetch its bytes instead");
+        }
+        return storage.presignDownload(d.getS3ObjectKey());
+    }
+
+    // ---- internals -----------------------------------------------------------------
+
+    /**
+     * Documents on an application that are the credit team's work product, not the borrower's: the
+     * credit brief (internal rating and recommendation) and the raw bureau report. The borrower's
+     * profile view already strips the same facts; the document endpoints are owner-readable, so they
+     * are hidden from a BORROWER here — absent from the list, not-found by id. Staff reads unchanged.
+     */
+    static final Set<String> STAFF_ONLY_DOC_TYPES =
+            Set.of(CreditBriefService.DOC_TYPE, ApplicationVerificationService.BUREAU_REPORT);
+
+    private static boolean isBorrower() {
+        return "BORROWER".equals(ActorContext.get().role());
+    }
+
+    /**
+     * Types a reviewer's browser may render inline. The staff console opens an inline document as a
+     * same-origin {@code blob:} URL typed with this value, so a borrower-declared {@code text/html} or
+     * {@code image/svg+xml} would run script as the reviewer. Anything else is still stored — never
+     * refused — but as an opaque download.
+     */
+    static final Set<String> RENDERABLE_CONTENT_TYPES = Set.of(
+            "application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
+            "image/heic", "image/heif");
+
+    static String safeContentType(String declared) {
+        String type = declared == null ? "" : declared.trim().toLowerCase(java.util.Locale.ROOT);
+        return RENDERABLE_CONTENT_TYPES.contains(type) ? type : "application/octet-stream";
+    }
+
+    private void requireApplication(Long appId) {
+        if (!applicationRepository.existsById(appId)) {
+            throw new ResourceNotFoundException("LoanApplication", String.valueOf(appId));
+        }
+    }
+
+    /** Role gate for a set of allowed roles (ADMIN bypasses, as everywhere else). */
+    private void requireAnyRole(Set<String> roles) {
+        CurrentActor actor = ActorContext.get();
+        if (!roles.contains(actor.role()) && !"ADMIN".equals(actor.role())) {
+            throw new BusinessException("FORBIDDEN_ROLE",
+                    "This action requires one of " + String.join(", ", roles));
+        }
+    }
+
+    /** Borrower-only write (ADMIN bypass), mirroring ApplicationFlowService's role gate. */
+    private void requireRole(String role) {
+        CurrentActor actor = ActorContext.get();
+        if (!role.equals(actor.role()) && !"ADMIN".equals(actor.role())) {
+            throw new BusinessException("FORBIDDEN_ROLE", "This action requires role " + role);
+        }
+    }
+
+    private static String trimToNull(String s) {
+        if (s == null) {
+            return null;
+        }
+        String t = s.trim();
+        return t.isEmpty() ? null : t;
+    }
+
+    private static String normalizePan(String pan) {
+        String t = trimToNull(pan);
+        return t == null ? null : t.toUpperCase();
+    }
+
+    /**
+     * Record — or clear — the silent duplicate-Aadhaar flag (V75). A collision with another customer
+     * writes an {@code AADHAAR_DUPLICATE} row as REVIEW with the other customer ids in {@code derived};
+     * a number that no longer collides (the borrower corrected a typo while the number was still
+     * editable) deletes the row again. The response to the borrower is identical either way.
+     */
+    private void flagAadhaarDuplicate(Long appId, List<Long> otherCustomerIds) {
+        Optional<ApplicationVerification> existing =
+                verificationRepository.findByApplicationIdAndCheckType(appId, ApplicationVerificationService.AADHAAR_DUPLICATE);
+        if (otherCustomerIds == null || otherCustomerIds.isEmpty()) {
+            existing.ifPresent(verificationRepository::delete);
+            return;
+        }
+        ApplicationVerification row = existing.orElseGet(ApplicationVerification::new);
+        row.setApplicationId(appId);
+        row.setCheckType(ApplicationVerificationService.AADHAAR_DUPLICATE);
+        row.setStatus(ApplicationVerificationService.REVIEW);
+        row.setProvider("SYSTEM");
+        row.setClientRefNum("navix-" + appId + "-AADHAAR_DUPLICATE");
+        String ids = otherCustomerIds.stream().map(String::valueOf).collect(Collectors.joining(","));
+        row.setDerived("{\"otherCustomerIds\":[" + ids + "]}");
+        row.setRawResponse(row.getDerived());
+        row.setMessage("Aadhaar number is also on file for customer"
+                + (otherCustomerIds.size() == 1 ? " #" : "s #") + ids.replace(",", ", #")
+                + " — confirm it is the same person before sanction");
+        row.setReopenedAt(null);
+        row.setReopenedBy(null);
+        verificationRepository.save(row);
+        log.info("aadhaar duplicate flagged application={} otherCustomers={}", appId, otherCustomerIds.size());
+    }
+
+    /** See the call site in {@link #saveProfile}: the Aadhaar number is locked once a check has read it. */
+    private void requireAadhaarEditable(LoanApplication app, CustomerProfile p) {
+        boolean checked = (app.getStatus() != null && app.getStatus() != ApplicationStatus.DRAFT)
+                || verificationRepository.findByApplicationIdAndCheckType(app.getId(), "PAN").isPresent()
+                || verificationRepository.findByApplicationIdAndCheckType(app.getId(), "AADHAAR").isPresent()
+                || Boolean.TRUE.equals(p.getAadhaarVerified());
+        if (checked) {
+            throw new BusinessException("AADHAAR_LOCKED",
+                    "Your Aadhaar number has already been verified and can no longer be changed.");
+        }
+    }
+
+    /**
+     * Card spacing stripped, then the UIDAI shape + Verhoeff check (V75). Refused outright rather than
+     * stored-and-flagged: a mistyped number would later trip the Aadhaar-mismatch fraud rule and reject
+     * the borrower for a typo. Null when not supplied (the wizard saves in slices).
+     */
+    private static String normalizeAadhaar(String aadhaar) {
+        String digits = Aadhaar.normalize(aadhaar);
+        if (digits == null) {
+            return null;
+        }
+        if (!Aadhaar.isValid(digits)) {
+            throw new BusinessException("INVALID_AADHAAR",
+                    "Enter a valid 12-digit Aadhaar number — please check it against your card.");
+        }
+        return digits;
+    }
+
+    /** Digits only, last 10 (drops a country/STD prefix); must be exactly 10. Null when not supplied. */
+    private static String normalizeMobile(String mobile) {
+        String t = trimToNull(mobile);
+        if (t == null) {
+            return null;
+        }
+        String digits = t.replaceAll("\\D", "");
+        if (digits.length() > 10) {
+            digits = digits.substring(digits.length() - 10);
+        }
+        if (digits.length() != 10) {
+            throw new BusinessException("INVALID_MOBILE", "Mobile must be a 10-digit number");
+        }
+        return digits;
+    }
+}

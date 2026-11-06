@@ -1,0 +1,33 @@
+package com.navix.loan.domain;
+
+/** Per-application result of one bureau-backfill attempt ({@code bureau_backfill_row.outcome}). */
+public enum BureauBackfillOutcome {
+    /** REJECTS cohort, new score ≥ floor: the application was reopened DRAFT → KYC_PENDING. */
+    REOPENED,
+    /** A live cohort's score/brief/PDF were refreshed in place; the application was never touched. */
+    REFRESHED,
+    /** REJECTS cohort, new score still under the floor: untouched, cooling-off clock not reset. */
+    STILL_BELOW,
+    /** The pull succeeded but yielded no facts (thin-file/no-hit) — {@code CreditBriefService.generate}
+     *  no-op'd, so there is no fresh brief to show for this attempt. */
+    NO_BRIEF,
+    /** The report's own PAN/DOB didn't match the verified KYC identity — never reopened or refreshed. */
+    MISMATCH_REVIEW,
+    /** CRIF gated the (real, existing) report behind a knowledge-based-auth question — no score to act
+     *  on. Treated as a completed attempt, NOT retried, so it can't loop the same billable call. */
+    KBA_REQUIRED,
+    /** The bureau holds records for this identity only under mobile numbers we never sent, and
+     *  releasing them needs a vendor endpoint we do not implement. Like {@link #KBA_REQUIRED} this is
+     *  a completed attempt, NOT retried — a re-run could only spend the same three billable calls
+     *  again on a case no amount of retrying can resolve. */
+    MASKED_MOBILE_REQUIRED,
+    /** The sub-floor sweep rejected an application on the score it already held — no provider call was
+     *  made. Distinct from a live intake auto-reject only in how it was triggered: the borrower gets
+     *  the same {@code AUTO_REJECT_LOW_BUREAU_SCORE} event, rejection row and 90-day block. */
+    SWEPT_REJECTED,
+    /** The attempt failed at {@code failed_step}; the only outcome a re-run retries. */
+    FAILED,
+    /** A re-run found this application already terminally processed, or (REJECTS only) the reopen
+     *  target was no longer eligible (not REJECTED, or its rejecting transition wasn't from DRAFT). */
+    SKIPPED
+}

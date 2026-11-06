@@ -1,0 +1,166 @@
+"use client";
+
+import * as React from "react";
+import { Download, ChevronDown, FileText, FileSpreadsheet } from "lucide-react";
+import { useStaffMe, ROLE_LABEL } from "@/components/staff/live-pipeline";
+import { exportCsv, exportPdf, type ExportColumn, type ExportMeta } from "@/lib/export/exporters";
+
+/**
+ * "Export ▾" dropdown for staff dashboards — offers CSV and a DhanNow-branded PDF of whatever the
+ * page hands it, which the labels name honestly (`scope` below: one page, or every matching row). The PDF is stamped with the signed-in staffer (provenance). Generic over the
+ * row type so each page declares its columns once. When a page is server-paginated it can also pass
+ * `getAllRows` to offer a "Download all" CSV that fetches every matching row on demand.
+ */
+export function ExportMenu<Row>({
+  title,
+  subtitle,
+  fileBase,
+  columns,
+  rows,
+  disabled,
+  meta,
+  onOpen,
+  getAllRows,
+  allLabel = "Download all (CSV)",
+  scope,
+}: {
+  title: string;
+  subtitle?: string;
+  fileBase: string;
+  columns: ExportColumn<Row>[];
+  rows: Row[];
+  disabled?: boolean;
+  /** Optional statement-period metadata stamped onto the PDF. */
+  meta?: ExportMeta;
+  /**
+   * Fired when the menu goes from closed to open (not on close, not on re-open while already open).
+   *
+   * Lets a caller load export-only enrichment on demand instead of on mount: a page whose columns
+   * join in data no one sees on screen can leave that fetch until someone actually reaches for
+   * Export, rather than making every visitor pay for it. Pair it with `disabled` while the fetch
+   * is in flight.
+   */
+  onOpen?: () => void;
+  /** Fetches every row under the current filter (not just the page on screen). */
+  getAllRows?: () => Promise<Row[]>;
+  allLabel?: string;
+  /**
+   * What `rows` actually holds, so the menu can say so.
+   *
+   * The labels used to claim "the rows on screen" unconditionally, which was false on every register
+   * that hands over its whole filtered set across all pages (loans, collections, performance,
+   * rejections, admin/dsa, referrals) — a button promising a screenful quietly produced a 4,000-row
+   * PDF. The default reads it off `getAllRows`: a caller that can fetch everything separately is,
+   * by construction, passing one page here.
+   */
+  scope?: "page" | "all";
+}) {
+  const me = useStaffMe().data;
+  const [open, setOpen] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const isDisabled = disabled || busy || (rows.length === 0 && !getAllRows);
+
+  // Exports are ADMIN-only across the whole console (data-governance decision) — every other role
+  // gets no export control at all.
+  if (me?.role !== "ADMIN") return null;
+
+  const actor = {
+    name: me?.name ?? "Unknown",
+    role: me ? ROLE_LABEL[me.role] : "Staff",
+  };
+
+  const doCsv = () => {
+    exportCsv(fileBase, columns, rows);
+    setOpen(false);
+  };
+  const doPdf = () => {
+    exportPdf({
+      fileBase,
+      title,
+      subtitle,
+      columns,
+      rows,
+      actor,
+      generatedAt: new Date().toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }),
+      meta,
+    });
+    setOpen(false);
+  };
+  const doAll = async () => {
+    if (!getAllRows) return;
+    setOpen(false);
+    setBusy(true);
+    setError(null);
+    try {
+      exportCsv(`${fileBase}-all`, columns, await getAllRows());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Download failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const pageOnly = rows.length === 0;
+  // "page" = the rows on screen (the caller pages server-side and offers `getAllRows` beside it);
+  // "all" = every row matching the active filters, which is what a client-side register holds.
+  const rowScope = scope ?? (getAllRows ? "page" : "all");
+  const csvLabel = rowScope === "page" ? "Export this page (CSV)" : "Export all matching (CSV)";
+  const pdfLabel = rowScope === "page" ? "Export this page (PDF)" : "Export all matching (PDF)";
+
+  // Deliberately not inside the setOpen updater: React may invoke an updater twice (StrictMode),
+  // and `onOpen` is a side effect — a caller's fetch must fire once per open, not per render pass.
+  const toggle = () => {
+    if (!open) onOpen?.();
+    setOpen((o) => !o);
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={toggle}
+        disabled={isDisabled}
+        className="flex items-center gap-1.5 rounded border border-line px-3 py-1.5 text-xs font-semibold text-navy hover:bg-grey-100 disabled:cursor-not-allowed disabled:opacity-50"
+        title={
+          isDisabled
+            ? "Nothing to export"
+            : rowScope === "page"
+              ? "Export the rows on screen"
+              : "Export every row matching the current filters"
+        }
+      >
+        <Download size={13} /> {busy ? "Preparing…" : "Export"}{" "}
+        <ChevronDown size={12} className={open ? "rotate-180 transition" : "transition"} />
+      </button>
+      {error && <p className="absolute right-0 mt-1 whitespace-nowrap text-xs text-error-700">{error}</p>}
+      {open && !isDisabled && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
+          <div className="absolute right-0 z-20 mt-1 w-52 overflow-hidden rounded border border-line bg-white shadow-lg">
+            <button
+              onClick={doCsv}
+              disabled={pageOnly}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-ink hover:bg-grey-100 disabled:opacity-50"
+            >
+              <FileSpreadsheet size={15} className="text-success-600" /> {csvLabel}
+            </button>
+            <button
+              onClick={doPdf}
+              disabled={pageOnly}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-ink hover:bg-grey-100 disabled:opacity-50"
+            >
+              <FileText size={15} className="text-error-600" /> {pdfLabel}
+            </button>
+            {getAllRows && (
+              <button
+                onClick={doAll}
+                className="flex w-full items-center gap-2 border-t border-line px-3 py-2 text-left text-sm text-ink hover:bg-grey-100"
+              >
+                <Download size={15} className="text-navy" /> {allLabel}
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}

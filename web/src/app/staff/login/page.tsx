@@ -1,0 +1,259 @@
+"use client";
+
+import * as React from "react";
+import { Suspense } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ShieldCheck, Lock, Mail } from "lucide-react";
+import { Brand } from "@/components/staff/brand";
+import { Input, Dialog, DialogHeader, DialogTitle, DialogFooter, Turnstile } from "@/components/ui";
+import { loginStaff, StaffLoginError } from "@/lib/auth/staff-session";
+import { mfaApi } from "@/lib/api/staff-desks";
+import { config } from "@/lib/config";
+import { safeNextPath } from "@/lib/safe-redirect";
+
+function LoginInner() {
+  const router = useRouter();
+  const params = useSearchParams();
+  // Set by middleware to the staff page that bounced here; anyone can craft one, so only a path
+  // inside /staff is followed.
+  const redirect = safeNextPath(params.get("redirect"), "/staff/dashboard", "/staff/");
+  const superseded = params.get("reason") === "superseded";
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string>();
+  // Only one console session is allowed per account (all roles). A second sign-in while one is
+  // live is refused with SESSION_CONFLICT; this dialog is the "continue there / continue here" choice.
+  const [conflict, setConflict] = React.useState(false);
+  const [captcha, setCaptcha] = React.useState("");
+  const [captchaKey, setCaptchaKey] = React.useState(0);
+  // The widget failed to load/render (usually a domain not on the site key's allowlist). Submit is
+  // unblocked rather than leaving a dead button — the backend still decides.
+  const [captchaBroken, setCaptchaBroken] = React.useState(false);
+  // Staff MFA (PLAN Phase 7): "code" once the backend asks for the authenticator code; "enrol" when this
+  // role must set one up first (ADMIN, FINANCE, CREDIT_HEAD, DISBURSEMENT_HEAD).
+  const [mfa, setMfa] = React.useState<null | "code" | "enrol">(null);
+  const [totp, setTotp] = React.useState("");
+  const [enrolment, setEnrolment] = React.useState<{ secret: string; otpauthUri: string } | null>(null);
+
+  // captchaBroken must not outlive the challenge that tripped it — otherwise one stalled widget
+  // (e.g. hidden behind the conflict dialog, see below) permanently downgrades every future submit
+  // to an empty token, which the backend always rejects.
+  React.useEffect(() => setCaptchaBroken(false), [captchaKey]);
+
+  // Unset site key = no widget rendered, so the gate must not block dev / e2e / the demo stack.
+  const captchaReady = !config.turnstileSiteKey || !!captcha || captchaBroken;
+  const canSubmit =
+    email.trim().length > 0 && password.length > 0 && !busy && captchaReady && (mfa !== "code" || /^\d{6}$/.test(totp));
+
+  const startEnrol = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      setEnrolment(await mfaApi.enrol(email.trim(), password));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start the set-up.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const confirmEnrol = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await mfaApi.confirm(email.trim(), password, totp);
+      setEnrolment(null);
+      setMfa("code");
+      setTotp("");
+      setError("Authenticator set up. Enter a fresh code to sign in.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That code did not match.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doLogin = async (force: boolean) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      // Authenticates against the backend; the JWT lands in the httpOnly navix_staff cookie.
+      await loginStaff(email.trim(), password, force, captcha, mfa === "code" && totp ? totp : undefined);
+      router.push(redirect);
+    } catch (err) {
+      // Every outcome below re-challenges: the token just sent is spent, SESSION_CONFLICT included
+      // (it is raised after the captcha check, and "Continue here" is a second call). The widget is
+      // usually invisible, so a fresh token lands before the user can click.
+      setCaptcha("");
+      setCaptchaKey((k) => k + 1);
+      if (err instanceof StaffLoginError && err.code === "SESSION_CONFLICT") {
+        setConflict(true);
+        setBusy(false);
+      } else if (err instanceof StaffLoginError && (err.code === "MFA_REQUIRED" || err.code === "INVALID_MFA_CODE")) {
+        setMfa("code");
+        setTotp("");
+        setError(err.code === "INVALID_MFA_CODE" ? err.message : undefined);
+        setBusy(false);
+      } else if (err instanceof StaffLoginError && err.code === "MFA_ENROLMENT_REQUIRED") {
+        setMfa("enrol");
+        setBusy(false);
+      } else {
+        setError(err instanceof Error ? err.message : "Sign-in failed. Please try again.");
+        setBusy(false);
+      }
+    }
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    void doLogin(false);
+  };
+
+  return (
+    <div className="grid min-h-screen place-items-center px-4 py-10">
+      <div className="w-full max-w-md">
+        <div className="mb-6 text-center">
+          <div className="mb-4 flex justify-center"><Brand href="/" tag="Staff Console" /></div>
+          <h1 className="mb-1">Sign in to the console</h1>
+          <p className="text-muted">Internal DhanNow back office. Authorised staff only.</p>
+        </div>
+
+        <form onSubmit={submit} className="form-card">
+          <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-navy">
+            <ShieldCheck size={16} /> Staff sign in
+          </div>
+          {superseded ? (
+            <p className="mb-4 rounded border border-warning-100 bg-warning-50 px-3 py-2 text-sm text-warning-800">
+              You were signed out because this account signed in on another device or browser.
+            </p>
+          ) : null}
+          <Input
+            label="Email"
+            type="email"
+            required
+            value={email}
+            onChange={(e) => { setEmail(e.target.value); setError(undefined); }}
+            placeholder="you@dhannow.com"
+            leftIcon={<Mail size={16} />}
+            autoComplete="username"
+          />
+          <Input
+            label="Password"
+            type="password"
+            required
+            value={password}
+            onChange={(e) => { setPassword(e.target.value); setError(undefined); }}
+            placeholder="••••••••"
+            leftIcon={<Lock size={16} />}
+            autoComplete="current-password"
+            error={error}
+          />
+          {mfa === "code" && (
+            <Input
+              label="Authenticator code"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={totp}
+              onChange={(e) => setTotp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              placeholder="6 digits"
+              helperText="From the authenticator app on your phone."
+            />
+          )}
+          {mfa === "enrol" && (
+            <div className="mb-3 rounded border border-line bg-grey-50 p-3 text-sm">
+              <p className="mb-2">Your role signs in with an authenticator app. Set it up once to continue.</p>
+              {!enrolment ? (
+                <button type="button" className="btn btn-sm btn-gold" disabled={busy || !password} onClick={() => void startEnrol()}>
+                  Set up authenticator
+                </button>
+              ) : (
+                <>
+                  <p className="mb-1 text-xs text-muted">Add this key in your authenticator app (or open the link on your phone):</p>
+                  <p className="mb-1 break-all font-mono text-sm text-ink">{enrolment.secret}</p>
+                  <a className="mb-2 block text-xs" href={enrolment.otpauthUri}>Open in authenticator app</a>
+                  <Input
+                    label="Code from the app"
+                    inputMode="numeric"
+                    value={totp}
+                    onChange={(e) => setTotp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="6 digits"
+                  />
+                  <button type="button" className="btn btn-sm btn-gold" disabled={busy || !/^\d{6}$/.test(totp)} onClick={() => void confirmEnrol()}>
+                    Confirm
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          <div className="mb-3 text-right">
+            <Link href="/staff/forgot-password" className="text-sm font-semibold text-navy hover:underline">
+              Forgot password?
+            </Link>
+          </div>
+          {/* Single widget instance: while the conflict dialog is open, it renders there instead (a
+              re-challenge can escalate to an interactive checkbox, which must not sit behind the
+              dialog's full-screen overlay, unreachable) — see the copy in the dialog below. */}
+          {!conflict && (
+            <Turnstile
+              action="staff-login"
+              onToken={setCaptcha}
+              onError={() => setCaptchaBroken(true)}
+              resetKey={captchaKey}
+            />
+          )}
+          <button type="submit" disabled={!canSubmit} className="btn btn-navy btn-block">
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+
+        <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted">
+          <Lock size={13} /> Separation of duties is enforced on every decision.
+        </p>
+      </div>
+
+      <Dialog open={conflict} onClose={() => setConflict(false)} aria-labelledby="session-conflict-title">
+        <DialogHeader>
+          <DialogTitle id="session-conflict-title">You&apos;re signed in elsewhere</DialogTitle>
+          <p className="text-sm text-muted">
+            Only one DhanNow console session is allowed per account. Choose where you want to stay
+            signed in.
+          </p>
+        </DialogHeader>
+        {/* Re-challenge lives here, not in the form, while this dialog is open — the doLogin catch
+            below always burns the previous token and mounts a fresh widget, and it must be visible
+            and clickable in case Cloudflare escalates it to an interactive checkbox. */}
+        {conflict && (
+          <Turnstile
+            action="staff-login"
+            onToken={setCaptcha}
+            onError={() => setCaptchaBroken(true)}
+            resetKey={captchaKey}
+          />
+        )}
+        <DialogFooter>
+          <button type="button" className="btn btn-outline" onClick={() => setConflict(false)} disabled={busy}>
+            Continue there
+          </button>
+          <button
+            type="button"
+            className="btn btn-navy"
+            onClick={() => { setConflict(false); void doLogin(true); }}
+            disabled={busy || !captchaReady}
+          >
+            {busy ? "Signing in…" : !captchaReady ? "Checking…" : "Continue here"}
+          </button>
+        </DialogFooter>
+      </Dialog>
+    </div>
+  );
+}
+
+export default function StaffLoginPage() {
+  return (
+    <Suspense fallback={<div className="grid min-h-screen place-items-center text-muted">Loading…</div>}>
+      <LoginInner />
+    </Suspense>
+  );
+}

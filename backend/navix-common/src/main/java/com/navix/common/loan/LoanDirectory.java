@@ -1,0 +1,143 @@
+package com.navix.common.loan;
+
+import java.time.LocalDate;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * Port for reaching real loans from modules that must not depend on
+ * {@code navix-loan} internals (e.g. {@code navix-collections}). Implemented by
+ * the loan module ({@code LoanDirectoryAdapter}); the bootable app wires the bean
+ * by component scan — the same "swap at a seam" pattern as {@code StaffDirectory}.
+ *
+ * <p>Reads return a {@link LoanSummary} (loan + borrower snapshot). Two writes cross
+ * the seam: {@link #markInCollections(Long)} when a case is opened, and
+ * {@link #creditCollectionPayment} when the Accountant validates a payment
+ * collections took (V47).
+ */
+public interface LoanDirectory {
+
+    /** The loan + borrower snapshot for {@code loanId}, or empty if no such loan. */
+    Optional<LoanSummary> findLoan(Long loanId);
+
+    /**
+     * Batched lookup: loan id → snapshot for every id in {@code loanIds} that resolves (an id that
+     * does not resolve is simply absent — never mapped to {@code null}). Produces the same
+     * {@link LoanSummary} as {@link #findLoan(Long)} would per id, but in a fixed number of queries
+     * for the whole page rather than one {@link #findLoan(Long)} per row — for list views (a
+     * settlements/payments/cases register) that each render a borrower name or loan figure per row.
+     */
+    Map<Long, LoanSummary> findLoans(Collection<Long> loanIds);
+
+    /**
+     * Batched itemised dues (interest, penalty, verified payments) plus borrower contact/bank
+     * details for every id that resolves — for registers, like settlements, that show the cost
+     * make-up beside each loan. A fixed number of queries for the whole page. Defaults to empty so
+     * test doubles need not implement it.
+     */
+    default Map<Long, LoanDues> findDues(Collection<Long> loanIds) {
+        return Map.of();
+    }
+
+
+    /**
+     * The collections worklist as of {@code asOf}: every live loan (ACTIVE / OVERDUE /
+     * IN_COLLECTIONS) already past due, <b>plus</b> those falling due within the next
+     * {@link #PRE_DUE_WINDOW_DAYS} days so an officer can call the borrower before the due date.
+     * Sorted by due date, soonest first.
+     *
+     * <p>Loans further out are excluded on purpose — without a window this returns the entire live
+     * book from the day of disbursal and the UPCOMING bucket stops meaning anything.
+     */
+    List<LoanSummary> listCollectible(LocalDate asOf);
+
+    /** How far ahead of the due date a loan becomes workable by collections: 2 days for the 14-day tenure (PLAN Phase 10b). */
+    int PRE_DUE_WINDOW_DAYS = 2;
+
+    /**
+     * Live loans whose due date is still AHEAD of {@code asOf}, soonest first — the pre-due
+     * watchlist behind the collections UPCOMING bucket. The counterpart to
+     * {@link #listCollectible(LocalDate)}, which covers loans already due.
+     *
+     * <p>Strictly read-only: nothing here opens a case or flips a loan into IN_COLLECTIONS.
+     *
+     * <p>Implementations MUST batch: because every advance runs to at most
+     * {@code LoanMath.MAX_TERM_DAYS}, "not yet due" is effectively the whole live book, so this
+     * has to cost a fixed number of queries rather than a handful per row.
+     */
+    List<LoanSummary> listUpcoming(LocalDate asOf);
+
+    /**
+     * Move a loan into collections: flip ACTIVE/OVERDUE → IN_COLLECTIONS <b>once it is actually past
+     * due</b>. Idempotent, and a no-op for any other status — and, deliberately, for a loan that has
+     * not reached its due date: a pre-emptive case is a courtesy call, and flipping the status would
+     * report a borrower who has done nothing wrong as delinquent across every queue, segment and
+     * dashboard count.
+     */
+    void markInCollections(Long loanId);
+
+    /**
+     * Post a collections-side payment to the loan ledger as an already-verified repayment, and
+     * return its {@code payment.id}. Two callers: the Accountant validating a {@code collection_payment}
+     * — collections itself never moves the balance, which is the whole point of routing every collected
+     * rupee past a checker (revamp.md decision 44) — and a <b>succeeded NACH debit</b> (V84), which needs
+     * no checker because the bank, not a staff member, is the one asserting the money moved.
+     *
+     * <p>Recorded verified in one step rather than PENDING_VERIFICATION: the validation <em>is</em>
+     * the verification, and leaving it pending would put the same payment in the Accountant's
+     * repayment queue a second time.
+     *
+     * @param loanId      the loan being credited
+     * @param amountPaise the amount collected, in paise
+     * @param txnRef      the bank/UPI reference, if collections captured one
+     * @param paidOn      the date the borrower actually paid (not the validation date)
+     * @return the id of the ledger payment created
+     */
+    Long creditCollectionPayment(Long loanId, long amountPaise, String txnRef,
+                                 String proofRef, LocalDate paidOn);
+
+    /**
+     * Re-evaluate the loan's penalty- and settlement-aware balance and close it (loan and application)
+     * if nothing is owed. Called when a settlement is approved: the cap applies at once, so a borrower
+     * who has already paid the settled figure must not wait for another payment to be closed.
+     */
+    void recomputeOutstanding(Long loanId);
+
+    /**
+     * PLAN Phase 7: record a money or schedule change made outside the loan module (a settlement) as a
+     * {@code balance_adjustment} row. {@code reasonCode} is a {@code balance_adjustment_reason} code.
+     */
+    default void recordAdjustment(Long loanId, String kind, java.util.Map<String, Object> before,
+                                  java.util.Map<String, Object> after, Long approverId, String reasonCode, String note) {
+        throw new UnsupportedOperationException("recordAdjustment");
+    }
+
+    // ---- loan extension (PLAN Phase 6b) ----------------------------------------------------
+
+    /**
+     * Take the loan's transaction-scoped advisory lock, the one NACH presentment uses. Every extension
+     * transition holds it, so a payment verification, a debit and an offer never interleave on one loan.
+     */
+    default void lockLoan(Long loanId) {
+        throw new UnsupportedOperationException("lockLoan");
+    }
+
+    /** Eligibility and the quote for an extension paid on {@code paidOn} (null = today, IST). */
+    default com.navix.common.extension.ExtensionFacts extensionFacts(Long loanId, LocalDate paidOn) {
+        throw new UnsupportedOperationException("extensionFacts");
+    }
+
+    /**
+     * The Accountant validated an extension payment collections logged: record it as an EXTENSION payment
+     * (verified) and activate the extension, moving the due date. The only path besides the borrower's own
+     * verified payment that moves a due date. Refuses an amount that is not the quote for {@code paidOn}.
+     *
+     * @return the ledger {@code payment.id}
+     */
+    default Long applyExtension(Long loanId, java.util.UUID extensionId, long amountPaise, LocalDate paidOn,
+                                String txnRef, String proofRef) {
+        throw new UnsupportedOperationException("applyExtension");
+    }
+}

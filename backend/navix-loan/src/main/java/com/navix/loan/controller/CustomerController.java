@@ -1,0 +1,356 @@
+package com.navix.loan.controller;
+
+import com.navix.common.exception.BusinessException;
+import com.navix.common.security.ActorContext;
+import com.navix.common.verification.OtpVerifierPort;
+import com.navix.common.web.ApiResponse;
+import com.navix.loan.dto.ApplicationDtos.ApplicationView;
+import com.navix.loan.dto.CustomerDtos.CaseFailureDetail;
+import com.navix.loan.dto.CustomerDtos.ActivityEntry;
+import com.navix.loan.dto.CustomerDtos.AddCallLogRequest;
+import com.navix.loan.dto.CustomerDtos.AddRemarkRequest;
+import com.navix.loan.dto.CustomerDtos.ApplicationDocumentGroup;
+import com.navix.loan.dto.CustomerDtos.AssignOwnerRequest;
+import com.navix.loan.dto.CustomerDtos.BlockCustomerRequest;
+import com.navix.loan.dto.CustomerDtos.BookStats;
+import com.navix.loan.dto.CustomerDtos.CallLogView;
+import com.navix.loan.dto.CustomerDtos.ChangeSanctionedAmountRequest;
+import com.navix.loan.dto.CustomerDtos.ConfirmMobileChangeRequest;
+import com.navix.loan.dto.CustomerDtos.CustomerBlockView;
+import com.navix.loan.dto.CustomerDtos.CustomerDetail;
+import com.navix.loan.dto.CustomerDtos.CustomerPage;
+import com.navix.loan.dto.CustomerDtos.CustomerSummary;
+import com.navix.loan.dto.CustomerDtos.CustomerSummaryCounts;
+import com.navix.loan.dto.CustomerDtos.LimitOverrideRequest;
+import com.navix.loan.dto.CustomerDtos.ProfileChangeView;
+import com.navix.loan.dto.CustomerDtos.RemarkView;
+import com.navix.loan.dto.CustomerDtos.RequestMobileChangeRequest;
+import com.navix.loan.dto.CustomerDtos.SalaryDayRequest;
+import com.navix.loan.dto.CustomerDtos.UpdateCustomerRequest;
+import com.navix.loan.dto.ReviewDtos.ProfileView;
+import com.navix.loan.service.CustomerService;
+import jakarta.validation.Valid;
+import java.util.List;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Staff-facing customer (borrower-centric) endpoints: list/search distinct customers, read one
+ * customer's full history, and ADMIN-correct their KYC data. All handlers require a staff role
+ * (borrower / anonymous → {@code FORBIDDEN_ROLE}). Profile update and delete stay ADMIN-only in
+ * the service; owner assignment is CREDIT_HEAD / COLLECTION_HEAD / ADMIN.
+ */
+@RestController
+@RequestMapping("/api/customers")
+@RequiredArgsConstructor
+public class CustomerController {
+
+    private final CustomerService customerService;
+
+    /**
+     * One page of the customer book — a search {@code q} (name / PAN / mobile / customer id) and an
+     * inclusive {@code [from, to]} date window over the customer's latest application (resolved in
+     * IST by the service, matching the live-applications queues), plus a lifecycle {@code seg} (the
+     * frontend's segment names, or {@code unallocated}), a {@code mine} flag (owned by or decided by
+     * the caller) and a 1-indexed {@code page}. Filtering, sorting and paging run in SQL; the size
+     * is capped server-side.
+     */
+    @GetMapping("/page")
+    public ApiResponse<CustomerPage> page(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+            @RequestParam(required = false) String seg,
+            @RequestParam(defaultValue = "false") boolean mine,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(required = false) String sort,
+            @RequestParam(required = false) String dir,
+            @RequestParam java.util.Map<String, String> all) {
+        requireStaff();
+        return ApiResponse.ok(customerService.page(q, from, to, seg, mine, page, size, sort, dir, all));
+    }
+
+    /**
+     * The distinct values of one filterable column ({@code col}), for its checklist. Takes the OTHER
+     * columns' {@code f.*} filters and ignores {@code col}'s own, so choosing a value does not hide
+     * the alternatives. Runs inside the caller's scope (see {@link CustomerService#facets}).
+     */
+    @GetMapping("/facets")
+    public ApiResponse<com.navix.common.query.SqlFacets.Facet> facets(
+            @RequestParam("column") String col,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+            @RequestParam(defaultValue = "false") boolean mine,
+            @RequestParam java.util.Map<String, String> all) {
+        requireStaff();
+        return ApiResponse.ok(customerService.facets(q, from, to, mine, col, all));
+    }
+
+    /** The segment-chip counts over the whole (scoped, filtered) book. */
+    @GetMapping("/summary")
+    public ApiResponse<CustomerSummaryCounts> summary(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+            @RequestParam(defaultValue = "false") boolean mine,
+            @RequestParam java.util.Map<String, String> all) {
+        requireStaff();
+        return ApiResponse.ok(customerService.summary(q, from, to, mine, all));
+    }
+
+    /**
+     * Full rows for exactly these customers, in the order the ids were given — the batched twin of
+     * one customer's summary row. What the collections export's enrichment and the dashboard's
+     * decided-customer join use instead of loading the whole book. Ids outside the caller's scope,
+     * and ids that do not exist, are simply absent from the response.
+     */
+    @GetMapping("/by-ids")
+    public ApiResponse<List<CustomerSummary>> byIds(@RequestParam("ids") List<Long> ids) {
+        requireStaff();
+        return ApiResponse.ok(customerService.byIds(ids));
+    }
+
+    /**
+     * Everything on file behind these applications, for the DPD-bucket export handed to an outside
+     * collection agency. ADMIN only — enforced in the service.
+     */
+    @GetMapping("/collection-handover")
+    public ApiResponse<List<com.navix.loan.dto.CustomerDtos.CollectionHandoverRow>> collectionHandover(
+            @RequestParam("applicationIds") List<Long> applicationIds) {
+        requireStaff();
+        return ApiResponse.ok(customerService.collectionHandover(applicationIds));
+    }
+
+    /**
+     * The caller's own book (owned by or decided by them), aggregated server-side: lifecycle counts,
+     * exposure, DPD bands and the headline averages. Replaces shipping every customer row to the
+     * browser so the dashboard can count them there.
+     */
+    @GetMapping("/book-stats")
+    public ApiResponse<BookStats> bookStats() {
+        requireStaff();
+        return ApiResponse.ok(customerService.bookStats());
+    }
+
+    /** Every row matching the filter, for the ADMIN "download all customers" export (capped). */
+    @GetMapping("/export")
+    public ApiResponse<List<CustomerSummary>> export(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @RequestParam(required = false)
+            @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+            @RequestParam(required = false) String seg,
+            @RequestParam(defaultValue = "false") boolean mine,
+            @RequestParam java.util.Map<String, String> all) {
+        requireStaff();
+        return ApiResponse.ok(customerService.export(q, from, to, seg, mine, all));
+    }
+
+    /** One customer's full history: profile + applications + loans + payments. */
+    @GetMapping("/{customerId}")
+    public ApiResponse<CustomerDetail> get(@PathVariable Long customerId) {
+        requireStaff();
+        return ApiResponse.ok(customerService.detail(customerId));
+    }
+
+    /** ADMIN corrects a customer's KYC / salary data (non-identity fields); changes are audited. */
+    @PutMapping("/{customerId}/profile")
+    public ApiResponse<ProfileView> updateProfile(@PathVariable Long customerId,
+                                                  @RequestBody UpdateCustomerRequest req) {
+        requireStaff();
+        return ApiResponse.ok(customerService.updateProfile(customerId, req));
+    }
+
+    /**
+     * ADMIN, step 1 of 2 — send an OTP to a NEW mobile number to correct a customer's mobile on
+     * file. KYC-data correction only; does not change which number the borrower logs in with.
+     */
+    @PostMapping("/{customerId}/mobile/request-otp")
+    public ApiResponse<OtpVerifierPort.OtpRequestResult> requestMobileChangeOtp(
+            @PathVariable Long customerId, @Valid @RequestBody RequestMobileChangeRequest req) {
+        requireStaff();
+        return ApiResponse.ok(customerService.requestMobileChangeOtp(customerId, req.newMobile()));
+    }
+
+    /** ADMIN, step 2 of 2 — confirm the mobile correction with the code sent to the new number. */
+    @PostMapping("/{customerId}/mobile/confirm")
+    public ApiResponse<ProfileView> confirmMobileChange(
+            @PathVariable Long customerId, @Valid @RequestBody ConfirmMobileChangeRequest req) {
+        requireStaff();
+        return ApiResponse.ok(customerService.confirmMobileChange(customerId, req.newMobile(), req.otp()));
+    }
+
+    /**
+     * ADMIN — correct the amount credit approved (sanctioned) for {@code applicationId}, verified
+     * server-side to be this customer's own, sanctioned, not-yet-disbursed application. Takes effect
+     * immediately; the borrower is notified afterwards (email + in-app), not asked to confirm via OTP.
+     */
+    @PostMapping("/{customerId}/sanctioned-amount")
+    public ApiResponse<ApplicationView> changeSanctionedAmount(
+            @PathVariable Long customerId, @Valid @RequestBody ChangeSanctionedAmountRequest req) {
+        requireStaff();
+        return ApiResponse.ok(customerService.changeSanctionedAmount(
+                customerId, req.applicationId(), req.newAmountPaise()));
+    }
+
+    /**
+     * ADMIN — correct the salary-credit day (1–31) on the customer's latest application. When that
+     * application is a pending SANCTIONED offer, the projected repayment date is recomputed too; a
+     * live/closed loan keeps its already-disbursed due date.
+     */
+    @PostMapping("/{customerId}/salary-day")
+    public ApiResponse<ApplicationView> changeSalaryDay(
+            @PathVariable Long customerId, @Valid @RequestBody SalaryDayRequest req) {
+        requireStaff();
+        return ApiResponse.ok(customerService.changeSalaryCreditDay(customerId, req.salaryCreditDay()));
+    }
+
+    /**
+     * ADMIN — set this customer's eligible limit, overriding the 25%-of-salary rule; a null
+     * {@code limitPaise} clears it. Applies immediately to every not-yet-disbursed application and
+     * survives payslip re-verification, salary edits and future reborrows (V69).
+     */
+    @PostMapping("/{customerId}/limit-override")
+    public ApiResponse<ApplicationView> setLimitOverride(
+            @PathVariable Long customerId, @Valid @RequestBody LimitOverrideRequest req) {
+        requireStaff();
+        return ApiResponse.ok(customerService.setLimitOverride(customerId, req.limitPaise(), req.note()));
+    }
+
+    /** Every document across ALL of this customer's applications, grouped by application (newest
+     *  first) — so a reborrow's prior-application uploads stay reachable (work item 4). */
+    /**
+     * Why this customer's file has no usable credit decision, and which providers were tried.
+     *
+     * <p>Staff-wide (not ADMIN-only): it is the credit team who need to know why a file cannot be
+     * decided. Carries no request/response bodies — those stay in the ADMIN provider workbench.
+     */
+    @GetMapping("/{customerId}/failure")
+    public ApiResponse<CaseFailureDetail> caseFailure(@PathVariable Long customerId) {
+        requireStaff();
+        return ApiResponse.ok(customerService.caseFailure(customerId));
+    }
+
+    @GetMapping("/{customerId}/documents")
+    public ApiResponse<List<ApplicationDocumentGroup>> documents(@PathVariable Long customerId) {
+        requireStaff();
+        return ApiResponse.ok(customerService.documents(customerId));
+    }
+
+    /** One customer's audited profile/salary change history (previous→new, who, when). */
+    @GetMapping("/{customerId}/changes")
+    public ApiResponse<List<ProfileChangeView>> changes(@PathVariable Long customerId) {
+        requireStaff();
+        return ApiResponse.ok(customerService.changeHistory(customerId));
+    }
+
+    /** Unified activity timeline: lifecycle + re-verify + profile edits + remarks + calls. */
+    @GetMapping("/{customerId}/activity")
+    public ApiResponse<List<ActivityEntry>> activity(@PathVariable Long customerId) {
+        requireStaff();
+        return ApiResponse.ok(customerService.activity(customerId));
+    }
+
+    /** Staff remarks on a customer. */
+    @GetMapping("/{customerId}/remarks")
+    public ApiResponse<List<RemarkView>> remarks(@PathVariable Long customerId) {
+        requireStaff();
+        return ApiResponse.ok(customerService.remarks(customerId));
+    }
+
+    @PostMapping("/{customerId}/remarks")
+    public ApiResponse<RemarkView> addRemark(@PathVariable Long customerId,
+                                             @Valid @RequestBody AddRemarkRequest req) {
+        requireStaff();
+        return ApiResponse.ok(customerService.addRemark(customerId, req.body()));
+    }
+
+    /** Assign (or clear) the staff owner of a customer. {@code staffId} null → unallocate. */
+    @PostMapping("/{customerId}/owner")
+    public ApiResponse<CustomerDetail> assignOwner(@PathVariable Long customerId,
+                                                   @RequestBody AssignOwnerRequest req) {
+        requireStaff();
+        return ApiResponse.ok(customerService.assignOwner(customerId, req.staffId()));
+    }
+
+    /** ACCOUNTANT / ADMIN — block the customer for future loans (indefinite, reason required). */
+    @PostMapping("/{customerId}/block")
+    public ApiResponse<CustomerBlockView> block(@PathVariable Long customerId,
+                                                @Valid @RequestBody BlockCustomerRequest req) {
+        requireStaff();
+        return ApiResponse.ok(customerService.block(customerId, req.reason()));
+    }
+
+    /** ADMIN — lift a staff block. */
+    @DeleteMapping("/{customerId}/block")
+    public ApiResponse<CustomerBlockView> unblock(@PathVariable Long customerId) {
+        requireStaff();
+        return ApiResponse.ok(customerService.unblock(customerId));
+    }
+
+    /** Staff call logs on a customer, optionally narrowed to one loan via {@code ?loanId=}. */
+    @GetMapping("/{customerId}/call-logs")
+    public ApiResponse<List<CallLogView>> callLogs(@PathVariable Long customerId,
+                                                    @RequestParam(required = false) Long loanId) {
+        requireStaff();
+        return ApiResponse.ok(customerService.callLogs(customerId, loanId));
+    }
+
+    @PostMapping("/{customerId}/call-logs")
+    public ApiResponse<CallLogView> addCallLog(@PathVariable Long customerId,
+                                               @Valid @RequestBody AddCallLogRequest req) {
+        requireStaff();
+        return ApiResponse.ok(customerService.addCallLog(customerId, req));
+    }
+
+    /** ADMIN — permanently delete a customer and all of their data (irreversible cascade). */
+    @DeleteMapping("/{customerId}")
+    public ApiResponse<CustomerService.DeletionResult> delete(@PathVariable Long customerId) {
+        requireStaff();
+        return ApiResponse.ok(customerService.deleteCustomer(customerId));
+    }
+
+    /**
+     * Reject borrower / anonymous callers — this controller is staff-only.
+     *
+     * <p>DSAs are excluded too: they are staff, but the whole point of the role is that an external
+     * commission agent never sees customer data. Every endpoint here funnels through this method, so
+     * this is the one place that has to hold (the read paths in {@code CustomerService} repeat the
+     * check as defence in depth). It is a deliberate exclusion rather than a role allowlist, because
+     * every other staff role legitimately holds the broad {@code customer:view} permission.
+     */
+    private void requireStaff() {
+        String role = ActorContext.get().role();
+        if (role == null || "BORROWER".equals(role) || "ANONYMOUS".equals(role)) {
+            throw new BusinessException("FORBIDDEN_ROLE", "Staff role required");
+        }
+        if ("DSA".equals(role)) {
+            throw new BusinessException("FORBIDDEN_ROLE", "DSAs cannot view customer data");
+        }
+    }
+}

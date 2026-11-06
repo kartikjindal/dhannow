@@ -1,0 +1,119 @@
+package com.navix.verification.support;
+
+import com.navix.common.verification.ProviderCallContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * The single place every outbound provider call is observed: it writes the call to the
+ * {@code provider_api_execution} audit table (via the injected {@link ProviderCallRecorder}) AND
+ * emits a {@code PROVIDER_CALL} log line carrying the request/response.
+ *
+ * <p>The log line carries the payload with borrower identifiers masked ({@link ProviderLogRedactor}):
+ * PAN, Aadhaar, date of birth, mobile, email, name, address, account number and the bureau consent OTP
+ * become {@code [REDACTED]}, while every key, status and error code stays, so a failing integration
+ * can still be diagnosed from CloudWatch. Anyone with log access used to read live PII and OTPs here.
+ * The raw payload is unchanged in the audit row, which the line names by {@code executionId}.
+ *
+ * <p>The request is logged BEFORE the call and the response after, so a call that hangs or dies
+ * mid-flight still leaves evidence of what we sent.
+ *
+ * <p>Nothing here may disturb the caller: a recorder that throws is swallowed, because failing to
+ * write an audit row must never turn a successful verification into a failed one.
+ */
+public final class ProviderCallLog {
+
+    private static final Logger log = LoggerFactory.getLogger("com.navix.provider");
+
+    /**
+     * CloudWatch rejects events over 256 KB, so a full Experian report cannot go out verbatim
+     * anyway. The log line is capped and the untruncated payload lives in the dashboard row that
+     * {@code executionId} points at.
+     */
+    private static final int LOG_PAYLOAD_LIMIT = 100_000;
+
+    private static volatile ProviderCallRecorder recorder = ProviderCallRecorder.NOOP;
+
+    private ProviderCallLog() {
+        // static holder - no instances
+    }
+
+    /**
+     * Installed once at startup by {@code navix-app}, which owns the table. Static injection is the
+     * pragmatic seam here: {@link ProviderJson} is a static helper used by 15 clients, and turning
+     * it into a bean would be a far larger and riskier refactor than this one write.
+     */
+    public static void setRecorder(ProviderCallRecorder value) {
+        recorder = value == null ? ProviderCallRecorder.NOOP : value;
+    }
+
+    /** Log what we are about to send, before the call can hang or blow up. */
+    public static void logRequest(String endpoint, String requestJson) {
+        log.info("PROVIDER_CALL start provider={} operation={} endpoint={} applicationId={} requestPayload={}",
+                ProviderCallCatalog.providerFor(endpoint), ProviderCallCatalog.operationFor(endpoint),
+                endpoint, ProviderCallContext.applicationId(), clamp(ProviderLogRedactor.redact(requestJson)));
+    }
+
+    /** Persist the completed call and log its outcome. Never throws. */
+    public static void record(ProviderCall call) {
+        Long executionId = null;
+        try {
+            executionId = recorder.record(call);
+            ProviderCallContext.setLastExecutionId(executionId);
+        } catch (Throwable recordingFailure) {
+            // An audit-trail failure must not surface as a verification failure.
+            log.warn("PROVIDER_CALL could not be recorded provider={} endpoint={} error={}",
+                    call.provider(), call.endpoint(), recordingFailure.toString());
+        }
+        if (call.failed()) {
+            log.error("PROVIDER_CALL failed provider={} operation={} endpoint={} httpStatus={} "
+                            + "durationMs={} applicationId={} executionId={} error={} responsePayload={}",
+                    call.provider(), call.operation(), call.endpoint(), call.httpStatus(),
+                    call.durationMs(), ProviderCallContext.applicationId(), executionId,
+                    ProviderLogRedactor.redactText(String.valueOf(call.errorMessage())),
+                    clamp(ProviderLogRedactor.redact(call.responseJson())));
+        } else {
+            log.info("PROVIDER_CALL ok provider={} operation={} endpoint={} httpStatus={} "
+                            + "durationMs={} applicationId={} executionId={} responsePayload={}",
+                    call.provider(), call.operation(), call.endpoint(), call.httpStatus(),
+                    call.durationMs(), ProviderCallContext.applicationId(), executionId,
+                    clamp(ProviderLogRedactor.redact(call.responseJson())));
+        }
+    }
+
+    /**
+     * Reclassify the call this thread just made as FAILED.
+     *
+     * <p>For the narrow case where the transport legitimately recorded a served call — a 2xx whose
+     * envelope {@code postAllowingErrorEnvelope} tolerates — and the client then decided it was a
+     * failure after all (an unrecognised error envelope, a rejected request). Without this the row
+     * would read SUCCESS while the borrower's check went to manual review.
+     *
+     * <p>Silently does nothing when no row was written (fixture mode, a recorder that is still the
+     * NOOP, a call that never reached the provider). Never throws: an audit-trail write must not turn
+     * a handled failure into an unhandled one.
+     */
+    public static void failLast(String error) {
+        Long executionId = ProviderCallContext.lastExecutionId();
+        if (executionId == null) {
+            return;
+        }
+        try {
+            recorder.markFailed(executionId, error);
+        } catch (Throwable recordingFailure) {
+            log.warn("PROVIDER_CALL could not be reclassified executionId={} error={}",
+                    executionId, recordingFailure.toString());
+            return;
+        }
+        log.error("PROVIDER_CALL reclassified as failed executionId={} error={}", executionId, error);
+    }
+
+    private static String clamp(String payload) {
+        if (payload == null) {
+            return "<empty>";
+        }
+        return payload.length() <= LOG_PAYLOAD_LIMIT
+                ? payload
+                : payload.substring(0, LOG_PAYLOAD_LIMIT) + "…<truncated, see dashboard row>";
+    }
+}

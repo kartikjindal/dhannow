@@ -1,0 +1,101 @@
+package com.navix.loan.repository;
+
+import com.navix.loan.domain.LoanHold;
+import com.navix.loan.domain.LoanLifecycle;
+import com.navix.loan.domain.LoanStatus;
+import com.navix.loan.entity.Loan;
+import java.time.LocalDate;
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+/**
+ * Persistence for {@link Loan}.
+ */
+@Repository
+public interface LoanRepository extends JpaRepository<Loan, Long> {
+
+    List<Loan> findByCustomerId(Long customerId);
+
+    /** Open loans in the given lifecycle states (the daily payment-reminder sweep). */
+    List<Loan> findByLifecycleStatusIn(Collection<LoanLifecycle> states);
+
+    /** Loans the lifecycle job may still move: in a timed state and due on or before {@code today}. */
+    @Query("select l.id from Loan l where l.lifecycleStatus in :states and l.dueDate <= :today order by l.id")
+    List<Long> findIdsForLifecycleSweep(@Param("states") Collection<LoanLifecycle> states,
+                                        @Param("today") LocalDate today);
+
+    /** The loan, row-locked until the transaction ends: one lifecycle move at a time (CC-14). */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select l from Loan l where l.id = :id")
+    Optional<Loan> findByIdForUpdate(@Param("id") Long id);
+
+    /** A FRAUD_REVIEW hold on any of the customer's loans blocks new applications. */
+    boolean existsByCustomerIdAndHoldStatus(Long customerId, LoanHold holdStatus);
+
+    /** Every loan of the given customers — the paged Customers list hydrates one page's ids. */
+    List<Loan> findByCustomerIdIn(Collection<Long> customerIds);
+
+    /**
+     * The customers behind a set of real loan ids, in one query — resolves a collections officer's
+     * assigned cases into the customers they may see ({@code CustomerService.scope()}). Callers MUST
+     * short-circuit on an empty collection; {@code in ()} is not valid SQL.
+     */
+    @Query("select distinct l.customerId from Loan l where l.id in :loanIds")
+    Set<Long> findCustomerIdsByIdIn(@Param("loanIds") Collection<Long> loanIds);
+
+    /** Every customer who has ever been disbursed a loan — the Accountant's book (see CustomerService#scope). */
+    @Query("select distinct l.customerId from Loan l")
+    Set<Long> findAllCustomerIds();
+
+    /** How many loans this customer has ever taken — the DSA-commission "first loan only" guard. */
+    long countByCustomerId(Long customerId);
+
+    /** Live loans in any of the given statuses (the daily payment-reminder sweep). */
+    List<Loan> findByStatusIn(Collection<LoanStatus> statuses);
+
+    /** Loans eligible for collections: a given set of statuses, due on or before {@code asOf}. */
+    /**
+     * The collections worklist set: {@code statuses}, due on or before {@code horizon}, plus every extended loan
+     * whatever its new due date (PLAN Phase 6b, item 11). Soonest due first.
+     */
+    @Query("select l from Loan l where l.status in :statuses and (l.dueDate <= :horizon or l.extensionCount > 0)"
+            + " order by l.dueDate asc")
+    List<Loan> findCollectible(@Param("statuses") Collection<LoanStatus> statuses, @Param("horizon") LocalDate horizon);
+
+    List<Loan> findByStatusInAndDueDateLessThanEqualOrderByDueDateAsc(
+            Collection<LoanStatus> statuses, LocalDate asOf);
+
+    /**
+     * Live loans NOT yet due as of {@code asOf}, soonest first — the collections pre-due watchlist
+     * behind the UPCOMING DPD bucket. The mirror of
+     * {@link #findCollectible}: same statuses, opposite side
+     * of the due date. Loans with a null {@code due_date} drop out on their own (SQL comparison
+     * against null is never true), which is what keeps the day-count arithmetic downstream safe.
+     */
+    List<Loan> findByStatusInAndDueDateGreaterThanOrderByDueDateAsc(
+            Collection<LoanStatus> statuses, LocalDate asOf);
+
+    /**
+     * Every loan (any status), optionally windowed by {@code disbursed_on}. Backs the staff loan
+     * register ({@code LoanRegisterService}), which does status/search filtering itself after
+     * enrichment (name/PAN live on the customer profile, not the loan). Both bounds are optional and
+     * independent (either, both, or neither may be null) — a single JPQL query with null-coalescing
+     * predicates avoids a matrix of derived-query method names for from-only/to-only/both/neither.
+     *
+     * <p>The bounds are wrapped in {@code cast(... as date)} for Postgres, which cannot infer a bare
+     * parameter's type in {@code :param is null} and fails the whole statement with
+     * "could not determine data type of parameter". The cast is what makes the null-coalescing form
+     * usable at all here; without it this query only works when both bounds are supplied.
+     */
+    @Query("select l from Loan l where (cast(:from as date) is null or l.disbursedOn >= :from) "
+            + "and (cast(:to as date) is null or l.disbursedOn <= :to)")
+    List<Loan> findAllForRegister(@Param("from") LocalDate from, @Param("to") LocalDate to);
+}

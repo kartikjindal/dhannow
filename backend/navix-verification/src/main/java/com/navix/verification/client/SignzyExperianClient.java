@@ -1,0 +1,97 @@
+package com.navix.verification.client;
+
+import static com.navix.verification.support.ProviderJson.integer;
+import static com.navix.verification.support.ProviderJson.post;
+import static com.navix.verification.support.ProviderJson.text;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.navix.common.verification.BureauReportFacts;
+import com.navix.verification.config.VerificationClientConfig;
+import com.navix.verification.dto.SignzyDtos.Consent;
+import com.navix.verification.dto.SignzyDtos.ExperianRequest;
+import com.navix.verification.dto.SignzyDtos.ExperianResponse;
+import com.navix.verification.support.BureauFixtureLoader;
+import com.navix.verification.support.ExperianFactsParser;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+
+/**
+ * Signzy Experian-Lite bureau pull — {@code POST /api/v3/bureau/experian-lite}. PRIMARY bureau.
+ * Signzy returns the standard Experian report at {@code data.jsonExperianReport}, which is the same
+ * shape DhanNow already parses ({@code SCORE.FCIREXScore}, CAIS summary, CAPS), so the neutral
+ * {@link BureauReportFacts} come straight out of {@link ExperianFactsParser}.
+ *
+ * <p>For local end-to-end demos set {@code navix.bureau.fixture} (env {@code NAVIX_BUREAU_FIXTURE}) to a
+ * bundled report JSON (e.g. {@code classpath:samplepan.json}); every pull then returns it. The fixture is
+ * Fintrix-shaped ({@code data.credit_report}), so the report-node/score resolution below tolerates both
+ * the real ({@code jsonExperianReport}) and fixture ({@code credit_report}) layouts.
+ */
+@Component
+public class SignzyExperianClient {
+
+    private static final String ENDPOINT = "/api/v3/bureau/experian-lite";
+
+    private final RestClient signzy;
+    private final ObjectMapper objectMapper;
+    private final String fixturePath;
+    private final String deviceIp;
+
+    public SignzyExperianClient(@Qualifier(VerificationClientConfig.SIGNZY_BUREAU_CLIENT) RestClient signzy,
+                                ObjectMapper objectMapper,
+                                @Value("${navix.bureau.fixture:}") String fixturePath,
+                                @Value("${navix.signzy.device-ip:3.109.169.131}") String deviceIp) {
+        this.signzy = signzy;
+        this.objectMapper = objectMapper;
+        this.fixturePath = fixturePath;
+        this.deviceIp = deviceIp;
+    }
+
+    public ExperianResponse pull(String pan, String name, String mobile, String dob) {
+        JsonNode root = (fixturePath != null && !fixturePath.isBlank())
+                ? BureauFixtureLoader.load(objectMapper, fixturePath)
+                : post(signzy, ENDPOINT, buildRequest(pan, name, mobile, dob));
+        return parse(root, name, pan, mobile);
+    }
+
+    private ExperianRequest buildRequest(String pan, String name, String mobile, String dob) {
+        String[] parts = splitName(name);
+        Consent consent = new Consent(true, System.currentTimeMillis(), deviceIp, "CM_1");
+        return new ExperianRequest(mobile, pan, parts[0], parts[1], dob, consent);
+    }
+
+    private ExperianResponse parse(JsonNode root, String name, String pan, String mobile) {
+        JsonNode data = root.path("data");
+        // Real Signzy → data.jsonExperianReport; demo fixture → data.credit_report.
+        JsonNode report = firstPresent(data.path("jsonExperianReport"), data.path("credit_report"));
+        Integer score = integer(report.path("SCORE").path("FCIREXScore"));
+        if (score == null) {
+            score = integer(data.path("credit_score"));
+        }
+        String message = text(root.path("message"));
+        boolean noRecord = score == null
+                || (message != null && message.toLowerCase().contains("no record"));
+        BureauReportFacts facts = ExperianFactsParser.parse(report, score, name, pan, mobile);
+        String txnId = text(report.path("CreditProfileHeader").path("ReportNumber"));
+        return new ExperianResponse(txnId, score, noRecord, facts, root.toString());
+    }
+
+    private static JsonNode firstPresent(JsonNode a, JsonNode b) {
+        return (a != null && !a.isMissingNode() && !a.isNull()) ? a : b;
+    }
+
+    private static String[] splitName(String name) {
+        if (name == null || name.isBlank()) {
+            return new String[] {"Applicant", "."};
+        }
+        String trimmed = name.trim();
+        int sp = trimmed.indexOf(' ');
+        if (sp < 0) {
+            return new String[] {trimmed, "."};
+        }
+        return new String[] {trimmed.substring(0, sp), trimmed.substring(sp + 1).trim()};
+    }
+
+}

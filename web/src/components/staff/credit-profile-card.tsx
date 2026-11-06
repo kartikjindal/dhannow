@@ -1,0 +1,309 @@
+"use client";
+
+import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Gauge, Download, Loader2, FileText } from "lucide-react";
+import { ErrorState, InfoTooltip, Skeleton } from "@/components/ui";
+import { StarRating } from "@/components/ui/star-rating";
+import { PdfPreviewDialog } from "@/components/staff/pdf-preview-dialog";
+import { staffApi, type CreditBriefFacts, type CreditBriefDetail } from "@/lib/api/applications";
+import { flattenProviderReport, type JsonValue } from "@/lib/credit/provider-report";
+import { bureauStateLabel, reportWithoutScoreLabel } from "@/components/staff/bureau-state";
+import { TradelineTable, EnquiryTable, ScoreTrendBlock, TopExposuresBlock } from "@/components/staff/credit/tradeline-table";
+
+const inr = (rupees: number | null | undefined): string =>
+  rupees == null
+    ? "—"
+    : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(rupees);
+
+function verdictTone(rating: number | null): string {
+  if (rating == null) return "bg-neutral-100 text-neutral-700";
+  if (rating >= 3.5) return "bg-success-100 text-success-800";
+  if (rating >= 2.5) return "bg-warning-100 text-warning-800";
+  return "bg-error-100 text-error-800";
+}
+
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-1">
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="text-sm font-semibold tabular-nums text-ink">{value ?? "—"}</dd>
+    </div>
+  );
+}
+
+function Facts({ f }: { f: CreditBriefFacts }) {
+  const pct = (part: number | null, total: number | null) =>
+    part != null && total != null && total > 0 ? ` (${Math.round((part / total) * 100)}%)` : "";
+  return (
+    <div className="mt-4 grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-3">
+      <dl>
+        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">A · Identity</div>
+        {/* Core identity comes from KYC; city/PIN are the bureau-reported values. */}
+        <Row label="Name" value={f.name} />
+        <Row label="PAN" value={f.pan} />
+        <Row label="Mobile" value={f.mobile} />
+        <Row label="DOB" value={f.dob} />
+        <Row label="City" value={f.city} />
+        <Row label="PIN" value={f.pin} />
+      </dl>
+      <dl>
+        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">B · Credit health</div>
+        <Row label="Accounts" value={f.totalAccounts} />
+        <Row label="Active" value={f.activeAccounts} />
+        <Row label="Closed" value={f.closedAccounts} />
+        <Row label="Defaults" value={f.defaults} />
+      </dl>
+      <dl>
+        <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">C · Exposure</div>
+        <Row label="Total" value={inr(f.totalBalance)} />
+        <Row label="Secured" value={`${inr(f.securedBalance)}${pct(f.securedBalance, f.totalBalance)}`} />
+        <Row label="Unsecured" value={`${inr(f.unsecuredBalance)}${pct(f.unsecuredBalance, f.totalBalance)}`} />
+        <Row label="Inquiries (30d)" value={f.recentInquiries30d} />
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * The parsed tradeline/enquiry detail behind the twelve `Facts` scalars — the "missing middle"
+ * between the curated summary and the raw `CompleteProviderReport` dump. `detail` is null on any
+ * brief generated before this parsing shipped (no backfill ran) — render nothing here in that case
+ * rather than an empty table, so an older brief looks exactly like it did before this change.
+ */
+function ReportDetail({ detail }: { detail: CreditBriefDetail }) {
+  return (
+    <div className="mt-5 space-y-4">
+      {/* CRIF-only — no Experian equivalent, so this renders nothing on those/pre-CRIF briefs. */}
+      {detail.scoreHistory && (
+        <div>
+          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Score trend</div>
+          <ScoreTrendBlock h={detail.scoreHistory} />
+        </div>
+      )}
+      <div>
+        <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Top exposures</div>
+        <TopExposuresBlock tradelines={detail.tradelines} />
+      </div>
+      <div>
+        <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Tradelines</div>
+        <TradelineTable tradelines={detail.tradelines} tradelineCount={detail.tradelineCount} />
+      </div>
+      <div>
+        <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Enquiries</div>
+        <EnquiryTable enquiries={detail.enquiries} />
+      </div>
+    </div>
+  );
+}
+
+function CompleteProviderReport({ report }: { report: JsonValue }) {
+  const rows = React.useMemo(() => flattenProviderReport(report), [report]);
+  return (
+    <section className="mt-5 overflow-hidden rounded border border-line bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-navy-tint/60 px-3 py-2.5">
+        <div>
+          <h3 className="text-sm font-semibold text-navy">Complete provider response</h3>
+          <p className="text-xs text-muted">
+            Exact payload for new pulls; older records may contain only the legacy verification snapshot.
+          </p>
+        </div>
+        <span className="rounded-full border border-line bg-white px-2 py-0.5 text-xs font-semibold tabular-nums text-muted">
+          {rows.length.toLocaleString("en-IN")} fields
+        </span>
+      </div>
+      <div className="max-h-[48rem] overflow-auto">
+        <table className="w-full table-fixed border-collapse text-left">
+          <thead className="sticky top-0 z-10 bg-navy text-white">
+            <tr>
+              <th scope="col" className="w-[56%] px-3 py-2 text-xs font-semibold">Provider field path</th>
+              <th scope="col" className="w-[44%] px-3 py-2 text-xs font-semibold">Provider value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={`${row.path}-${index}`} className="border-t border-line align-top odd:bg-neutral-50/60">
+                <th scope="row" className="break-words px-3 py-2 text-xs font-medium leading-relaxed text-muted">
+                  {row.path}
+                </th>
+                <td className="break-all whitespace-pre-wrap px-3 py-2 font-mono text-xs leading-relaxed text-ink">
+                  {row.value}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The facts/detail/summary/raw-report block — shared by the scored and no-score-but-readable
+ * branches below, so a report with real tradelines and no usable score still shows the account
+ * history it has, instead of only the score/recommendation header it doesn't.
+ */
+function BriefFactsAndReport({
+  facts,
+  summary,
+  providerResponse,
+}: {
+  facts: CreditBriefFacts | null;
+  summary: string | null;
+  providerResponse: JsonValue | null;
+}) {
+  return (
+    <>
+      {facts && <Facts f={facts} />}
+      {facts?.detail && <ReportDetail detail={facts.detail} />}
+      {summary && (
+        <div className="mt-4 rounded bg-navy-tint/60 p-3">
+          <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+            <FileText size={12} /> Underwriter summary
+          </div>
+          <p className="text-sm leading-relaxed text-ink">{summary}</p>
+        </div>
+      )}
+      {providerResponse != null && <CompleteProviderReport report={providerResponse} />}
+    </>
+  );
+}
+
+/**
+ * Staff-only credit brief card for one application: the 1–5★ recommendation + bureau score, the
+ * categorized facts, the underwriter summary, and a one-click PDF download. Self-fetches the brief.
+ */
+export function CreditProfileCard({ applicationId }: { applicationId: number }) {
+  const briefQ = useQuery({
+    queryKey: ["credit-brief", applicationId],
+    queryFn: () => staffApi.creditBrief(applicationId),
+  });
+  const [downloading, setDownloading] = React.useState(false);
+  const [pdfOpen, setPdfOpen] = React.useState(false);
+  const [pdfUrl, setPdfUrl] = React.useState<string | null>(null);
+  const [pdfTitle, setPdfTitle] = React.useState("Credit brief");
+
+  const brief = briefQ.data;
+
+  async function openPdf(documentId: number | null | undefined, title: string) {
+    if (!documentId) return;
+    setDownloading(true);
+    try {
+      const { url } = await staffApi.documentUrl(applicationId, documentId);
+      setPdfUrl(url);
+      setPdfTitle(title);
+      setPdfOpen(true);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <div className="rounded border border-line bg-white p-5 shadow-sm">
+      <div className="mb-3 flex items-center gap-2 font-serif text-base font-semibold text-navy">
+        <Gauge size={16} /> Credit profile
+        <InfoTooltip content="Bureau-derived credit score and a 1–5★ recommendation (should we lend?). Staff-only — never shown to the borrower." />
+        {brief?.bureauReportDocumentId != null && (
+          <button
+            type="button"
+            onClick={() => openPdf(brief.bureauReportDocumentId, "Bureau report (CRIF)")}
+            disabled={downloading}
+            className="ml-auto inline-flex items-center gap-1.5 rounded border border-line px-3 py-1.5 font-sans text-xs font-semibold text-navy hover:bg-navy-tint disabled:opacity-50"
+          >
+            <FileText size={14} /> CRIF report (PDF)
+          </button>
+        )}
+      </div>
+
+      {briefQ.isLoading ? (
+        <Skeleton variant="line" rows={4} />
+      ) : briefQ.isError ? (
+        <ErrorState
+          error={briefQ.error}
+          title="Couldn't load bureau data."
+          onRetry={() => void briefQ.refetch()}
+          className="py-4"
+        />
+      ) : !brief || brief.bureauState === "NOT_FETCHED" ? (
+        <div className="text-sm text-muted">
+          {bureauStateLabel("NOT_FETCHED", "long")} — the credit brief is generated automatically
+          once the bureau report is pulled.
+        </div>
+      ) : brief.bureauState === "NO_RECORD" ? (
+        <>
+          <div className="text-sm text-muted">
+            {bureauStateLabel("NO_RECORD", "long")} — the bureau reported no credit history for
+            this customer.
+          </div>
+          {brief.providerResponse != null && <CompleteProviderReport report={brief.providerResponse} />}
+        </>
+      ) : brief.creditScore == null && brief.starRating == null ? (
+        <>
+          <div className="text-sm text-muted">
+            {brief.facts
+              ? `${reportWithoutScoreLabel("long")} — read the account history below.`
+              : "The bureau pull completed but returned no usable rating (thin file)."}
+          </div>
+          <BriefFactsAndReport facts={brief.facts} summary={brief.summary} providerResponse={brief.providerResponse} />
+        </>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+            <div>
+              <div className="text-xs text-muted">Credit score</div>
+              <div className="font-serif text-2xl font-semibold tabular-nums text-navy">
+                {brief.creditScore ?? "—"}
+                <span className="ml-1 text-sm font-normal text-muted">/ 900</span>
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-muted">Recommendation</div>
+              <div className="mt-0.5 flex items-center gap-2">
+                <StarRating value={brief.starRating} size="0.88rem" />
+                <span className="text-sm font-semibold tabular-nums text-ink">
+                  {brief.starRating != null ? `${brief.starRating.toFixed(1)} / 5` : "—"}
+                </span>
+              </div>
+            </div>
+            {brief.recommendation && (
+              <span
+                className={`self-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${verdictTone(brief.starRating)}`}
+              >
+                {brief.recommendation}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => openPdf(brief.documentId, "Credit brief")}
+              disabled={!brief.documentId || downloading}
+              className="ml-auto inline-flex items-center gap-1.5 rounded border border-line px-3 py-1.5 text-xs font-semibold text-navy hover:bg-navy-tint disabled:opacity-50"
+            >
+              {downloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              Download brief (PDF)
+            </button>
+          </div>
+
+          {brief.ratingReasons && brief.ratingReasons.length > 0 && (
+            <div className="mt-3 rounded-lg border border-line bg-ivory/60 px-3 py-2">
+              <div className="mb-1 flex items-center gap-1 text-xs font-semibold text-navy">
+                Why {brief.starRating?.toFixed(1)}★
+                <InfoTooltip content="Stars follow the BRE: the score sets the base (600 is the policy floor), then late payments over 10 days, accounts overdue now, an enquiry burst and no recent personal loan each take a step off; a default caps at 2.5★, a written-off or settled account at 2.0★." />
+              </div>
+              <ul className="space-y-0.5 text-xs text-ink">
+                {brief.ratingReasons.map((r, i) => (
+                  <li key={i} className={i === 0 ? "font-medium" : "text-error-800"}>
+                    {i === 0 ? r : `• ${r}`}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <BriefFactsAndReport facts={brief.facts} summary={brief.summary} providerResponse={brief.providerResponse} />
+        </>
+      )}
+
+      <PdfPreviewDialog open={pdfOpen} onClose={() => setPdfOpen(false)} url={pdfUrl} title={pdfTitle} />
+    </div>
+  );
+}

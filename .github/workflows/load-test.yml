@@ -1,0 +1,44 @@
+# k6 against staging (PLAN Phase 12 "Load": 100 rps, p95 < 400 ms). On demand only.
+# Environment `staging` holds API_BASE_URL (variable) and K6_BORROWER_TOKEN / K6_STAFF_TOKEN
+# (secrets: short-lived tokens from a staging sign-in), optionally K6_APPLICATION_ID / K6_LOAN_ID.
+name: load-test
+on:
+  workflow_dispatch:
+    inputs:
+      rate:
+        description: Requests per second
+        default: "100"
+      duration:
+        description: k6 duration
+        default: "5m"
+
+permissions:
+  contents: read
+
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: k6 run tools/k6/journey.js
+        env:
+          BASE_URL: ${{ vars.API_BASE_URL }}
+          BORROWER_TOKEN: ${{ secrets.K6_BORROWER_TOKEN }}
+          STAFF_TOKEN: ${{ secrets.K6_STAFF_TOKEN }}
+          APPLICATION_ID: ${{ vars.K6_APPLICATION_ID }}
+          LOAN_ID: ${{ vars.K6_LOAN_ID }}
+          RATE: ${{ inputs.rate }}
+          DURATION: ${{ inputs.duration }}
+        run: |
+          mkdir -p k6-out
+          docker run --rm -u "$(id -u)" -v "$PWD:/w" -w /w \
+            -e BASE_URL -e BORROWER_TOKEN -e STAFF_TOKEN -e APPLICATION_ID -e LOAN_ID -e RATE -e DURATION \
+            grafana/k6:1.8.2 run --summary-export k6-out/summary.json tools/k6/journey.js
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: k6-summary
+          path: k6-out/
+          retention-days: 90

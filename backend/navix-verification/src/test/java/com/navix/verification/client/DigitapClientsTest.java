@@ -1,0 +1,455 @@
+package com.navix.verification.client;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.matchesPattern;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withBadRequest;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+
+import com.navix.common.verification.ProviderFailureDetails;
+import com.navix.verification.dto.DigitapDtos.AddressResponse;
+import com.navix.verification.dto.DigitapDtos.CreditResponse;
+import com.navix.verification.dto.DigitapDtos.EmailResponse;
+import com.navix.verification.dto.DigitapDtos.FaceLivenessResponse;
+import com.navix.verification.dto.DigitapDtos.FaceMatchResponse;
+import com.navix.verification.dto.DigitapDtos.PanResponse;
+import com.navix.verification.dto.DigitapDtos.SkipTraceResponse;
+import com.navix.verification.exception.VerificationException;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.RestClient;
+
+/**
+ * Offline tests for the Digitap clients: bind a {@link MockRestServiceServer} to a fresh
+ * {@link RestClient.Builder}, stub the endpoint with a representative Digitap envelope (from
+ * {@code docs/digitap/digitap-apis.json}), and assert the mapped DTO.
+ */
+class DigitapClientsTest {
+
+    private static final String BASE = "https://digitap.test";
+
+    private record Bound(MockRestServiceServer server, RestClient restClient) {
+    }
+
+    private Bound bind() {
+        RestClient.Builder builder = RestClient.builder().baseUrl(BASE);
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        return new Bound(server, builder.build());
+    }
+
+    private void stub(MockRestServiceServer server, String endpoint, String json) {
+        server.expect(requestTo(BASE + endpoint))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess(json, MediaType.APPLICATION_JSON));
+    }
+
+    @Test
+    void panDetailsPlusMapsIdentity() {
+        Bound b = bind();
+        stub(b.server(), "/validation/kyc/v1/pan_details_plus", """
+                {"http_response_code":200,"result_code":101,"request_id":"REQ-PAN-1","result":{
+                "pan":"ABCPE1234Z","fullname":"  JOHN DOE","first_name":"JOHN","last_name":"DOE",
+                "gender":"male","dob":"11/08/1990","aadhaar_linked":true,"pan_status":"VALID",
+                "address":{"state":"Haryana","pincode":"131001"}}}
+                """);
+
+        PanResponse r = new DigitapPanClient(b.restClient()).verify("ABCPE1234Z", "ref-1");
+
+        assertThat(r.txnId()).isEqualTo("REQ-PAN-1");
+        assertThat(r.valid()).isTrue();
+        assertThat(r.fullName()).isEqualTo("JOHN DOE");
+        assertThat(r.dob()).isEqualTo("11/08/1990");
+        assertThat(r.aadhaarLinked()).isTrue();
+        assertThat(r.addressState()).isEqualTo("Haryana");
+        assertThat(r.addressZip()).isEqualTo("131001");
+        b.server().verify();
+    }
+
+    @Test
+    void emailVerificationMapsSummary() {
+        Bound b = bind();
+        stub(b.server(), "/cv/email_verification/v1", """
+                {"http_status_code":200,"result_code":101,"request_id":"REQ-EM-1","result":{
+                "summary":{"is_verified":true,"is_email_valid":true,"is_establishment_matched":true,
+                "is_individual_matched":true},
+                "establishment_details":{"matched_establishments":[{"matched_establishment":"DIGITAP.AI"}]},
+                "individual_details":{"score":1},"additional_info":{"is_generic_email":false}}}
+                """);
+
+        EmailResponse r = new DigitapEmailClient(b.restClient())
+                .verify("a@b.com", "John", "Digitap", "ref-1");
+
+        assertThat(r.txnId()).isEqualTo("REQ-EM-1");
+        assertThat(r.resultCode()).isEqualTo(101);
+        assertThat(r.isVerified()).isTrue();
+        assertThat(r.isEstablishmentMatched()).isTrue();
+        assertThat(r.isGenericEmail()).isFalse();
+        assertThat(r.matchedEstablishment()).isEqualTo("DIGITAP.AI");
+        assertThat(r.individualScore()).isEqualTo(1.0);
+        b.server().verify();
+    }
+
+    @Test
+    void addressMapsModel() {
+        Bound b = bind();
+        stub(b.server(), "/ent/v1/address-verification", """
+                {"code":"200","model":{"address":"K.S Corporate Tower","pincode":"201301",
+                "district":"Gautam Buddha Nagar","state":"Uttar Pradesh","country":"India","withInIndia":true}}
+                """);
+
+        AddressResponse r = new DigitapAddressClient(b.restClient()).verify(28.5, 77.3, "ref-1");
+
+        assertThat(r.code()).isEqualTo("200");
+        assertThat(r.state()).isEqualTo("Uttar Pradesh");
+        assertThat(r.pincode()).isEqualTo("201301");
+        assertThat(r.withinIndia()).isTrue();
+        b.server().verify();
+    }
+
+    @Test
+    void faceMatchMapsResult() {
+        Bound b = bind();
+        stub(b.server(), "/fmfl/v2/face-match", """
+                {"status":"success","statusCode":"200","clientRefId":"ref-1","reqId":"REQ-FM-1",
+                "result":{"is_same_face":true,"same_face_confidence":0.9998,"is_person_image_blurry":false}}
+                """);
+
+        FaceMatchResponse r = new DigitapFaceMatchClient(b.restClient())
+                .match("https://s3/selfie.jpg", null, "ref-1");
+
+        assertThat(r.txnId()).isEqualTo("REQ-FM-1");
+        assertThat(r.sameFace()).isTrue();
+        assertThat(r.confidence()).isEqualTo(0.9998);
+        assertThat(r.personImageBlurry()).isFalse();
+        b.server().verify();
+    }
+
+    /** Envelope and field names as returned by production on 2026-10-05 (note {@code req_id}). */
+    @Test
+    void faceLivenessMapsResult() {
+        Bound b = bind();
+        b.server().expect(requestTo(BASE + "/fmfl/v4/face-liveness"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.input_image").value("https://s3/selfie.jpg"))
+                .andExpect(jsonPath("$.client_ref_num").exists())
+                .andRespond(withSuccess("""
+                        {"status":"success","client_ref_num":"ref-1","req_id":"REQ-FL-1","http_status_code":200,
+                        "result":{"is_live":true,"is_person_image_blurry":false,"liveness_confidence":1.0,
+                        "person_image_correctly_identified":true,"multiple_face_detected":false}}
+                        """, MediaType.APPLICATION_JSON));
+
+        FaceLivenessResponse r = new DigitapFaceLivenessClient(b.restClient())
+                .check("https://s3/selfie.jpg", "ref-1");
+
+        assertThat(r.txnId()).isEqualTo("REQ-FL-1");
+        assertThat(r.live()).isTrue();
+        assertThat(r.confidence()).isEqualTo(1.0);
+        assertThat(r.multipleFaces()).isFalse();
+        assertThat(r.personImageBlurry()).isFalse();
+        b.server().verify();
+    }
+
+    /** Envelope as returned by production on 2026-10-07; blank identifiers must be omitted, not sent. */
+    @Test
+    void skipTraceMapsEnvelopeAndOmitsBlankIdentifiers() {
+        Bound b = bind();
+        b.server().expect(requestTo(BASE + "/enrichment/misc/v1/skip-tracing-lite"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.pan").value("ZYXPS1001Q"))
+                .andExpect(jsonPath("$.mobile").value("9000000107"))
+                .andExpect(jsonPath("$.name").value("VIKRAM SHARMA"))
+                .andExpect(jsonPath("$.address[0]").value("1 Sample Road, Gurugram"))
+                .andExpect(jsonPath("$.client_ref_num").value("navix-42-SKIP_TRACE"))
+                .andRespond(withSuccess("""
+                        {"http_response_code":200,"client_ref_num":"navix-42-SKIP_TRACE",
+                        "request_id":"d98f35ba-c50a-4f17-b997-1eada7f43f57","result_code":101,
+                        "message":"Skip tracing successful","result":{"profile":{"full_name":"VIKRAM SHARMA"},
+                        "addresses":[{"address_rank":1,"address_details":{"pincode":"122002"}}]}}
+                        """, MediaType.APPLICATION_JSON));
+
+        SkipTraceResponse r = new DigitapSkipTraceClient(b.restClient())
+                .trace("ZYXPS1001Q", "9000000107", "VIKRAM SHARMA", java.util.List.of("1 Sample Road, Gurugram"),
+                        "navix-42-SKIP_TRACE");
+
+        assertThat(r.txnId()).isEqualTo("d98f35ba-c50a-4f17-b997-1eada7f43f57");
+        assertThat(r.resultCode()).isEqualTo(101);
+        assertThat(r.message()).isEqualTo("Skip tracing successful");
+        assertThat(r.rawJson()).contains("\"address_rank\":1");
+        b.server().verify();
+    }
+
+    @Test
+    void skipTraceNoRecordIsStillAMappedResponse() {
+        Bound b = bind();
+        b.server().expect(requestTo(BASE + "/enrichment/misc/v1/skip-tracing-lite"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.pan").doesNotExist())
+                .andExpect(jsonPath("$.name").doesNotExist())
+                .andExpect(jsonPath("$.address").doesNotExist())
+                .andRespond(withSuccess("""
+                        {"http_response_code":200,"client_ref_num":"x","request_id":"ed74d00c","result_code":103,
+                        "message":"No record(s) found"}
+                        """, MediaType.APPLICATION_JSON));
+
+        SkipTraceResponse r = new DigitapSkipTraceClient(b.restClient()).trace("", "9000000000", " ", null, "x");
+
+        assertThat(r.resultCode()).isEqualTo(103);
+        assertThat(r.message()).isEqualTo("No record(s) found");
+        b.server().verify();
+    }
+
+    @Test
+    void creditMapsBureauScore() {
+        Bound b = bind();
+        stub(b.server(), "/credit_analytics/request", """
+                {"http_response_code":200,"result_code":101,"request_id":"REQ-CR-1","result":{
+                "result_json":{"INProfileResponse":{
+                "CreditProfileHeader":{"ReportNumber":"RPT-9"},
+                "SCORE":{"BureauScore":"800"},
+                "CAIS_Account":{"CAIS_Summary":{"Credit_Account":{"CreditAccountActive":"2"},
+                "Total_Outstanding_Balance":{"Outstanding_Balance_All":"50000"}}},
+                "TotalCAPS_Summary":{"TotalCAPSLast30Days":"0"}}}}}
+                """);
+
+        CreditResponse r = new DigitapCreditClient(b.restClient(), "3.109.169.131")
+                .pull("ABCPE1234Z", "John Doe", "9999999999", "1990-01-01", "654321", "ref-1");
+
+        assertThat(r.txnId()).isEqualTo("REQ-CR-1");
+        assertThat(r.creditScore()).isEqualTo(800);
+        assertThat(r.noRecord()).isFalse();
+        assertThat(r.facts()).isNotNull();
+        assertThat(r.facts().activeAccounts()).isEqualTo(2);
+        assertThat(r.rawResponseJson()).contains(
+                "\"request_id\":\"REQ-CR-1\"",
+                "\"INProfileResponse\"",
+                "\"BureauScore\":\"800\"");
+        b.server().verify();
+    }
+
+    @Test
+    void creditPreservesEveryProviderFieldIncludingTradelinesAndEnquiries() throws Exception {
+        Bound b = bind();
+        stub(b.server(), "/credit_analytics/request", """
+                {"http_response_code":200,"result_code":101,"request_id":"REQ-FULL-1","message":"success",
+                "result":{"result_json":{"INProfileResponse":{
+                  "Header":{"SystemCode":"0","ReportDate":"20260809"},
+                  "Current_Application":{"Current_Application_Details":{
+                    "Current_Applicant_Details":{"Date_Of_Birth_Applicant":"20020902"},
+                    "Current_Other_Details":{"Income":"85000"},
+                    "Current_Applicant_Address_Details":[{"City":"Meerut","PINCode":"122002"}]
+                  }},
+                  "CAIS_Account":{"CAIS_Summary":{"Credit_Account":{"CreditAccountTotal":"11"},
+                    "Total_Outstanding_Balance":{"Outstanding_Balance_All":"805314"}},
+                    "CAIS_Account_DETAILS":[{
+                    "Subscriber_Name":"TEST BANK","Account_Number":"XXXX1234",
+                    "Payment_History_Profile":"000000",
+                    "CAIS_Account_History":[{"Year":"2026","Month":"07","Days_Past_Due":"0"}]
+                  }]},
+                  "CAPS":{"CAPS_Application_Details":[{"Subscriber_Name":"LENDER","Amount_Financed":"10000"}]},
+                  "TotalCAPS_Summary":{"TotalCAPSLast7Days":"1","TotalCAPSLast90Days":"3"},
+                  "SCORE":{"BureauScore":"800","BureauScoreConfidLevel":"H"}
+                }}}}
+                """);
+
+        CreditResponse r = new DigitapCreditClient(b.restClient(), "3.109.169.131")
+                .pull("ABCPE1234Z", "John Doe", "9999999999", "1990-01-01", "654321", "full-ref");
+
+        var raw = new com.fasterxml.jackson.databind.ObjectMapper().readTree(r.rawResponseJson());
+        var report = raw.path("result").path("result_json").path("INProfileResponse");
+        assertThat(report.path("Current_Application").path("Current_Application_Details")
+                .path("Current_Other_Details").path("Income").asText()).isEqualTo("85000");
+        assertThat(report.path("CAIS_Account").path("CAIS_Account_DETAILS").path(0)
+                .path("Payment_History_Profile").asText()).isEqualTo("000000");
+        assertThat(report.path("CAIS_Account").path("CAIS_Account_DETAILS").path(0)
+                .path("CAIS_Account_History").path(0).path("Days_Past_Due").asText()).isEqualTo("0");
+        assertThat(report.path("CAPS").path("CAPS_Application_Details").path(0)
+                .path("Amount_Financed").asText()).isEqualTo("10000");
+        assertThat(report.path("SCORE").path("BureauScoreConfidLevel").asText()).isEqualTo("H");
+        assertThat(r.facts().dob()).isEqualTo("2002-09-02");
+        assertThat(r.facts().city()).isEqualTo("Meerut");
+        assertThat(r.facts().pin()).isEqualTo("122002");
+        b.server().verify();
+    }
+
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void creditSuccessLogsCompleteTemporaryRawResponse(CapturedOutput output) {
+        Bound b = bind();
+        stub(b.server(), "/credit_analytics/request", """
+                {"http_response_code":200,"result_code":101,"request_id":"REQ-LOG-1","result":{
+                "result_json":{"INProfileResponse":{"SCORE":{"BureauScore":"812"},
+                "CAIS_Account":{"CAIS_Account_DETAILS":[{"Account_Number":"XXXX4321"}]}}}}}
+                """);
+
+        new DigitapCreditClient(b.restClient(), "3.109.169.131")
+                .pull("ABCPE1234Z", "John Doe", "9999999999", "1990-01-01", "654321", "log-ref");
+
+        assertThat(output).contains(
+                "PROVIDER_CALL",
+                "provider=DIGITAP",
+                "operation=BUREAU",
+                "responsePayload={\"http_response_code\":200",
+                "\"CAIS_Account_DETAILS\":[{\"Account_Number\":\"[REDACTED]\"}]");
+        b.server().verify();
+    }
+
+    /**
+     * Regression test for the four payload bugs found by live-testing Digitap's production API: a
+     * placeholder {@code device_ip} (0.0.0.0) is rejected with {@code 403 IP not allowed} regardless of
+     * the caller's real network IP, an empty {@code otp} is rejected once IP passes, {@code timestamp}
+     * must be {@code ddMMyyyy-HH:mm:ss} (not epoch millis), and {@code consent_message} must contain
+     * "Experian" or Digitap rejects it as an invalid consent message.
+     */
+    @Test
+    void creditRequest_sendsRealOtpDeviceIpTimestampAndExperianConsent() {
+        Bound b = bind();
+        b.server().expect(requestTo(BASE + "/credit_analytics/request"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().string(containsString("\"otp\":\"654321\"")))
+                .andExpect(content().string(containsString("\"device_ip\":\"3.109.169.131\"")))
+                .andExpect(content().string(containsString("Experian")))
+                .andExpect(content().string(matchesPattern(
+                        "(?s).*\"timestamp\":\"\\d{2}\\d{2}\\d{4}-\\d{2}:\\d{2}:\\d{2}\".*")))
+                .andRespond(withSuccess("""
+                        {"http_response_code":200,"result_code":101,"request_id":"REQ-CR-2","result":{
+                        "result_json":{"INProfileResponse":{"SCORE":{"BureauScore":"778"}}}}}
+                        """, MediaType.APPLICATION_JSON));
+
+        CreditResponse r = new DigitapCreditClient(b.restClient(), "3.109.169.131")
+                .pull("ABCPE1234Z", "John Doe", "9999999999", "1990-01-01", "654321", "ref-2");
+
+        assertThat(r.creditScore()).isEqualTo(778);
+        b.server().verify();
+    }
+
+    @Test
+    void creditRequest_usesWebDeviceTypeWithoutMobileDeviceId() {
+        Bound b = bind();
+        b.server().expect(requestTo(BASE + "/credit_analytics/request"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.device_type").value("web"))
+                .andExpect(jsonPath("$.device_id").doesNotExist())
+                .andRespond(withSuccess("""
+                        {"http_response_code":200,"result_code":101,"request_id":"REQ-CR-3","result":{
+                        "result_json":{"INProfileResponse":{"SCORE":{"BureauScore":"778"}}}}}
+                        """, MediaType.APPLICATION_JSON));
+
+        CreditResponse r = new DigitapCreditClient(b.restClient(), "3.109.169.131")
+                .pull("ABCPE1234Z", "John Doe", "9999999999", "1990-01-01", "654321", "ref-3");
+
+        assertThat(r.creditScore()).isEqualTo(778);
+        b.server().verify();
+    }
+
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void creditErrorLogsCompleteTemporaryRawRequestAndResponse(CapturedOutput output) {
+        Bound b = bind();
+        b.server().expect(requestTo(BASE + "/credit_analytics/request"))
+                .andRespond(withBadRequest()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"http_response_code\":400,\"result_code\":400,"
+                                + "\"message\":\"PAN ABCPE1234Z and mobile 9876543210 rejected\"}"));
+
+        DigitapCreditClient client = new DigitapCreditClient(b.restClient(), "3.109.169.131");
+        assertThatThrownBy(() -> client.pull(
+                "ABCPE1234Z", "Jane Doe", "9876543210", "1990-01-01", "654321", "credit-ref"))
+                .isInstanceOf(VerificationException.class);
+
+        assertThat(output).contains(
+                "PROVIDER_CALL",
+                "provider=DIGITAP",
+                "operation=BUREAU",
+                "endpoint=/credit_analytics/request",
+                "requestPayload={\"client_ref_num\":\"credit-ref\"",
+                "\"mobile_no\":\"[REDACTED]\"",
+                "\"first_name\":\"[REDACTED]\"",
+                "\"last_name\":\"[REDACTED]\"",
+                "\"pan\":\"[REDACTED]\"",
+                "\"date_of_birth\":\"[REDACTED]\"",
+                "\"otp\":\"[REDACTED]\"",
+                "\"device_ip\":\"3.109.169.131\"",
+                "responsePayload={\"http_response_code\":400,\"result_code\":400,"
+                        + "\"message\":\"PAN [REDACTED] and mobile [REDACTED] rejected\"}");
+        // The log keeps the payload's shape for diagnosis but none of the borrower's identifiers.
+        assertThat(output).doesNotContain("ABCPE1234Z", "9876543210", "654321", "1990-01-01");
+        b.server().verify();
+    }
+
+    /**
+     * result_code 102 is overloaded on THIS endpoint: most of the time it's a plain no-record, but
+     * Digitap also answers 102 with a message naming the real mobile numbers CRIF holds for this
+     * identity and instructing a call to a separate report endpoint — records DO exist. 5 applications
+     * in the Sep-2026 audit were filed as "no credit history" when their files were one manual step
+     * away, because the null score short-circuited noRecord before this message was ever read.
+     */
+    @Test
+    void creditMaskedMobileResultCodeThrowsWithMaskedMobileProviderCode() {
+        Bound b = bind();
+        stub(b.server(), "/credit_analytics/request", """
+                {"http_response_code":200,"result_code":102,"request_id":"REQ-MM-1",
+                "message":"Records found under masked mobile numbers 98XXXXXX10, retry via the masked mobile retrieval endpoint"}
+                """);
+
+        DigitapCreditClient client = new DigitapCreditClient(b.restClient(), "3.109.169.131");
+        assertThatThrownBy(() -> client.pull(
+                "ABCPE1234Z", "John Doe", "9999999999", "1990-01-01", "654321", "ref-mm"))
+                .isInstanceOfSatisfying(VerificationException.class, failure -> assertThat(
+                        failure.providerCode()).isEqualTo(ProviderFailureDetails.MASKED_MOBILE_REQUIRED));
+        b.server().verify();
+    }
+
+    /**
+     * {@code result_code 103} means "no record" on THIS endpoint (Experian) — the opposite of what it
+     * means on {@link DigitapCrifClient} ("name not found"). Score is populated here deliberately: the
+     * point is that {@code noRecord} comes back {@code true} from the {@code resultCode == 103} check
+     * alone, not merely because the score happened to be absent — pinning the two products' 102/103
+     * meanings apart so a future "unify the two Digitap bureau clients" refactor cannot flip them.
+     */
+    @Test
+    void creditResultCode103StillReturnsNoRecord() {
+        Bound b = bind();
+        stub(b.server(), "/credit_analytics/request", """
+                {"http_response_code":200,"result_code":103,"request_id":"REQ-103-1","result":{
+                "result_json":{"INProfileResponse":{"SCORE":{"BureauScore":"800"}}}}}
+                """);
+
+        CreditResponse r = new DigitapCreditClient(b.restClient(), "3.109.169.131")
+                .pull("ABCPE1234Z", "John Doe", "9999999999", "1990-01-01", "654321", "ref-103");
+
+        assertThat(r.noRecord()).isTrue();
+        assertThat(r.creditScore()).isEqualTo(800);
+        b.server().verify();
+    }
+
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void panErrorLogsTemporaryRawRequestAndResponse(CapturedOutput output) {
+        Bound b = bind();
+        b.server().expect(requestTo(BASE + "/validation/kyc/v1/pan_details_plus"))
+                .andRespond(withBadRequest()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"result_code\":400,\"message\":\"PAN ABCPE1234Z rejected for ref-1\"}"));
+
+        DigitapPanClient client = new DigitapPanClient(b.restClient());
+        assertThatThrownBy(() -> client.verify("ABCPE1234Z", "ref-1"))
+                .isInstanceOf(VerificationException.class);
+        assertThat(output).contains(
+                "PROVIDER_CALL",
+                "provider=DIGITAP",
+                "operation=PAN",
+                "requestPayload={\"client_ref_num\":\"ref-1\",\"pan\":\"[REDACTED]\"}",
+                "responsePayload={\"result_code\":400,\"message\":\"PAN [REDACTED] rejected for ref-1\"}");
+        b.server().verify();
+    }
+}

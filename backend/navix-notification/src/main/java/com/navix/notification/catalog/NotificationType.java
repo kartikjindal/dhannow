@@ -1,0 +1,238 @@
+package com.navix.notification.catalog;
+
+import static com.navix.common.notification.NotificationCategory.COLLECTIONS;
+import static com.navix.common.notification.NotificationCategory.CREDIT;
+import static com.navix.common.notification.NotificationCategory.DISBURSEMENT;
+import static com.navix.common.notification.NotificationCategory.EXTENSION;
+import static com.navix.common.notification.NotificationCategory.KYC;
+import static com.navix.common.notification.NotificationCategory.REPAYMENT;
+import static com.navix.common.notification.NotificationCategory.STAFF_IAM;
+import static com.navix.common.notification.NotificationCategory.SYSTEM;
+import static com.navix.common.notification.NotificationChannel.EMAIL;
+import static com.navix.common.notification.NotificationChannel.IN_APP;
+import static com.navix.common.notification.NotificationChannel.PUSH;
+import static com.navix.common.notification.NotificationChannel.SMS;
+import static com.navix.common.notification.NotificationChannel.WHATSAPP;
+import static com.navix.notification.catalog.RecipientPolicy.TO_ACCOUNTANTS;
+import static com.navix.notification.catalog.RecipientPolicy.TO_ADMINS;
+import static com.navix.notification.catalog.RecipientPolicy.TO_ASSIGNED_EXECUTIVE;
+import static com.navix.notification.catalog.RecipientPolicy.TO_BORROWER;
+import static com.navix.notification.catalog.RecipientPolicy.TO_COLLECTION_EXECUTIVES;
+import static com.navix.notification.catalog.RecipientPolicy.TO_COLLECTION_HEADS;
+import static com.navix.notification.catalog.RecipientPolicy.TO_CREDIT_HEADS;
+import static com.navix.notification.catalog.RecipientPolicy.TO_DISBURSEMENT_HEADS;
+import static com.navix.notification.catalog.RecipientPolicy.TO_CREDIT_TEAM;
+import static com.navix.notification.catalog.RecipientPolicy.TO_STAFF_SUBJECT;
+
+import com.navix.common.notification.NotificationCategory;
+import com.navix.common.notification.NotificationChannel;
+import java.util.Set;
+
+/**
+ * The self-describing catalog of every notification DhanNow can emit. Each constant carries its
+ * {@link NotificationCategory}, the {@link NotificationChannel}s to attempt, and the
+ * {@link RecipientPolicy} audience. The enum {@code name()} is the template key
+ * ({@code NotificationTemplates}). Channels are address-gated per recipient at dispatch (IN_APP
+ * always; SMS only with a mobile — so staff never get SMS; EMAIL only with an email).
+ */
+public enum NotificationType {
+
+    // ---- KYC ----
+    // ADMIN + Credit Heads only (product decision) — a submitted KYC is a queue-owner's signal, not
+    // something every Credit Executive needs in their inbox. EMAIL added so it lands outside the app.
+    KYC_SUBMITTED(KYC, Set.of(IN_APP, EMAIL), Set.of(TO_CREDIT_HEADS, TO_ADMINS)),
+    KYC_APPROVED(KYC, Set.of(IN_APP, SMS, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    KYC_REJECTED(KYC, Set.of(IN_APP, SMS, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    KYC_REMINDER(KYC, Set.of(IN_APP, SMS, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    REBORROW_PREAPPROVED(KYC, Set.of(IN_APP, SMS, WHATSAPP), Set.of(TO_BORROWER)),
+    /** @deprecated The manual reborrow review was retired in V45 (decision 29). Historical rows only. */
+    @Deprecated
+    REBORROW_REVIEW_PENDING(KYC, Set.of(IN_APP), Set.of(TO_CREDIT_TEAM, TO_BORROWER)),
+    REBORROW_REVIEW_APPROVED(KYC, Set.of(IN_APP, SMS, WHATSAPP), Set.of(TO_BORROWER)),
+    REBORROW_REVIEW_REJECTED(KYC, Set.of(IN_APP, SMS, WHATSAPP), Set.of(TO_BORROWER)),
+    // The bureau rescore backfill (V57+) reopened an intake-time LOW_BUREAU_SCORE auto-reject once a
+    // re-pull cleared the floor. No SMS: the DLT templates are still pending approval, same rationale
+    // as SANCTIONED_AMOUNT_REVISED/SANCTION_LETTER_SIGNED.
+    KYC_REOPENED_RESCORE(KYC, Set.of(IN_APP, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    // Waitlist mode (V76): the acknowledgement for a borrower parked while onboarding is paused. EMAIL
+    // only — there is no approved DLT/WhatsApp template for it, and the address is the one they typed.
+    WAITLIST_RECEIVED(KYC, Set.of(IN_APP, EMAIL), Set.of(TO_BORROWER)),
+
+    /**
+     * The bureau withheld the report behind a KBA question only the borrower can answer.
+     *
+     * <p>No SMS - and this one is not about DLT approval timing. Every registered borrower SMS body is
+     * operator-locked to the static {@code https://dhanboost.com/login}, so an SMS physically cannot
+     * carry the deep link this notification exists to deliver. IN_APP + EMAIL only until a template
+     * with a variable URL slot is registered.
+     */
+    BUREAU_QUESTION_PENDING(KYC, Set.of(IN_APP, EMAIL), Set.of(TO_BORROWER)),
+
+    /**
+     * The credit team sent the borrower a link back to a failed/abandoned Phase-3 step (DigiLocker,
+     * selfie, address, or the sanction-letter e-sign) — {@code VerificationOutreachService.share}.
+     *
+     * <p>No SMS, same reason as {@link #BUREAU_QUESTION_PENDING}: every registered borrower SMS body
+     * is operator-locked to the static {@code https://dhanboost.com/login}, so an SMS physically
+     * cannot carry this per-customer deep link. IN_APP + EMAIL only until a template with a variable
+     * URL slot is registered.
+     */
+    VERIFICATION_STEP_LINK(KYC, Set.of(IN_APP, EMAIL), Set.of(TO_BORROWER)),
+
+    // ---- CREDIT ----
+    LOAN_APPLIED(CREDIT, Set.of(IN_APP), Set.of(TO_CREDIT_HEADS)),
+    CREDIT_ASSIGNED(CREDIT, Set.of(IN_APP), Set.of(TO_ASSIGNED_EXECUTIVE)),
+    CREDIT_RECOMMENDED(CREDIT, Set.of(IN_APP), Set.of(TO_CREDIT_HEADS)),
+    // HEAD_APPROVE is off the live path since V45 (the credit maker-checker was retired) — this type
+    // now only fires on a replayed historical event. TO_ADMINS added for audit-replay parity with the
+    // live DISBURSEMENT_PENDING notification below (LOAN_APPLIED_FAST_TRACK).
+    CREDIT_APPROVED(CREDIT, Set.of(IN_APP, EMAIL), Set.of(TO_BORROWER, TO_DISBURSEMENT_HEADS, TO_ADMINS)),
+    CREDIT_REJECTED(CREDIT, Set.of(IN_APP, SMS, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    /** The Credit Executive's final sanction (V45) — the borrower's offer is ready to accept. */
+    LOAN_SANCTIONED(CREDIT, Set.of(IN_APP, SMS, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    // An ADMIN corrected the sanctioned amount post-approval. Deliberately no SMS — a new DLT
+    // template would be needed and every DHANBOOST_*_V1 registration is still pending operator
+    // approval, so an SMS leg would silently fail (same rationale as SANCTION_LETTER_SIGNED).
+    SANCTIONED_AMOUNT_REVISED(CREDIT, Set.of(IN_APP, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    // An ADMIN raised the borrower's eligible limit — the ceiling on what they may be advanced
+    // (V69). Increases only; a cleared/reduced limit is never pushed. No SMS for the same reason as
+    // SANCTIONED_AMOUNT_REVISED above: every DHANBOOST_*_V1 DLT registration is still pending.
+    LOAN_LIMIT_REVISED(CREDIT, Set.of(IN_APP, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+
+    // ---- DISBURSEMENT ----
+    // Every route into DISBURSEMENT_PENDING (fast-track reborrow, offer acceptance, and a retry after
+    // a failed transfer) — fires this one type for both the borrower and the disbursement desk +
+    // admin, so the copy must read generically enough for all three audiences and all three triggers.
+    LOAN_APPLIED_FAST_TRACK(DISBURSEMENT, Set.of(IN_APP, EMAIL),
+            Set.of(TO_DISBURSEMENT_HEADS, TO_ADMINS, TO_BORROWER)),
+    /** @deprecated The accountant disbursement hop was retired in V48; historical rows only. */
+    @Deprecated
+    DISBURSEMENT_PENDING_ACCOUNTANT(DISBURSEMENT, Set.of(IN_APP), Set.of(TO_ACCOUNTANTS)),
+    DISBURSEMENT_FAILED(DISBURSEMENT, Set.of(IN_APP), Set.of(TO_DISBURSEMENT_HEADS)),
+    DISBURSEMENT_REJECTED(DISBURSEMENT, Set.of(IN_APP, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    LOAN_DISBURSED(DISBURSEMENT, Set.of(IN_APP, SMS, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    // The signed sanction letter, emailed as an attachment (IN_APP + EMAIL only — no SMS, so no new
+    // DLT registration is needed for this one).
+    SANCTION_LETTER_SIGNED(DISBURSEMENT, Set.of(IN_APP, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+
+    // ---- REPAYMENT ----
+    REPAYMENT_RECORDED(REPAYMENT, Set.of(IN_APP, WHATSAPP), Set.of(TO_ACCOUNTANTS, TO_BORROWER)),
+    REPAYMENT_VERIFIED(REPAYMENT, Set.of(IN_APP, SMS, WHATSAPP), Set.of(TO_BORROWER)),
+    // EMAIL added so the rejection reason (SMS body is DLT-locked, can't carry it) reaches the
+    // borrower somewhere other than the in-app inbox.
+    REPAYMENT_REJECTED(REPAYMENT, Set.of(IN_APP, SMS, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    // Time-driven reminders from the daily PaymentReminderScheduler.
+    PAYMENT_DUE_SOON(REPAYMENT, Set.of(IN_APP, SMS, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    PAYMENT_OVERDUE(REPAYMENT, Set.of(IN_APP, SMS, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+    LOAN_CLOSED(REPAYMENT, Set.of(IN_APP, SMS, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+
+    // ---- COLLECTIONS ----
+    COLLECTION_CASE_OPENED(COLLECTIONS, Set.of(IN_APP), Set.of(TO_COLLECTION_HEADS, TO_COLLECTION_EXECUTIVES)),
+    SETTLEMENT_PROPOSED(COLLECTIONS, Set.of(IN_APP), Set.of(TO_COLLECTION_HEADS)),
+    SETTLEMENT_APPROVED(COLLECTIONS, Set.of(IN_APP, SMS, WHATSAPP), Set.of(TO_BORROWER)),
+    SETTLEMENT_REJECTED(COLLECTIONS, Set.of(IN_APP), Set.of(TO_STAFF_SUBJECT)),
+    // A collections payment awaits its checker (V47): the Collection Head for a settlement, the
+    // Accountant for everything else. Two types, because they are two different desks.
+    COLLECTION_PAYMENT_TO_APPROVE(COLLECTIONS, Set.of(IN_APP), Set.of(TO_COLLECTION_HEADS)),
+    COLLECTION_PAYMENT_TO_VALIDATE(COLLECTIONS, Set.of(IN_APP), Set.of(TO_ACCOUNTANTS)),
+    // The Accountant decided — back to the officer who took the payment AND the Head who owns the
+    // case (decision 44), so a rejection can't sit unseen in one person's inbox.
+    COLLECTION_PAYMENT_VALIDATED(COLLECTIONS, Set.of(IN_APP), Set.of(TO_STAFF_SUBJECT, TO_COLLECTION_HEADS)),
+    COLLECTION_PAYMENT_REJECTED(COLLECTIONS, Set.of(IN_APP), Set.of(TO_STAFF_SUBJECT, TO_COLLECTION_HEADS)),
+
+    // ---- EXTENSION (PLAN Phase 6b) ----
+    // An officer offered an extension: the Heads approve it.
+    EXTENSION_TO_APPROVE(EXTENSION, Set.of(IN_APP), Set.of(TO_COLLECTION_HEADS)),
+    // The Head approved it: the borrower is told it is on offer. PUSH (Phase 8) while push-fcm is on; SMS once the
+    // DLT template DN_EXT_OFFER is approved.
+    EXTENSION_OFFERED(EXTENSION, Set.of(IN_APP, EMAIL, PUSH), Set.of(TO_BORROWER)),
+    // The Accountant verified the payment and the due date moved. SMS delivers once its DLT template is approved.
+    EXTENSION_ACTIVATED(EXTENSION, Set.of(IN_APP, EMAIL, SMS, PUSH), Set.of(TO_BORROWER)),
+    // The offer lapsed, or the borrower declined: the officer on the case is told.
+    EXTENSION_EXPIRED(EXTENSION, Set.of(IN_APP), Set.of(TO_ASSIGNED_EXECUTIVE)),
+    EXTENSION_DECLINED(EXTENSION, Set.of(IN_APP), Set.of(TO_ASSIGNED_EXECUTIVE)),
+
+    // ---- COMPLAINTS (PLAN Phase 7) ----
+    // The borrower's acknowledgement: ticket number, the reply-by date and the grievance officer (from config).
+    COMPLAINT_RECEIVED(SYSTEM, Set.of(IN_APP, EMAIL), Set.of(TO_BORROWER)),
+    COMPLAINT_RESOLVED(SYSTEM, Set.of(IN_APP, EMAIL), Set.of(TO_BORROWER)),
+    // An SLA milestone passed unmet: the assignee (if any) and the ADMINs.
+    COMPLAINT_SLA_BREACHED(SYSTEM, Set.of(IN_APP, EMAIL), Set.of(TO_STAFF_SUBJECT, TO_ADMINS)),
+
+    // ---- SYSTEM ----
+    APPLICATION_CANCELLED(SYSTEM, Set.of(IN_APP, WHATSAPP), Set.of(TO_BORROWER)),
+
+    /**
+     * A prepaid verification provider is at zero balance — every call to it fails until it is topped
+     * up. EMAIL as well as IN_APP because the fix is an operator's, not a queue's: production sat at
+     * zero for 11.5 hours in Aug 2026 with nothing but an unread log line to show for it.
+     */
+    PROVIDER_BALANCE_EXHAUSTED(SYSTEM, Set.of(IN_APP, EMAIL), Set.of(TO_ADMINS)),
+    /**
+     * One provider capability has not succeeded once in 24 hours. Aadhaar eSign was in this state for
+     * four weeks — 156 attempts, 0 successes — and raised nothing, because every failure was caught
+     * and quietly degraded into the drawn-signature fallback.
+     */
+    PROVIDER_CAPABILITY_DOWN(SYSTEM, Set.of(IN_APP, EMAIL), Set.of(TO_ADMINS)),
+
+    /**
+     * A borrower's bank cannot do an API eMandate, so their file is parked mid-journey. The borrower is
+     * told we will be in touch, so someone has to actually be told: the Disbursement Heads, who finish the
+     * mandate out of band and then override the gate.
+     */
+    MANDATE_BANK_UNSUPPORTED(SYSTEM, Set.of(IN_APP), Set.of(TO_DISBURSEMENT_HEADS)),
+
+    /**
+     * Staff invited a customer to set up auto-repayment outside the offer journey (their loan is
+     * already live, so they never saw the mandate step). All four channels on purpose — the whole
+     * point is to reach someone who is not currently in the app.
+     *
+     * <p>SMS and WhatsApp will NOT deliver until an operator approves the DLT template and the Meta
+     * template {@code db_mandate_invite}; the dispatcher logs the failure per channel and the other
+     * channels still go, which is why nothing here depends on a send succeeding (CLAUDE.md section 12).
+     */
+    MANDATE_SETUP_INVITE(SYSTEM, Set.of(IN_APP, SMS, EMAIL, WHATSAPP), Set.of(TO_BORROWER)),
+
+    /**
+     * Staff cancelled the borrower's ACTIVE eMandate (their request, or to replace it). In-app + email
+     * only: SMS and WhatsApp need a DLT / Meta template approved first, and this is not urgent enough to
+     * send unapproved wording that would just fail.
+     */
+    MANDATE_CANCELLED(SYSTEM, Set.of(IN_APP, EMAIL), Set.of(TO_BORROWER)),
+
+    // ---- REFERRAL ----
+    // A referral qualified (referred borrower's first loan disbursed) — alert the Disbursement Heads
+    // who settle the two pending ₹-reward payouts.
+    REFERRAL_PAYOUT_PENDING(SYSTEM, Set.of(IN_APP), Set.of(TO_DISBURSEMENT_HEADS)),
+    // The Disbursement Head paid a reward — tell the beneficiary their reward is credited.
+    REFERRAL_REWARD_CREDITED(SYSTEM, Set.of(IN_APP, SMS, WHATSAPP), Set.of(TO_BORROWER)),
+
+    // ---- STAFF / IAM (the subject themselves) ----
+    STAFF_INVITED(STAFF_IAM, Set.of(EMAIL), Set.of(TO_STAFF_SUBJECT)),
+    STAFF_CREATED(STAFF_IAM, Set.of(EMAIL), Set.of(TO_STAFF_SUBJECT)),
+    STAFF_ROLE_CHANGED(STAFF_IAM, Set.of(IN_APP, EMAIL), Set.of(TO_STAFF_SUBJECT)),
+    STAFF_DISABLED(STAFF_IAM, Set.of(EMAIL), Set.of(TO_STAFF_SUBJECT));
+
+    private final NotificationCategory category;
+    private final Set<NotificationChannel> channels;
+    private final Set<RecipientPolicy> audience;
+
+    NotificationType(NotificationCategory category, Set<NotificationChannel> channels,
+                     Set<RecipientPolicy> audience) {
+        this.category = category;
+        this.channels = channels;
+        this.audience = audience;
+    }
+
+    public NotificationCategory category() {
+        return category;
+    }
+
+    public Set<NotificationChannel> channels() {
+        return channels;
+    }
+
+    public Set<RecipientPolicy> audience() {
+        return audience;
+    }
+}

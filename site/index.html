@@ -24,6 +24,7 @@
   --shadow:0 1px 2px rgba(17,19,24,.04),0 4px 14px -6px rgba(17,19,24,.08),inset 0 1px 0 rgba(255,255,255,.9);
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html{scroll-behavior:smooth;scroll-padding-top:80px;-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--page);color:var(--ink);font:16px/1.6 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 h1,h2{font-family:"Bebas Neue",Inter,sans-serif;font-weight:400;margin:0;letter-spacing:.6px;line-height:.95}
@@ -177,7 +178,7 @@ footer li a:hover{color:var(--cobalt-dark);text-decoration:underline}
 </head>
 <body>
 
-<div class="bar">Our website is still being built. For now, apply in the DhanNow Android app. <a href="#app">Get the app</a></div>
+<div class="bar">Our website is still being built. For now, apply in the DhanNow Android app. <a href="download.html">Get the app</a></div>
 
 <header>
   <div class="wrap">
@@ -188,7 +189,7 @@ footer li a:hover{color:var(--cobalt-dark);text-decoration:underline}
       <a href="#safety">Safety</a>
       <a href="#help">Help</a>
     </nav>
-    <a class="btn" href="#app">Get the app</a>
+    <a class="btn" href="download.html">Get the app</a>
   </div>
 </header>
 
@@ -226,7 +227,7 @@ footer li a:hover{color:var(--cobalt-dark);text-decoration:underline}
   <p class="fine small soft">This is an estimate. Your actual offer, APR and due date are in your <a href="kfs.html">Key Facts Statement</a>, which you’ll see before you accept. First loans start at ₹1,000.</p>
 
   <div class="facts">
-    <div><h3>A registered Indian company</h3><p class="soft">DhanNow is run by NAVIX Finance Private Limited, CIN U64990HR2026PTC144926. You can look us up on the MCA website.</p></div>
+    <div><h3>A registered Indian company</h3><p class="soft">DhanNow is run by <span data-brand="company.legalName">NAVIX Finance Private Limited</span>, CIN <span data-brand="company.cin">U64990HR2026PTC144926</span>. You can look us up on the MCA website.</p></div>
     <div><h3>Nothing to pay upfront</h3><p class="soft">Charges come out of the loan itself. If anyone asks you to pay first, it isn’t us.</p></div>
     <div><h3>You know what the app reads</h3><p class="soft">The app asks your permission before it reads your contacts, SMS and call logs. <a href="#permissions">See what we use and why</a>.</p></div>
   </div>
@@ -307,7 +308,7 @@ footer li a:hover{color:var(--cobalt-dark);text-decoration:underline}
   <div class="wrap">
     <div class="never">
       <h3>We will never ask for your OTP, PIN or any payment before your loan</h3>
-      <p class="soft" style="max-width:70ch">We also never send the app over WhatsApp, Telegram or SMS. If someone does, please tell us at <a href="mailto:support@dhannow.com">support@dhannow.com</a> or report it on the cyber-crime helpline, <a href="tel:1930">1930</a>.</p>
+      <p class="soft" style="max-width:70ch">We also never send the app over WhatsApp, Telegram or SMS. If someone does, please tell us at <a data-brand="support.email" data-brand-href="support.email" href="mailto:support@dhannow.com">support@dhannow.com</a> or report it on the cyber-crime helpline, <a href="tel:1930">1930</a>.</p>
     </div>
   </div>
 </section>
@@ -318,11 +319,11 @@ footer li a:hover{color:var(--cobalt-dark);text-decoration:underline}
       <h2>Who you’re dealing with</h2>
     </div>
     <div>
-      <p>DhanNow is the app and website you use. It’s run by NAVIX Finance Private Limited.</p>
+      <p>DhanNow is the app and website you use. It’s run by <span data-brand="company.legalName">NAVIX Finance Private Limited</span>.</p>
       <dl>
-        <dt>Company</dt><dd>NAVIX Finance Private Limited</dd>
-        <dt>CIN</dt><dd>U64990HR2026PTC144926</dd>
-        <dt>Office</dt><dd>Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001</dd>
+        <dt>Company</dt><dd data-brand="company.legalName">NAVIX Finance Private Limited</dd>
+        <dt>CIN</dt><dd data-brand="company.cin">U64990HR2026PTC144926</dd>
+        <dt>Office</dt><dd data-brand="company.registeredOffice">Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001</dd>
       </dl>
       <div class="check">
         <p>Don’t take our word for it. You can check:</p>
@@ -338,19 +339,20 @@ footer li a:hover{color:var(--cobalt-dark);text-decoration:underline}
     <div class="app">
       <div>
         <h2>Get the DhanNow app</h2>
-        <p style="margin-top:20px;max-width:42ch">We’re still building the website, so there’s no login here yet. Everything from applying to repaying happens in the Android app. A Play Store listing is on the way.</p>
-        <a class="btn" id="apk-link" href="#app" download>Download for Android</a>
+        <p style="margin-top:20px;max-width:42ch">We’re still building the website, so there’s no login here yet. Everything from applying to repaying happens in the Android app.<span data-dist="apk"> A Play Store listing is on the way.</span></p>
+        <a class="btn" href="download.html" data-dist="apk">Download for Android</a>
+        <a href="https://play.google.com/store/apps/details?id=com.dhannow.app" data-brand-href="app.playUrl" data-dist="play" hidden><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get it on Google Play" style="height:72px;margin-left:-12px"></a>
       </div>
       <div>
-        <dl>
-          <dt>Version</dt><dd id="apk-ver"></dd>
-          <dt>Size</dt><dd id="apk-size"></dd>
-          <dt>Package</dt><dd id="apk-pkg"></dd>
-          <dt>SHA-256</dt><dd id="apk-sha" class="small"></dd>
+        <dl data-dist="apk">
+          <dt>Version</dt><dd data-brand="app.apk.version">[VERSION]</dd>
+          <dt>Size</dt><dd><span data-brand="app.apk.sizeMb">[SIZE]</span> MB</dd>
+          <dt>Package</dt><dd data-brand="app.package">com.dhannow.app</dd>
+          <dt>SHA-256</dt><dd class="small" data-brand="app.apk.sha256">[SHA-256 OF SIGNED APK]</dd>
         </dl>
         <ul>
-          <li>Download it only from dhannow.com.</li>
-          <li>Check that the SHA-256 above matches your file.</li>
+          <li>Download it only from dhannow.com<span data-dist="play" hidden> or Google Play</span>.</li>
+          <li data-dist="apk">Check that the SHA-256 above matches your file.</li>
           <li>The app will ask permission to read contacts, SMS and call logs. <a href="#permissions">Here’s why</a>.</li>
         </ul>
       </div>
@@ -362,10 +364,10 @@ footer li a:hover{color:var(--cobalt-dark);text-decoration:underline}
   <div class="wrap">
     <h2 class="h2">Talk to a person</h2>
     <div class="help">
-      <div><p class="soft small">Call or WhatsApp</p><a href="tel:+919211331169">92113 31169</a></div>
-      <div><p class="soft small">Email</p><a href="mailto:support@dhannow.com">support@dhannow.com</a></div>
-      <div><p class="soft small">General questions</p><a href="mailto:info@dhannow.com">info@dhannow.com</a></div>
-      <div><p class="soft small">Grievance Officer, Dharmendra Rajput</p><a href="tel:+919211331170">92113 31170</a><br><a href="mailto:grievance@dhannow.com" style="font-size:16px">grievance@dhannow.com</a><br><a href="grievance.html" style="font-size:15px;font-weight:500">How we handle complaints</a></div>
+      <div><p class="soft small">Call or WhatsApp</p><a data-brand="support.phone" data-brand-href="support.phone" href="tel:+919211331169">92113 31169</a></div>
+      <div><p class="soft small">Email</p><a data-brand="support.email" data-brand-href="support.email" href="mailto:support@dhannow.com">support@dhannow.com</a></div>
+      <div><p class="soft small">General questions</p><a data-brand="generalEmail" data-brand-href="generalEmail" href="mailto:info@dhannow.com">info@dhannow.com</a></div>
+      <div><p class="soft small">Grievance Officer, <span data-brand="grievance.name">Dharmendra Rajput</span></p><a data-brand="grievance.phone" data-brand-href="grievance.phone" href="tel:+919211331170">92113 31170</a><br><a data-brand="grievance.email" data-brand-href="grievance.email" href="mailto:grievance@dhannow.com" style="font-size:16px">grievance@dhannow.com</a><br><a href="grievance.html" style="font-size:15px;font-weight:500">How we handle complaints</a></div>
     </div>
   </div>
 </section>
@@ -390,7 +392,7 @@ footer li a:hover{color:var(--cobalt-dark);text-decoration:underline}
     <div class="fgrid">
       <div>
         <img src="logo.jpeg" alt="DhanNow" style="height:60px">
-        <p class="soft" style="margin-top:16px">92113 31169<br>support@dhannow.com</p>
+        <p class="soft" style="margin-top:16px"><span data-brand="support.phone">92113 31169</span><br><span data-brand="support.email">support@dhannow.com</span></p>
       </div>
       <div><h4>DhanNow</h4><ul>
         <li><a href="#top">Home</a></li><li><a href="about.html">About us</a></li><li><a href="loan-information.html">Loan information</a></li><li><a href="how-it-works.html">How it works</a></li><li><a href="eligibility.html">Loan eligibility</a></li><li><a href="#calculator">Loan calculator</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact us</a></li>
@@ -403,18 +405,15 @@ footer li a:hover{color:var(--cobalt-dark);text-decoration:underline}
       </ul></div>
     </div>
     <div class="legal">
-      <p>DhanNow is the customer brand of NAVIX Finance Private Limited (CIN U64990HR2026PTC144926), Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001, India.</p>
+      <p>DhanNow is the customer brand of <span data-brand="company.legalName">NAVIX Finance Private Limited</span> (CIN <span data-brand="company.cin">U64990HR2026PTC144926</span>), <span data-brand="company.registeredOffice">Plot No. 268, 1st Floor, Sector 33, Islampur, Subhash Chowk, Gurugram, Haryana 122001</span>, India.</p>
       <p>Approval and amount depend on eligibility, verification and our assessment. The calculator is an estimate; your Key Facts Statement and loan agreement govern your loan.</p>
-      <p>© <span id="yr">2026</span> NAVIX Finance Private Limited</p>
+      <p>© <span id="yr">2026</span> <span data-brand="company.legalName">NAVIX Finance Private Limited</span></p>
     </div>
   </div>
 </footer>
 
 <script src="calc.js"></script>
 <script>
-// Fill these before go-live. Until url is set, the download button stays on this section.
-var APK = { url: '[APK_URL]', version: '[VERSION]', pkg: '[com.dhannow.app]', size: '[SIZE] MB', sha256: '[SHA-256 OF SIGNED APK]' };
-
 (function () {
   var inr = function (n) { return '₹' + n.toLocaleString('en-IN'); };
   var $ = function (id) { return document.getElementById(id); };
@@ -441,11 +440,6 @@ var APK = { url: '[APK_URL]', version: '[VERSION]', pkg: '[com.dhannow.app]', si
   date.addEventListener('input', render);
   render();
 
-  if (APK.url.charAt(0) !== '[') $('apk-link').href = APK.url;
-  $('apk-ver').textContent = APK.version;
-  $('apk-pkg').textContent = APK.pkg;
-  $('apk-size').textContent = APK.size;
-  $('apk-sha').textContent = APK.sha256;
   $('yr').textContent = t.getFullYear();
 })();
 </script>

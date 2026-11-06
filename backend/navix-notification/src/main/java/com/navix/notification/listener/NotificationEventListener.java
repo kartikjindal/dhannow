@@ -1,0 +1,613 @@
+package com.navix.notification.listener;
+
+import com.navix.common.notification.ContactInfo;
+import com.navix.common.notification.RecipientType;
+import com.navix.common.notification.event.ApplicationTransitionedEvent;
+import com.navix.common.notification.event.CollectionCaseOpenedEvent;
+import com.navix.common.notification.event.CollectionPaymentDecidedEvent;
+import com.navix.common.notification.event.CollectionPaymentRaisedEvent;
+import com.navix.common.notification.event.BureauQuestionPendingEvent;
+import com.navix.common.notification.event.VerificationStepLinkEvent;
+import com.navix.common.notification.event.KycReminderEvent;
+import com.navix.common.notification.event.WaitlistSubmittedEvent;
+import com.navix.common.notification.event.MandateBankUnsupportedEvent;
+import com.navix.common.notification.event.MandateCancelledEvent;
+import com.navix.common.notification.event.MandateInviteEvent;
+import com.navix.common.notification.event.PaymentReminderEvent;
+import com.navix.common.notification.event.ProviderHealthEvent;
+import com.navix.common.notification.event.ReferralPayoutCreatedEvent;
+import com.navix.common.notification.event.ReferralRewardCreditedEvent;
+import com.navix.common.notification.event.RepaymentRecordedEvent;
+import com.navix.common.notification.event.RepaymentRejectedEvent;
+import com.navix.common.notification.event.RepaymentVerifiedEvent;
+import com.navix.common.notification.event.SanctionLetterSignedEvent;
+import com.navix.common.notification.event.LoanLimitRevisedEvent;
+import com.navix.common.notification.event.SanctionedAmountRevisedEvent;
+import com.navix.common.notification.event.SettlementApprovedEvent;
+import com.navix.common.notification.event.SettlementProposedEvent;
+import com.navix.common.notification.event.SettlementRejectedEvent;
+import com.navix.common.notification.event.StaffAccountEvent;
+import com.navix.common.storage.DocumentStoragePort;
+import com.navix.notification.catalog.NotificationType;
+import com.navix.notification.dispatch.NotificationContext;
+import com.navix.notification.dispatch.NotificationDispatcher;
+import com.navix.notification.email.EmailAttachment;
+import com.navix.notification.template.NotificationFormat;
+import java.time.ZoneId;
+import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
+
+/**
+ * Bridges domain events to the {@link NotificationDispatcher}. Every handler runs <b>after the
+ * business transaction commits</b> ({@code AFTER_COMMIT}) and <b>off the request thread</b>
+ * ({@code @Async}) so notifications never block, fail, or roll back business work. The async thread
+ * has no {@code ActorContext} and no transaction — all data comes from the (inline) event.
+ */
+@Component
+public class NotificationEventListener {
+
+    private static final Logger log = LoggerFactory.getLogger(NotificationEventListener.class);
+
+    private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
+
+    private final NotificationDispatcher dispatcher;
+    /** Base URL the staff-invite activation link is built from (same property as the reset links). */
+    private final String frontendBaseUrl;
+    /** Fetches the signed sanction-letter PDF bytes for the SANCTION_LETTER_SIGNED email attachment. */
+    private final DocumentStoragePort storage;
+
+    public NotificationEventListener(NotificationDispatcher dispatcher,
+            @Value("${navix.app.frontend-base-url:http://localhost:3000}") String frontendBaseUrl,
+            DocumentStoragePort storage) {
+        this.dispatcher = dispatcher;
+        this.frontendBaseUrl = frontendBaseUrl.endsWith("/")
+                ? frontendBaseUrl.substring(0, frontendBaseUrl.length() - 1) : frontendBaseUrl;
+        this.storage = storage;
+    }
+
+    /**
+     * The application state-machine: one event per transition, mapped by {@code action} (§5). Disbursal and closure
+     * go through the outbox instead ({@link OutboxNotifications}, PLAN Phase 9), so they are retried.
+     */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onApplicationTransitioned(ApplicationTransitionedEvent e) {
+        if (!OutboxNotifications.viaOutbox(e)) {
+            notifyTransition(e);
+        }
+    }
+
+    /** Dispatch the notification for one transition (also the outbox's handler for disbursal and closure). */
+    public void notifyTransition(ApplicationTransitionedEvent e) {
+        NotificationType type = mapAction(e);
+        if (type == null) {
+            return; // CREATE / AUTO_ROUTE / VALIDATE_SUCCESS are deliberate no-ops
+        }
+        dispatcher.dispatch(type, NotificationContext.builder()
+                .customerId(e.customerId())
+                .applicationId(e.applicationId())
+                .loanId(e.loanId())
+                .assignedExecutiveId(e.assignedExecutiveId())
+                .actorId(e.actorId())
+                .actorRole(e.actorRole())
+                .put("retryLine", retryLine(e))
+                .build());
+    }
+
+    /**
+     * The "you can apply again on …" sentence for a rejection that set a cooling-off block, ready to
+     * drop straight into a template — or an empty string when this transition set no block.
+     *
+     * <p>The DATE only: never the rule that fired and never the window's length, because 30 days
+     * (a reviewer's call) and 90 (an engine rule) would tell the borrower which one turned them
+     * away — the very thing decision 31 keeps from them. Empty rather than null: an absent model key
+     * renders as an em dash.
+     */
+    private static String retryLine(ApplicationTransitionedEvent e) {
+        if (e.retryFrom() == null) {
+            return "";
+        }
+        return " You can apply again on or after "
+                + NotificationFormat.date(e.retryFrom().atZone(IST).toLocalDate()) + ".";
+    }
+
+    /** Waitlist mode (V76): acknowledge the form a paused borrower just submitted. */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onWaitlistSubmitted(WaitlistSubmittedEvent e) {
+        dispatcher.dispatch(NotificationType.WAITLIST_RECEIVED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .build());
+    }
+
+    /** Staff-triggered nudge to a borrower with outstanding verification steps (Phase 3.4). */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onKycReminder(KycReminderEvent e) {
+        dispatcher.dispatch(NotificationType.KYC_REMINDER, NotificationContext.builder()
+                .customerId(e.customerId())
+                .applicationId(e.applicationId())
+                .put("pendingSteps", e.pendingSteps())
+                .build());
+    }
+
+    /**
+     * Opens the app (PLAN Phase 10a: no borrower web), which routes to the question from the journey
+     * ({@code bureauChallengePending}).
+     */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onBureauQuestionPending(BureauQuestionPendingEvent e) {
+        dispatcher.dispatch(NotificationType.BUREAU_QUESTION_PENDING, NotificationContext.builder()
+                .customerId(e.customerId())
+                .applicationId(e.applicationId())
+                .put("questionLink", com.navix.common.util.AppLinks.open(frontendBaseUrl, null))
+                .build());
+    }
+
+    /**
+     * The credit team's "send a resume link" nudge for a failed/abandoned Phase-3 step
+     * ({@code VerificationOutreachService.share}, EMAIL channel). {@code route} is the bare offer-step
+     * path (e.g. {@code /loan/selfie}); the link opens the app, which resumes the journey at that step
+     * (PLAN Phase 10a), the same as {@link #onBureauQuestionPending}.
+     */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onVerificationStepLink(VerificationStepLinkEvent e) {
+        String stepLink = com.navix.common.util.AppLinks.open(frontendBaseUrl, null);
+        dispatcher.dispatch(NotificationType.VERIFICATION_STEP_LINK, NotificationContext.builder()
+                .customerId(e.customerId())
+                .applicationId(e.applicationId())
+                .put("stepLabel", e.stepLabel())
+                .put("stepLink", stepLink)
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onRepaymentRecorded(RepaymentRecordedEvent e) {
+        dispatcher.dispatch(NotificationType.REPAYMENT_RECORDED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .loanId(e.loanId())
+                .put("amount", NotificationFormat.inr(e.amountPaise()))
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onRepaymentVerified(RepaymentVerifiedEvent e) {
+        if (e.closedTheLoan()) {
+            return; // LOAN_CLOSED (the REPAID transition) covers the closing payment
+        }
+        dispatcher.dispatch(NotificationType.REPAYMENT_VERIFIED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .loanId(e.loanId())
+                .put("amount", NotificationFormat.inr(e.amountPaise()))
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onRepaymentRejected(RepaymentRejectedEvent e) {
+        dispatcher.dispatch(NotificationType.REPAYMENT_REJECTED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .loanId(e.loanId())
+                .put("amount", NotificationFormat.inr(e.amountPaise()))
+                .put("reason", humanizeRejectionReason(e.reason(), e.note()))
+                .build());
+    }
+
+    /** The fixed rejection-reason codes, worded for a borrower-facing IN_APP/EMAIL body. */
+    private static String humanizeRejectionReason(String reason, String note) {
+        String base = switch (reason == null ? "" : reason) {
+            case "WRONG_REFERENCE" -> "the reference number didn't match our records";
+            case "AMOUNT_MISMATCH" -> "the amount didn't match what was recorded";
+            case "NOT_RECEIVED" -> "we haven't received this payment yet";
+            case "UNREADABLE_PROOF" -> "the proof you shared wasn't readable";
+            case "OTHER" -> "it couldn't be matched to a transfer";
+            default -> "it couldn't be verified";
+        };
+        return note != null && !note.isBlank() ? base + " (" + note + ")" : base;
+    }
+
+    /**
+     * The signed sanction letter, emailed as an attachment. If the PDF can't be fetched from storage
+     * (transient S3 issue, missing key), the email still goes out — just without the attachment;
+     * notifications must never block or fail business logic (CLAUDE.md §12).
+     */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onSanctionLetterSigned(SanctionLetterSignedEvent e) {
+        List<EmailAttachment> attachments = List.of();
+        if (e.s3ObjectKey() != null && !e.s3ObjectKey().isBlank()) {
+            try {
+                byte[] bytes = storage.fetch(e.s3ObjectKey());
+                attachments = List.of(new EmailAttachment(
+                        "sanction-letter-signed.pdf", "application/pdf", bytes));
+            } catch (RuntimeException ex) {
+                log.warn("Could not fetch signed sanction letter {} for application {} (sending email "
+                        + "without the attachment): {}", e.s3ObjectKey(), e.applicationId(), ex.getMessage());
+            }
+        }
+        dispatcher.dispatch(NotificationType.SANCTION_LETTER_SIGNED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .applicationId(e.applicationId())
+                .attachments(attachments)
+                .build());
+    }
+
+    /** An ADMIN corrected the sanctioned amount — tell the borrower the revised figure. */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onSanctionedAmountRevised(SanctionedAmountRevisedEvent e) {
+        dispatcher.dispatch(NotificationType.SANCTIONED_AMOUNT_REVISED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .applicationId(e.applicationId())
+                .put("amount", NotificationFormat.inr(e.newAmountPaise()))
+                .put("previousAmount", NotificationFormat.inr(e.previousAmountPaise()))
+                .build());
+    }
+
+    /** An ADMIN raised the borrower's eligible limit — tell them what they can now borrow. */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onLoanLimitRevised(LoanLimitRevisedEvent e) {
+        dispatcher.dispatch(NotificationType.LOAN_LIMIT_REVISED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .put("limit", NotificationFormat.inr(e.newLimitPaise()))
+                .build());
+    }
+
+    /**
+     * Time-driven payment reminder (from the daily {@code PaymentReminderScheduler}). A plain
+     * {@code @Async @EventListener} — there is no business transaction to wait on, so the
+     * {@code AFTER_COMMIT} phase used elsewhere would never fire.
+     */
+    @Async("notificationExecutor")
+    @EventListener
+    public void onPaymentReminder(PaymentReminderEvent e) {
+        NotificationType type = e.overdue() ? NotificationType.PAYMENT_OVERDUE : NotificationType.PAYMENT_DUE_SOON;
+        dispatcher.dispatch(type, NotificationContext.builder()
+                .customerId(e.customerId())
+                .loanId(e.loanId())
+                .put("amount", NotificationFormat.inr(e.outstandingPaise()))
+                .put(e.overdue() ? "daysOverdue" : "daysToDue", e.days())
+                .build());
+    }
+
+    /**
+     * A verification provider needs an operator. Also a plain {@code @Async @EventListener}, and for a
+     * stronger reason than the reminder above: the balance alert is published from inside a provider
+     * call, whose surrounding transaction is very often the one that is about to roll back. An
+     * {@code AFTER_COMMIT} listener would therefore drop exactly the alerts worth having.
+     */
+    @Async("notificationExecutor")
+    @EventListener
+    public void onProviderHealth(ProviderHealthEvent e) {
+        NotificationType type = e.kind() == ProviderHealthEvent.Kind.BALANCE_EXHAUSTED
+                ? NotificationType.PROVIDER_BALANCE_EXHAUSTED
+                : NotificationType.PROVIDER_CAPABILITY_DOWN;
+        dispatcher.dispatch(type, NotificationContext.builder()
+                .put("provider", e.provider() == null ? "A provider" : e.provider())
+                .put("operation", e.operation() == null ? "" : e.operation())
+                .put("endpoint", e.endpoint() == null ? "" : e.endpoint())
+                .put("calls", e.calls())
+                .put("since", e.since() == null ? "" : e.since().toString())
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onCollectionCaseOpened(CollectionCaseOpenedEvent e) {
+        dispatcher.dispatch(NotificationType.COLLECTION_CASE_OPENED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .loanId(e.loanId())
+                .caseId(e.caseId())
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onSettlementProposed(SettlementProposedEvent e) {
+        dispatcher.dispatch(NotificationType.SETTLEMENT_PROPOSED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .loanId(e.loanId())
+                .caseId(e.caseId())
+                .put("settlementAmount", NotificationFormat.inr(e.amountPaise()))
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onSettlementApproved(SettlementApprovedEvent e) {
+        dispatcher.dispatch(NotificationType.SETTLEMENT_APPROVED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .loanId(e.loanId())
+                .caseId(e.caseId())
+                .put("settlementAmount", NotificationFormat.inr(e.amountPaise()))
+                .build());
+    }
+
+    /** A proposed settlement was rejected — notify the proposer (a specific staff member). */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onSettlementRejected(SettlementRejectedEvent e) {
+        dispatcher.dispatch(NotificationType.SETTLEMENT_REJECTED, NotificationContext.builder()
+                .staffSubjectId(e.proposedBy())
+                .loanId(e.loanId())
+                .caseId(e.caseId())
+                .put("settlementAmount", NotificationFormat.inr(e.amountPaise()))
+                .build());
+    }
+
+    /**
+     * A collections payment was recorded (or the Head released a settlement one) — nudge whichever
+     * desk it is now waiting on (V47; revamp.md decision 43).
+     */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onCollectionPaymentRaised(CollectionPaymentRaisedEvent e) {
+        dispatcher.dispatch(
+                e.awaitingHead()
+                        ? NotificationType.COLLECTION_PAYMENT_TO_APPROVE
+                        : NotificationType.COLLECTION_PAYMENT_TO_VALIDATE,
+                NotificationContext.builder()
+                        .customerId(e.customerId())
+                        .loanId(e.loanId())
+                        .caseId(e.caseId())
+                        .put("paymentAmount", NotificationFormat.inr(e.amountPaise()))
+                        .put("paymentKind", e.kind().toLowerCase().replace('_', ' '))
+                        .build());
+    }
+
+    /**
+     * The Accountant validated or rejected a collections payment — tell the officer who took it
+     * (the staff subject) and the Collection Head who owns the case (decision 44).
+     */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onCollectionPaymentDecided(CollectionPaymentDecidedEvent e) {
+        dispatcher.dispatch(
+                e.validated()
+                        ? NotificationType.COLLECTION_PAYMENT_VALIDATED
+                        : NotificationType.COLLECTION_PAYMENT_REJECTED,
+                NotificationContext.builder()
+                        .staffSubjectId(e.raisedBy())
+                        .customerId(e.customerId())
+                        .loanId(e.loanId())
+                        .caseId(e.caseId())
+                        .put("paymentAmount", NotificationFormat.inr(e.amountPaise()))
+                        .put("remarks", e.remarks() != null ? e.remarks() : "no reason given")
+                        .build());
+    }
+
+    // ---- loan extension (PLAN Phase 6b) ----
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onExtensionOffered(com.navix.common.notification.event.ExtensionOfferedEvent e) {
+        dispatcher.dispatch(NotificationType.EXTENSION_TO_APPROVE, NotificationContext.builder()
+                .customerId(e.customerId()).loanId(e.loanId()).caseId(e.caseId())
+                .put("charge", NotificationFormat.inr(e.chargePaise()))
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onExtensionApproved(com.navix.common.notification.event.ExtensionApprovedEvent e) {
+        dispatcher.dispatch(NotificationType.EXTENSION_OFFERED, NotificationContext.builder()
+                .customerId(e.customerId()).loanId(e.loanId()).caseId(e.caseId())
+                .put("charge", NotificationFormat.inr(e.chargePaise()))
+                .put("payBy", String.valueOf(e.payBy()))
+                .put("newDueDate", String.valueOf(e.newDueDate()))
+                .build());
+    }
+
+    /** Called by the outbox ({@link OutboxNotifications}): retried with backoff if it fails (EXT-22). */
+    public void onExtensionActivated(com.navix.common.notification.event.ExtensionActivatedEvent e) {
+        dispatcher.dispatch(NotificationType.EXTENSION_ACTIVATED, NotificationContext.builder()
+                .customerId(e.customerId()).loanId(e.loanId())
+                .put("paid", NotificationFormat.inr(e.paidPaise()))
+                .put("count", e.extensionCount())
+                .put("cap", e.cap())
+                .put("newDueDate", String.valueOf(e.newDueDate()))
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onExtensionExpired(com.navix.common.notification.event.ExtensionExpiredEvent e) {
+        dispatcher.dispatch(NotificationType.EXTENSION_EXPIRED, NotificationContext.builder()
+                .assignedExecutiveId(e.officerId()).loanId(e.loanId()).caseId(e.caseId())
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onExtensionDeclined(com.navix.common.notification.event.ExtensionDeclinedEvent e) {
+        dispatcher.dispatch(NotificationType.EXTENSION_DECLINED, NotificationContext.builder()
+                .assignedExecutiveId(e.officerId()).loanId(e.loanId()).caseId(e.caseId())
+                .put("reason", "DID_NOT_ASK".equals(e.reason()) ? "says they did not ask" : "not now")
+                .build());
+    }
+
+    // ---- complaints (PLAN Phase 7) ----
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onComplaintFiled(com.navix.common.notification.event.ComplaintFiledEvent e) {
+        dispatcher.dispatch(NotificationType.COMPLAINT_RECEIVED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .put("ticketNo", e.ticketNo())
+                .put("resolveBy", NotificationFormat.date(e.resolveDueAt().atZone(IST).toLocalDate()))
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onComplaintResolved(com.navix.common.notification.event.ComplaintResolvedEvent e) {
+        dispatcher.dispatch(NotificationType.COMPLAINT_RESOLVED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .put("ticketNo", e.ticketNo())
+                .put("resolution", e.resolutionNote())
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onComplaintSlaBreached(com.navix.common.notification.event.ComplaintSlaBreachedEvent e) {
+        dispatcher.dispatch(NotificationType.COMPLAINT_SLA_BREACHED, NotificationContext.builder()
+                .staffSubjectId(e.assignedTo())
+                .put("ticketNo", e.ticketNo())
+                .put("milestone", switch (e.milestone()) {
+                    case "ACK" -> "acknowledgement";
+                    case "REVIEW" -> "review";
+                    default -> "resolution";
+                })
+                .put("dueAt", NotificationFormat.date(e.dueAt().atZone(IST).toLocalDate()))
+                .build());
+    }
+
+    /**
+     * A borrower's bank cannot do an API eMandate — page the Disbursement Heads, who are the ones the
+     * borrower's "our team will be in touch" promises.
+     */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onMandateBankUnsupported(MandateBankUnsupportedEvent e) {
+        dispatcher.dispatch(NotificationType.MANDATE_BANK_UNSUPPORTED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .applicationId(e.applicationId())
+                .put("bankName", e.bankName() == null ? "The borrower's bank" : e.bankName())
+                .put("applicationId", String.valueOf(e.applicationId()))
+                .build());
+    }
+
+    /**
+     * Staff invited a customer to set up auto-repayment out of band. Goes on every channel we have,
+     * because the recipient is by definition not in the app right now.
+     */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onMandateInvite(MandateInviteEvent e) {
+        dispatcher.dispatch(NotificationType.MANDATE_SETUP_INVITE, NotificationContext.builder()
+                .customerId(e.customerId())
+                .applicationId(e.applicationId())
+                .put("name", e.name() == null || e.name().isBlank() ? "Customer" : e.name())
+                .put("link", e.link())
+                .build());
+    }
+
+    /** Staff cancelled the borrower's live mandate — tell them auto-repayment has stopped. */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onMandateCancelled(MandateCancelledEvent e) {
+        dispatcher.dispatch(NotificationType.MANDATE_CANCELLED, NotificationContext.builder()
+                .customerId(e.customerId())
+                .applicationId(e.applicationId())
+                .put("name", e.name() == null || e.name().isBlank() ? "Customer" : e.name())
+                .put("bankName", e.bankName() == null || e.bankName().isBlank() ? "your bank" : e.bankName())
+                .put("accountLast4", e.accountLast4() == null ? "----" : e.accountLast4())
+                .put("why", e.customerRequested()
+                        ? "This was done at your request."
+                        : "Our team may contact you to set up a new mandate.")
+                .build());
+    }
+
+    /** A referral qualified at disbursement — nudge the Disbursement Heads to settle the two payouts. */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onReferralPayoutCreated(ReferralPayoutCreatedEvent e) {
+        dispatcher.dispatch(NotificationType.REFERRAL_PAYOUT_PENDING, NotificationContext.builder()
+                .put("amount", NotificationFormat.inr(e.amountPaise()))
+                .build());
+    }
+
+    /** A reward payout was paid — tell the beneficiary their referral reward is credited. */
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onReferralRewardCredited(ReferralRewardCreditedEvent e) {
+        dispatcher.dispatch(NotificationType.REFERRAL_REWARD_CREDITED, NotificationContext.builder()
+                .customerId(e.beneficiaryCustomerId())
+                .put("amount", NotificationFormat.inr(e.amountPaise()))
+                .put("txnRef", e.txnRef())
+                .build());
+    }
+
+    @Async("notificationExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onStaffAccount(StaffAccountEvent e) {
+        NotificationType type = switch (e.changeType()) {
+            case INVITED -> NotificationType.STAFF_INVITED;
+            case CREATED -> NotificationType.STAFF_CREATED;
+            case ROLE_CHANGED -> NotificationType.STAFF_ROLE_CHANGED;
+            case DISABLED -> NotificationType.STAFF_DISABLED;
+        };
+        // The recipient is the subject themselves; an INVITED subject has no staff row yet, so we
+        // supply the contact explicitly (id 0 sentinel — these are email-only / not in any inbox).
+        Long subjectId = e.staffId() != null ? e.staffId() : 0L;
+        ContactInfo subject = new ContactInfo(RecipientType.STAFF, subjectId, e.name(), e.email(), null, e.role());
+        dispatcher.dispatch(type, NotificationContext.builder()
+                .staffSubjectId(subjectId)
+                .explicitStaffSubject(subject)
+                .put("inviteLink", e.inviteToken() == null ? null
+                        : frontendBaseUrl + "/staff/activate?token=" + e.inviteToken())
+                .build());
+    }
+
+    /** Map the transition {@code action} (+ {@code toStatus} for the REBORROW fork) to a type, or null. */
+    private static NotificationType mapAction(ApplicationTransitionedEvent e) {
+        // The engine's action carries the rule that fired ("AUTO_REJECT_LOW_BUREAU_SCORE"), so it can
+        // never match a case label — these fell through to `default` and notified nobody. It deliberately
+        // maps to the SAME reasonless notification a manual credit rejection sends: revamp.md decision 31,
+        // the borrower is never told which rule fired.
+        if (e.action() != null && e.action().startsWith("AUTO_REJECT_")) {
+            return NotificationType.CREDIT_REJECTED;
+        }
+        return switch (e.action()) {
+            case "SUBMIT_KYC" -> NotificationType.KYC_SUBMITTED;
+            case "KYC_APPROVE" -> NotificationType.KYC_APPROVED;
+            case "KYC_REJECT" -> NotificationType.KYC_REJECTED;
+            case "APPLY" -> NotificationType.LOAN_APPLIED;
+            case "APPLY_FAST_TRACK" -> NotificationType.LOAN_APPLIED_FAST_TRACK;
+            case "ASSIGN" -> NotificationType.CREDIT_ASSIGNED;
+            case "EXEC_APPROVE" -> NotificationType.CREDIT_RECOMMENDED;
+            // "Reject lead" reaches the borrower with NO reason given (revamp.md decision 31) — the
+            // executive's remarks stay in the staff-only rejection register.
+            case "EXEC_REJECT", "HEAD_REJECT", "REJECT_LEAD" -> NotificationType.CREDIT_REJECTED;
+            case "HEAD_APPROVE" -> NotificationType.CREDIT_APPROVED;
+            case "SANCTION" -> NotificationType.LOAN_SANCTIONED;
+            case "ACCEPT_OFFER" -> NotificationType.LOAN_APPLIED_FAST_TRACK;
+            // DISB_ACCEPT / VALIDATE_FAIL were the accountant hop, retired in V48 — no live action
+            // emits them.
+            // RETRY is the third route into DISBURSEMENT_PENDING (alongside APPLY_FAST_TRACK and
+            // ACCEPT_OFFER, above) — now notifies too, since the audience includes ADMIN, who didn't
+            // click anything (product decision; it used to be silent on the grounds that it only
+            // returns the file to the Head who just clicked retry).
+            case "RETRY" -> NotificationType.LOAN_APPLIED_FAST_TRACK;
+            case "DISB_REJECT" -> NotificationType.DISBURSEMENT_REJECTED;
+            case "ACTIVATE" -> NotificationType.LOAN_DISBURSED;
+            case "REPAID" -> NotificationType.LOAN_CLOSED;
+            case "CANCEL" -> NotificationType.APPLICATION_CANCELLED;
+            // The bureau rescore backfill's reopen (ApplicationFlowService#reopenAfterRescore) — the
+            // action would otherwise fall through to `default` and notify nobody, the exact bug this
+            // method documents above for AUTO_REJECT_*.
+            case "REOPEN_RESCORE" -> NotificationType.KYC_REOPENED_RESCORE;
+            case "REVIEW_APPROVE" -> NotificationType.REBORROW_REVIEW_APPROVED;
+            case "REVIEW_REJECT" -> NotificationType.REBORROW_REVIEW_REJECTED;
+            // Since V45 the delinquent fork auto-rejects rather than queuing a manual review.
+            case "REBORROW" -> "PRE_APPROVED".equals(e.toStatus())
+                    ? NotificationType.REBORROW_PREAPPROVED
+                    : NotificationType.CREDIT_REJECTED;
+            // MARK_PENDING is deliberately silent: a staff-only tag the borrower never sees (decision 30).
+            default -> null; // CREATE, AUTO_ROUTE, VALIDATE_SUCCESS, MARK_PENDING
+        };
+    }
+}
